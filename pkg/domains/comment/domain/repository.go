@@ -17,8 +17,17 @@ type CommentRepository interface {
 	// 返回评论列表、下一页游标、是否有更多、错误。
 	GetRootCommentsByCursor(ctx context.Context, postID uuid.UUID, size, sort int, cursor string) ([]Comment, string, bool, error)
 	// GetRepliesByCursor 游标分页获取某条评论的子回复。
-	// sort: 0=按时间倒序, 1=按点赞倒序。
+	// sort: 0=按点赞倒序, 1=按时间倒序（与 GetRootCommentsByCursor 同一套排序键映射）。
 	GetRepliesByCursor(ctx context.Context, rootID uuid.UUID, size, sort int, cursor string) ([]Comment, string, bool, error)
+	// LocateRootCursor 计算顶层列表的定位游标：把它作为列表接口的 cursor 传入时，
+	// 返回页（页大小 size）包含 target。target 在首页时返回 ""。
+	// sort 语义同 GetRootCommentsByCursor；target 必须是该帖的顶层评论。
+	LocateRootCursor(ctx context.Context, postID uuid.UUID, sort int, target *Comment, size int) (string, error)
+	// LocateReplyCursor 计算回复列表的定位游标与页码（从 1 开始，按页大小 size 计）：
+	// 返回的游标作为回复列表接口的 cursor 传入时，返回页包含 target。
+	// target 在回复首页时返回 "", 1。sort 语义同 GetRepliesByCursor；
+	// target 必须是 rootID 下的直接回复。
+	LocateReplyCursor(ctx context.Context, rootID uuid.UUID, sort int, target *Comment, size int) (string, int, error)
 	// IsLiked 检查用户是否点赞了评论（DB 回源用）。
 	IsLiked(ctx context.Context, userID, commentID uuid.UUID) (bool, error)
 	// BatchCheckLiked 批量检查用户是否点赞了多条评论（DB 回源用）。

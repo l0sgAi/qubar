@@ -216,7 +216,9 @@ func (h *Handler) OAuthLogin(provider string) func(c appctx.AppContext) {
 
 // OAuthCallback GET /auth/<provider>/callback
 //
-// 处理 OAuth provider 回调，成功后 307 跳转到前端 URL（带 token）。
+// 处理 OAuth provider 回调：不消耗 code，302 透传到前端 success 页
+// （URL 携带一次性 code + device），由前端 POST 换 token。
+// token 不出现在 URL 中（安全：避免泄漏到浏览器历史/服务端日志）。
 func (h *Handler) OAuthCallback(provider string) func(c appctx.AppContext) {
 	return func(c appctx.AppContext) {
 		code := c.Query("code")
@@ -233,7 +235,34 @@ func (h *Handler) OAuthCallback(provider string) func(c appctx.AppContext) {
 			writeAuthError(c, err)
 			return
 		}
-		c.Redirect(http.StatusTemporaryRedirect, redirectURL)
+		c.Redirect(http.StatusFound, redirectURL)
+	}
+}
+
+// oauthExchangeReq POST /auth/<provider>/callback 请求体。
+type oauthExchangeReq struct {
+	Code   string `json:"code"`
+	Device string `json:"device"` // 可选，缺省 web
+}
+
+// OAuthExchange POST /auth/<provider>/callback
+//
+// 前端 success 页拿 URL 中的一次性 code 调本接口换 token。
+// 成功返回 {token, expire, email, user}；code 无效/过期返回 400。
+func (h *Handler) OAuthExchange(provider string) func(c appctx.AppContext) {
+	return func(c appctx.AppContext) {
+		var req oauthExchangeReq
+		if err := c.BindJSON(&req); err != nil || req.Code == "" {
+			httputil.BadRequest(c, httputil.MsgMissingParameter)
+			return
+		}
+
+		result, err := h.svc.OAuthExchange(c, provider, req.Code, req.Device)
+		if err != nil {
+			writeAuthError(c, err)
+			return
+		}
+		httputil.Success(c, result)
 	}
 }
 
@@ -283,6 +312,8 @@ func writeAuthError(c appctx.AppContext, err error) {
 		httputil.InternalError(c, "Frontend redirect URL not configured")
 	case application.IsOAuthProviderUnavailableErr(err):
 		httputil.ServiceUnavailable(c, "Third-party login is temporarily unavailable, please try again later")
+	case application.IsOAuthInvalidGrantErr(err):
+		httputil.BadRequest(c, "Authorization code invalid or expired, please try again")
 	default:
 		logger.Log.Error("auth service error: " + err.Error())
 		httputil.InternalError(c, "Internal error")

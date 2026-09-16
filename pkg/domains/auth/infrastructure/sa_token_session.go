@@ -55,3 +55,8 @@ func (s *saTokenSessionImpl) SetSessionUser(loginID string, user domain.SessionU
 	}
 	return session.Set(SessionKeyForUser, user)
 }
+
+// GetTokenTimeout 返回 token 剩余有效期（秒）。
+func (s *saTokenSessionImpl) GetTokenTimeout(token string) (int64, error) {
+	return stputil.GetTokenTimeout(token)
+}

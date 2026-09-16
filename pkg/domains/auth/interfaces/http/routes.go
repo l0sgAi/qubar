@@ -11,11 +11,14 @@ import (
 //
 //	公开（无需登录）：
 //	  GET  /auth/google/login       OAuth 登录跳转
-//	  GET  /auth/google/callback    OAuth 回调
+//	  GET  /auth/google/callback    OAuth 回调（302 透传 code 到前端）
+//	  POST /auth/google/callback    前端用一次性 code 换 token
 //	  GET  /auth/github/login
 //	  GET  /auth/github/callback
+//	  POST /auth/github/callback
 //	  GET  /auth/azure/login
 //	  GET  /auth/azure/callback
+//	  POST /auth/azure/callback
 //	  POST /auth/register/send-code 发送验证码
 //	  POST /auth/register/verify    校验验证码
 //	  POST /auth/register/complete  完成注册
@@ -44,6 +47,8 @@ func RegisterRoutes(
 		for _, p := range []string{"google", "github", "azure"} {
 			auth.GET("/"+p+"/login", h.OAuthLogin(p))
 			auth.GET("/"+p+"/callback", h.OAuthCallback(p))
+			// code 换 token（前端 success 页调用；与 GET 同路径不同方法）
+			auth.POST("/"+p+"/callback", h.OAuthExchange(p))
 		}
 		auth.POST("/register/send-code", h.SendCode)
 		auth.POST("/register/verify", h.VerifyCode)

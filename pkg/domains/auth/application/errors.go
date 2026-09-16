@@ -17,6 +17,7 @@ var (
 	errUnknownOAuthProvider          = errors.New("unknown OAuth provider")
 	errFrontendRedirectNotConfigured = errors.New("frontend redirect URL not configured")
 	errOAuthProviderUnavailable      = errors.New("oauth provider temporarily unavailable")
+	errOAuthInvalidGrant             = errors.New("oauth authorization code invalid or expired")
 )
 
 // 错误判断函数（供 handler 层使用）。
@@ -39,4 +40,10 @@ func IsFrontendRedirectNotConfiguredErr(err error) bool {
 // （换 token / 拉用户信息时的网络超时或连接失败）。handler 层据此返回 503。
 func IsOAuthProviderUnavailableErr(err error) bool {
 	return errors.Is(err, errOAuthProviderUnavailable)
+}
+
+// IsOAuthInvalidGrantErr 判断是否为「授权码无效或已过期」错误
+// （code 已被使用/过期/redirect_uri 不匹配）。handler 层据此返回 400。
+func IsOAuthInvalidGrantErr(err error) bool {
+	return errors.Is(err, errOAuthInvalidGrant)
 }

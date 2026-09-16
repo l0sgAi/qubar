@@ -2,6 +2,8 @@ package infrastructure
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"interestBar/pkg/domains/auth/domain"
 	"interestBar/pkg/server/auth"
@@ -57,10 +59,22 @@ func (a *oauthProviderAdapter) AuthCodeURL(state string) string {
 // 旧 Provider 接口的 Exchange 签名是 Exchange(c *gin.Context, code string)，
 // 但它实际只把 c 当 context.Context 用（传给 oauth2.Config.Exchange）。
 // 这里传入标准库 context.Context，类型满足 oauth2.Config.Exchange 的要求。
+//
+// 错误包装：provider 返回 invalid_grant（code 无效/过期/已使用/redirect_uri 不匹配）
+// 时包装为 domain.ErrOAuthInvalidGrant，供 application 层映射为 HTTP 400，
+// 避免落入笼统的 500。
 func (a *oauthProviderAdapter) Exchange(ctx context.Context, code string) (interface{}, error) {
 	// 注入代理感知的 OAuth HTTP 客户端（conf.Oauth.ProxyURL 为空时等同直连），
 	// 使换 token 的出站请求走配置的代理。oauth2.Config.Exchange 接收 context.Context。
-	return a.legacy.OAuthConfig().Exchange(auth.WithHTTPClient(ctx), code)
+	token, err := a.legacy.OAuthConfig().Exchange(auth.WithHTTPClient(ctx), code)
+	if err != nil {
+		var retrieveErr *oauth2.RetrieveError
+		if errors.As(err, &retrieveErr) && retrieveErr.ErrorCode == "invalid_grant" {
+			return nil, fmt.Errorf("%w: %s", domain.ErrOAuthInvalidGrant, retrieveErr.ErrorDescription)
+		}
+		return nil, err
+	}
+	return token, nil
 }
 
 // FetchUser 用 token 拉取用户信息。

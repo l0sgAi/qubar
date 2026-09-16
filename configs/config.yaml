@@ -27,7 +27,7 @@ pgsql:
   max_open_conns: 100
   log_mode: debug
 oauth:
-  proxy_url: "http://127.0.0.1:6268" # OAuth 出站代理（本地开发）；生产环境留空直连
+  # proxy_url: "http://127.0.0.1:6268" # OAuth 出站代理（本地开发）；生产环境留空直连
   google:
     client_id: "xxx"
     client_secret: "xxx"

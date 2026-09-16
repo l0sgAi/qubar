@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"interestBar/pkg/conf"
 	"interestBar/pkg/domains/auth/domain"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/util/password"
@@ -35,6 +36,18 @@ type LoginInput struct {
 type LoginResult struct {
 	User  domain.SessionUser `json:"user"`
 	Token string             `json:"token"`
+}
+
+// OAuthLoginResult OAuth 授权码换 token 的登录结果。
+//
+// 字段对齐前端 success 页契约：data.token / data.expire / data.email。
+// Expire 为 token 剩余有效期（秒）；Email 冗余于 User.Email，
+// 供前端免嵌套直读。
+type OAuthLoginResult struct {
+	User   domain.SessionUser `json:"user"`
+	Token  string             `json:"token"`
+	Expire int64              `json:"expire"`
+	Email  string             `json:"email"`
 }
 
 // SendCodeInput 发送验证码入参。
@@ -80,9 +93,13 @@ type AuthService interface {
 	Register(ctx context.Context, input RegisterInput) (*LoginResult, error)
 	// OAuthLoginURL 生成 OAuth 提供方的跳转 URL（带 device 编码到 state）。
 	OAuthLoginURL(ctx context.Context, provider, device string) (*OAuthLoginURLOutput, error)
-	// OAuthCallback 处理 OAuth 回调（换 token + 拉用户 + 登录/注册）。
-	// 返回前端跳转 URL（含 token）。
+	// OAuthCallback 处理 OAuth 回调（GET）：不消耗 code，302 透传给前端
+	// （URL 携带一次性 code + device），由前端 POST 换回 token。
+	// 返回前端跳转 URL。
 	OAuthCallback(ctx context.Context, provider, code, device string) (string, error)
+	// OAuthExchange 用一次性授权 code 完成登录（POST）：
+	// 换 token + 拉用户 + 登录/注册 + 写会话，返回 token 与过期时间。
+	OAuthExchange(ctx context.Context, provider, code, device string) (*OAuthLoginResult, error)
 	// LogoutByToken 按 token 注销登录。
 	LogoutByToken(ctx context.Context, token string) error
 	// SendPasswordResetCode 发送找回密码验证码（邮箱必须已注册）。
@@ -328,20 +345,64 @@ func (s *authServiceImpl) OAuthLoginURL(ctx context.Context, providerName, devic
 	return &OAuthLoginURLOutput{RedirectURL: p.AuthCodeURL(state)}, nil
 }
 
-// OAuthCallback 处理 OAuth 回调。
+// OAuthCallback 处理 OAuth 回调（GET /auth/<provider>/callback）。
 //
-// 与旧 controller.Callback 行为一致：
+// 安全契约：后端不在 URL 中下发 token（会泄漏到浏览器历史/日志），
+// 只做 code 透传——302 重定向到前端 success 页，URL 携带一次性
+// 授权 code、device 与 provider；前端随后 POST /auth/<provider>/callback 换 token。
+//
+// 注意：code 必须原样透传，不能在此处 Exchange——授权码一次性，
+// 后端若先消耗，前端 POST 再换必然 invalid_grant。
+func (s *authServiceImpl) OAuthCallback(ctx context.Context, providerName, code, device string) (string, error) {
+	p := s.oauthReg.Get(providerName)
+	if p == nil {
+		return "", errUnknownOAuthProvider
+	}
+
+	frontendURL := p.FrontendRedirectURL()
+	if frontendURL == "" {
+		return "", errFrontendRedirectNotConfigured
+	}
+	// provider 用路由路径值（providerName）而非 p.Name()，
+	// 保证前端按 URL 中的 provider 原样 POST 回 /auth/<provider>/callback。
+	return buildOAuthRedirectURL(frontendURL, code, resolveDevice(device), providerName), nil
+}
+
+// buildOAuthRedirectURL 拼接前端跳转 URL（携带 code + device + provider）。
+//
+// 兼容 frontend_redirect_url 已含 query（补 &）或含 hash 路由片段
+// （query 必须插在 # 之前，否则 location.search 读不到）。
+func buildOAuthRedirectURL(frontendURL, code, device, provider string) string {
+	query := "code=" + url.QueryEscape(code) +
+		"&device=" + url.QueryEscape(device) +
+		"&provider=" + url.QueryEscape(provider)
+
+	base, fragment, hasFragment := strings.Cut(frontendURL, "#")
+	sep := "?"
+	if strings.Contains(base, "?") {
+		sep = "&"
+	}
+	u := base + sep + query
+	if hasFragment {
+		u += "#" + fragment
+	}
+	return u
+}
+
+// OAuthExchange 用一次性授权 code 完成 OAuth 登录（POST /auth/<provider>/callback）。
+//
+// 步骤与旧 controller.Callback 一致：
 //  1. 用 code 换 token；
 //  2. 拉取用户信息；
 //  3. 按 provider ID 或 email 查库；
 //  4. 不存在则创建（含头像）；
 //  5. 若 provider ID 缺失则补写；
 //  6. 清旧 token + 登录 + 写会话；
-//  7. 返回前端跳转 URL（含 token）。
-func (s *authServiceImpl) OAuthCallback(ctx context.Context, providerName, code, device string) (string, error) {
+//  7. 返回 token + 剩余有效期 + 用户信息（JSON，不再走 URL）。
+func (s *authServiceImpl) OAuthExchange(ctx context.Context, providerName, code, device string) (*OAuthLoginResult, error) {
 	p := s.oauthReg.Get(providerName)
 	if p == nil {
-		return "", errUnknownOAuthProvider
+		return nil, errUnknownOAuthProvider
 	}
 
 	// OAuth 出站调用（换 token + 拉用户信息）单独限时，避免 provider 不可达时
@@ -355,7 +416,7 @@ func (s *authServiceImpl) OAuthCallback(ctx context.Context, providerName, code,
 			zap.String("provider", providerName),
 			zap.Error(err),
 		)
-		return "", classifyOAuthError(err)
+		return nil, classifyOAuthError(err)
 	}
 
 	userInfo, err := p.FetchUser(oauthCtx, token)
@@ -364,7 +425,7 @@ func (s *authServiceImpl) OAuthCallback(ctx context.Context, providerName, code,
 			zap.String("provider", providerName),
 			zap.Error(err),
 		)
-		return "", classifyOAuthError(err)
+		return nil, classifyOAuthError(err)
 	}
 
 	// 通过 UserSessionStore 按 (providerID OR email) 查询。
@@ -372,25 +433,36 @@ func (s *authServiceImpl) OAuthCallback(ctx context.Context, providerName, code,
 	// auth 层不感知具体列名。
 	user, err := s.findOrCreateOAuthUser(p, userInfo)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	userIDStr := user.ID
+	device = resolveDevice(device)
 
 	_ = s.session.Logout(userIDStr, device)
 	authToken, err := s.session.Login(userIDStr, device)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if err := s.session.SetSessionUser(userIDStr, user.ToSessionUser()); err != nil {
-		return "", err
+		return nil, err
 	}
 
-	frontendURL := p.FrontendRedirectURL()
-	if frontendURL == "" {
-		return "", errFrontendRedirectNotConfigured
+	// 剩余有效期 best-effort：读取失败不阻断登录，回落到配置的全局超时。
+	expire, err := s.session.GetTokenTimeout(authToken)
+	if err != nil {
+		logger.Log.Warn("get token timeout failed, fallback to configured timeout",
+			zap.Error(err),
+		)
+		expire = int64(conf.Config.SaToken.Timeout)
 	}
-	return frontendURL + "?token=" + authToken, nil
+
+	return &OAuthLoginResult{
+		User:   user.ToSessionUser(),
+		Token:  authToken,
+		Expire: expire,
+		Email:  user.Email,
+	}, nil
 }
 
 // findOrCreateOAuthUser 按 provider ID 或 email 查用户，不存在则创建。
@@ -551,10 +623,14 @@ const oauthStateDelimiter = ":"
 
 // classifyOAuthError 把 OAuth provider 的底层网络/超时错误归一为
 // errOAuthProviderUnavailable，便于 handler 层返回 503（而非笼统的 500）。
+// 授权码无效/过期（domain.ErrOAuthInvalidGrant）映射为 errOAuthInvalidGrant（400）。
 // 非网络类错误（如 token 类型不符）原样返回。
 func classifyOAuthError(err error) error {
 	if err == nil {
 		return nil
+	}
+	if errors.Is(err, domain.ErrOAuthInvalidGrant) {
+		return errOAuthInvalidGrant
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return errOAuthProviderUnavailable

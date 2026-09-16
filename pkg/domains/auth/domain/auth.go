@@ -8,7 +8,15 @@
 // 值对象），由 composition 注入一个调用 user 领域的实现。
 package domain
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// ErrOAuthInvalidGrant 表示 OAuth 授权码无效/已过期/已被使用
+// （provider 返回 invalid_grant）。由 infrastructure 适配器在 Exchange
+// 失败时包装返回，application 层据此映射为可识别的应用错误（HTTP 400）。
+var ErrOAuthInvalidGrant = errors.New("oauth authorization code invalid or expired")
 
 // SessionUser 是写入会话的最小用户视图。
 //
@@ -61,6 +69,9 @@ type SaTokenSession interface {
 	Kickout(loginID string) error
 	// SetSessionUser 把用户信息写入 loginID 的会话。
 	SetSessionUser(loginID string, user SessionUser) error
+	// GetTokenTimeout 返回 token 的剩余有效期（秒）。
+	// 用于 OAuth code 换 token 后告知前端会话过期时间。
+	GetTokenTimeout(token string) (int64, error)
 }
 
 // UserSessionStore 是跨领域读取"用于登录/注册的用户"的接口。
