@@ -1,166 +1,216 @@
 # Qubar
 
-一个基于 Go 语言、采用 DDD 领域驱动设计的现代化兴趣社区后端，类似百度贴吧/Reddit 社区。
+**English** | [简体中文](README.zh-CN.md)
 
-## ✨ 功能特性
+A modern interest-based community backend written in Go with DDD (Domain-Driven Design), similar to Baidu Tieba / Reddit.
 
-Qubar 是一个完整的兴趣社区平台，提供：
+## ✨ Features
 
-- **兴趣圈（圈子）** - 用户可创建、加入不同主题的兴趣社区
-- **内容发布** - 支持图文帖子、多媒体上传
-- **评论互动** - 二级扁平化评论结构，支持回复和点赞
-- **用户系统** - 邮箱密码注册 + 多平台 OAuth 登录
-- **权限管理** - 圈主/管理员/成员三级 RBAC 权限
-- **全文搜索** - 支持用户、圈子、帖子的搜索引擎
-- **异步统计** - 高并发场景下的 Write-Behind 缓存策略
+Qubar is a full-featured interest community platform offering:
 
-## 🛠 技术栈
+- **Interest Circles** – Users can create and join topic-based communities
+- **Content Publishing** – Rich text posts with image/video uploads
+- **Comments** – Two-level flattened comment structure with replies and likes
+- **User System** – Email/password registration + multi-platform OAuth login
+- **Permission Management** – Three-tier RBAC (owner / admin / member) per circle
+- **Circle Management** – Role assignment, ownership transfer, mute, ban, join review, profile editing
+- **AI Agents (Bots)** – Global agents managed by platform admins + circle-scoped agents managed by circle owners/admins, with keyword / manual / @mention triggers
+- **Message Center** – Notification fan-out via Redpanda, unread count, mark-read, and SSE real-time unread push
+- **@Mentions** – Precise mention binding persisted for posts and comments
+- **Full-text Search** – Search engine for users, circles and posts
+- **Discovery & Recommendation** – Home feed, trending posts, discover page, browsing history, favorites
+- **Async Statistics** – Write-Behind cache strategy for high-concurrency scenarios
 
-### 核心框架
+## 🛠 Tech Stack
 
-- **[CloudWeGo Hertz](https://github.com/cloudwego/hertz)** - 高性能 HTTP 框架（替代原 Gin）
-- **[GORM](https://gorm.io/)** - ORM 数据库操作
-- **[Sa-Token](https://github.com/dromara/sa-token)** - 轻量级权限认证框架
-- **[Viper](https://github.com/spf13/viper)** - 配置管理
-- **[Zap](https://github.com/uber-go/zap)** - 高性能日志库
+### Core Frameworks
 
-### 数据存储与中间件
+- **[CloudWeGo Hertz](https://github.com/cloudwego/hertz)** – High-performance HTTP framework (replaced Gin)
+- **[CloudWeGo Eino](https://github.com/cloudwego/eino)** – LLM application framework (OpenAI / Claude / Gemini model components)
+- **[GORM](https://gorm.io/)** – ORM for database access
+- **[Sa-Token](https://github.com/dromara/sa-token)** – Lightweight authentication framework
+- **[Viper](https://github.com/spf13/viper)** – Configuration management
+- **[Zap](https://github.com/uber-go/zap)** – High-performance logging
 
-| 组件 | 版本 | 用途 |
-|------|------|------|
-| **PostgreSQL** | 18 | 主数据库，UUIDv7 主键，JSONB 支持 |
-| **Redis** | 7+ | 缓存与会话存储，Lua 脚本原子操作 |
-| **Elasticsearch** | 8.x | 全文检索与实时索引同步 |
-| **Redpanda** | latest | Kafka 兼容的消息队列，异步统计聚合 |
-| **AWS S3** | - | 对象存储（图片/视频），支持预签名 URL |
-| **Nacos** | 3.x | 配置中心，支持多环境管理 |
-| **Mailtrap** | - | 邮件发送服务（验证码/通知） |
+### Data Stores & Middleware
 
-### 认证方式
+| Component | Version | Purpose |
+|-----------|---------|---------|
+| **PostgreSQL** | 18 | Primary database, UUIDv7 primary keys, JSONB support |
+| **Redis** | 7+ | Cache & session store, atomic ops via Lua scripts |
+| **Elasticsearch** | 8.x | Full-text search with real-time index sync (via CDC) |
+| **Redpanda** | latest | Kafka-compatible message queue for async stats aggregation & notification fan-out |
+| **AWS S3** | - | Object storage (images/videos) with presigned URLs |
+| **Nacos** | 3.x | Configuration center with multi-environment support |
+| **Mailtrap** | - | Email delivery (verification codes / notifications) |
+
+### Authentication
 
 - Google OAuth 2.0
 - GitHub OAuth
 - Azure AD OAuth
-- 邮箱密码 + 验证码注册登录
+- Email/password with verification code
 
-## 🏗 架构设计
+## 🏗 Architecture
 
-### DDD 领域驱动设计
+### DDD (Domain-Driven Design)
 
-项目采用**模块化单体**架构，按领域边界划分包，未来可平滑拆分为微服务：
+The project follows a **modular monolith** architecture, with packages split by domain boundaries so it can be smoothly decomposed into microservices later:
 
 ```
 pkg/
-├── composition/          # 编排层：装配依赖、注册路由、跨领域 Facade 桥接
-│   ├── hertzadapter/    # Hertz 框架适配 → 框架无关路由抽象
-│   └── middleware/      # 全局中间件（CORS、日志）
+├── composition/          # Composition layer: wire dependencies, register routes, cross-domain Facade bridges
+│   ├── hertzadapter/     # Hertz framework adapter → framework-agnostic routing abstraction
+│   └── middleware/       # Global middleware (CORS, logging)
 │
-├── domains/             # 领域层（每个领域独立自治）
-│   ├── auth/            # 认证领域（登录、注册、OAuth）
-│   ├── user/            # 用户领域（资料、搜索）
-│   ├── category/        # 分类领域（圈子分类）
-│   ├── circle/          # 圈子领域（创建、成员、权限）
-│   ├── post/            # 帖子领域（发布、列表、详情）
-│   ├── comment/         # 评论领域（二级扁平化结构）
-│   ├── like/            # 点赞领域（原子操作 + 事件）
-│   └── storage/         # 存储领域（文件上传）
-│   └── [领域]/
-│       ├── application/ # 应用服务层：用例编排
-│       ├── domain/      # 领域层：模型、仓库接口、核心业务规则
-│       ├── infrastructure/ # 基础设施层：仓库实现、缓存、搜索、事件
-│       └── interfaces/http/ # 接口层：Handler、路由、DTO
+├── domains/              # Domain layer (each domain is self-contained)
+│   ├── auth/             # Authentication (login, registration, OAuth)
+│   ├── user/             # User (profiles, search)
+│   ├── category/         # Category (circle categories)
+│   ├── circle/           # Circle (creation, membership, permissions, management)
+│   ├── post/             # Post (publishing, lists, details)
+│   ├── comment/          # Comment (two-level flattened structure)
+│   ├── like/             # Like (atomic ops + events)
+│   ├── collect/          # Favorites
+│   ├── history/          # Browsing history
+│   ├── discover/         # Discover page aggregation
+│   ├── trending/         # Trending posts
+│   ├── recommend/        # Home feed recommendation
+│   ├── notice/           # Message center (notifications + SSE unread stream)
+│   ├── aiagent/          # AI agents (global + circle-scoped bots, reply triggers)
+│   ├── storage/          # Storage (file uploads)
+│   └── [domain]/
+│       ├── application/      # Application services: use-case orchestration
+│       ├── domain/           # Domain layer: models, repository interfaces, core business rules
+│       ├── infrastructure/   # Infrastructure: repository impls, cache, search, events
+│       └── interfaces/http/  # Interface layer: handlers, routes, DTOs
 │
-├── shared/              # 共享内核（领域无关）
-│   ├── appctx/          # 上下文抽象
-│   ├── domain/          # 领域基类（BaseModel）
-│   ├── httputil/        # HTTP 响应工具
-│   └── routing/         # 框架无关路由抽象
+├── shared/               # Shared kernel (domain-agnostic)
+│   ├── appctx/           # Context abstraction
+│   ├── domain/           # Domain base classes (BaseModel)
+│   ├── httputil/         # HTTP response utilities
+│   └── routing/          # Framework-agnostic routing abstraction
 │
-├── conf/                # 配置加载（Nacos + 本地兜底）
-└── logger/              # 日志初始化
+├── conf/                 # Configuration loading (Nacos + local fallback)
+└── logger/               # Logging initialization
 ```
 
-### 关键设计决策
+### Key Design Decisions
 
-1. **UUIDv7 主键** - 前 48 位为时间戳，字典序 = 时间序，天然支持 keyset 游标分页
-2. **框架无关路由** - 通过 `routing.RouterGroup` 抽象，领域代码不依赖 Hertz
-3. **跨领域 Facade** - 领域间通过接口调用，不直接耦合，拆分微服务时只需换实现
-4. **Write-Behind 缓存** - Redis 实时更新 + Redpanda 异步批量落库，应对高并发
-5. **二级扁平化评论** - `root_id` 标记层级，避免递归查询，支持高效分页
+1. **UUIDv7 primary keys** – First 48 bits are a timestamp; lexicographic order = chronological order, natively supporting keyset cursor pagination
+2. **Framework-agnostic routing** – Domain code never depends on Hertz via the `routing.RouterGroup` abstraction
+3. **Cross-domain Facades** – Domains call each other through interfaces without direct coupling; switching to microservices only requires swapping implementations
+4. **Write-Behind caching** – Real-time Redis updates + async batch persistence via Redpanda for high concurrency
+5. **Two-level flattened comments** – `root_id` marks hierarchy, avoiding recursive queries and enabling efficient pagination
+6. **Dual-scope AI agents** – Global agents (platform admin) and circle agents (circle owner/admin) are fully isolated: cross-scope access returns 404, never leaking existence
 
-## 📁 项目结构
+## 🤖 AI Agents
+
+Qubar ships with a two-tier AI agent system:
+
+### Global Agents (`/agent/*`)
+
+- Maintained by **platform super admins** (`users.role=1`) only
+- Site-wide reply triggers: keyword matching on comments, manual triggering, and @mention on post publish
+
+### Circle Agents (`/circle/agent/*`)
+
+- Managed by **circle owners/admins**, up to **5 agents per circle**
+- Field-level permission matrix:
+  - List / detail / create / update operational fields (name, avatar, model, prompts, trigger config, rate limits, status): **owner + admin**
+  - Credential fields (`api_protocol` / `base_url` / `api_key`) and delete: **owner only**
+- Agents only reply to posts in their own circle; safe rate-limit defaults (30 replies/hour + 60s interval) are applied on creation to protect the owner's API key
+- Mention scope guardrail: circle bots are filtered out of @mention pickers outside their circle (via `users.agent_circle_id` synced to ES through CDC)
+
+### Reply Triggers
+
+| Trigger | Description |
+|---------|-------------|
+| Keyword (`trigger_mode=2`) | New comments containing configured keywords trigger a bot reply (async, silent-fail) |
+| @Mention | Mentioning an enabled bot when publishing a post triggers it directly, regardless of mode |
+| Manual (`trigger_mode=3`) | `POST /agent/:id/reply/:postId` (admin) or `POST /circle/agent/:id/reply/:postId` (circle owner), synchronous |
+
+### Security
+
+- `api_key` is **encrypted at rest** and never echoed back – responses only contain `has_api_key` + `api_key_masked`
+- Every bot is backed by a system user account (`role=2`) used as its commenting identity
+- Permissions are checked against the live membership record on every request (no cache): role changes take effect immediately
+
+Design docs: [docs/agent-reply-design.md](docs/agent-reply-design.md), [docs/circle-agent-manage-design.md](docs/circle-agent-manage-design.md), API reference: [docs/circle-agent-manage-api.md](docs/circle-agent-manage-api.md)
+
+## 📁 Project Structure
 
 ```
 qubar/
 ├── cmd/
-│   ├── main.go           # 程序入口
+│   ├── main.go           # Program entry point
 │   └── apps/
-│       └── server.go     # 服务初始化与资源编排
+│       └── server.go     # Service initialization & resource orchestration
 │
 ├── configs/
-│   ├── config.yaml       # 本地配置文件（Nacos 不可用时兜底）
-│   └── bootstrap.yaml    # Nacos 引导配置（地址、命名空间、分组）
+│   ├── config.yaml       # Local config file (fallback when Nacos is unavailable)
+│   └── bootstrap.yaml    # Nacos bootstrap config (address, namespace, group)
 │
 ├── docs/
-│   ├── pgsql-ddl/        # 数据库表结构（UUIDv7 主键版，按领域拆分）
-│   ├── db.md             # DDL 跳转入口（指向 pgsql-ddl/）
-│   ├── api-post-my.md    # API 文档
-│   └── email_verify_template.html
+│   ├── pgsql-ddl/        # Database schemas (UUIDv7 PK version, split by domain)
+│   ├── db.md             # DDL entry point (redirects to pgsql-ddl/)
+│   ├── api/              # API docs
+│   └── design/           # Design docs
 │
 ├── pkg/
-│   ├── composition/      # 编排层（见架构说明）
-│   ├── domains/          # 业务领域（见架构说明）
-│   ├── shared/           # 共享内核
-│   ├── conf/             # 配置管理
-│   ├── logger/           # 日志配置
-│   └── server/           # 遗留基础设施（逐步迁移中）
-│       ├── auth/         # OAuth Provider 实现
-│       ├── storage/      # DB/Redis/ES/Redpanda/S3 初始化
-│       └── utils/        # 工具函数
+│   ├── composition/      # Composition layer (see architecture)
+│   ├── domains/          # Business domains (see architecture)
+│   ├── shared/           # Shared kernel
+│   ├── conf/             # Configuration management
+│   ├── logger/           # Logging setup
+│   └── server/           # Legacy infrastructure (being migrated)
+│       ├── auth/         # OAuth provider implementations
+│       ├── storage/      # DB/Redis/ES/Redpanda/S3 initialization
+│       └── utils/        # Utility functions
 │
 ├── go.mod
 └── go.sum
 ```
 
-## 🚀 快速开始
+## 🚀 Quick Start
 
-### 环境要求
+### Requirements
 
 - Go 1.25.4+
-- PostgreSQL 18（需启用 `uuidv7()` 函数）
+- PostgreSQL 18 (with `uuidv7()` function enabled)
 - Redis 7+
-- Elasticsearch 8.x（可选，无则降级为 DB 搜索）
-- Redpanda（可选，无则统计仅走 Redis）
+- Elasticsearch 8.x (optional; falls back to DB search without it)
+- Redpanda (optional; stats stay in Redis only without it)
 
-### 1. 克隆项目
+### 1. Clone the Project
 
 ```bash
 git clone https://github.com/l0sgAi/qubar.git
 cd qubar
 ```
 
-### 2. 安装依赖
+### 2. Install Dependencies
 
 ```bash
 go mod download
 ```
 
-### 3. 配置数据库
+### 3. Set Up the Database
 
-创建数据库和 schema：
+Create the database and schema:
 
 ```sql
 CREATE DATABASE qubar;
 CREATE SCHEMA IF NOT EXISTS domains;
 ```
 
-数据库表结构及种子数据请参考 [docs/pgsql-ddl/](docs/pgsql-ddl/)（按领域拆分，入口 [README.md](docs/pgsql-ddl/README.md)）
+For table schemas and seed data, see [docs/pgsql-ddl/](docs/pgsql-ddl/) (split by domain; entry point: [README.md](docs/pgsql-ddl/README.md))
 
-### 4. 配置应用
+### 4. Configure the App
 
-#### 方式一：本地配置（快速开发）
+#### Option 1: Local config (quick development)
 
-编辑 `configs/config.yaml`，填入数据库、Redis 等连接信息：
+Edit `configs/config.yaml` with your database, Redis and other connection info:
 
 ```yaml
 server:
@@ -180,9 +230,9 @@ redis:
   db: 0
 ```
 
-#### 方式二：Nacos 配置中心（生产推荐）
+#### Option 2: Nacos config center (recommended for production)
 
-创建 `configs/bootstrap.yaml`：
+Create `configs/bootstrap.yaml`:
 
 ```yaml
 nacos:
@@ -194,182 +244,241 @@ nacos:
   password: "nacos"
 ```
 
-### 5. 运行应用
+### 5. Run the App
 
 ```bash
-# 本地配置启动
+# Start with local config
 go run cmd/main.go -c configs/config.yaml -b ""
 
-# Nacos 配置启动
+# Start with Nacos config
 go run cmd/main.go -c configs/config.yaml -b configs/bootstrap.yaml
 ```
 
-服务将在 `http://localhost:8888` 启动
+The service starts at `http://localhost:8888`
 
-## 🌐 API 端点
+## 🌐 API Endpoints
 
-### 认证（无需登录）
+### Auth (no login required)
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `GET` | `/auth/google/login` | Google OAuth 登录跳转 |
-| `GET` | `/auth/google/callback` | Google OAuth 回调 |
-| `GET` | `/auth/github/login` | GitHub OAuth 登录 |
-| `GET` | `/auth/github/callback` | GitHub OAuth 回调 |
-| `GET` | `/auth/azure/login` | Azure AD OAuth 登录 |
-| `GET` | `/auth/azure/callback` | Azure AD OAuth 回调 |
-| `POST` | `/auth/register/send-code` | 发送注册验证码 |
-| `POST` | `/auth/register/verify` | 校验验证码 |
-| `POST` | `/auth/register/complete` | 完成注册 |
-| `POST` | `/auth/login` | 邮箱密码登录 |
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/auth/google/login` | Google OAuth login redirect |
+| `GET` / `POST` | `/auth/google/callback` | Google OAuth callback / one-time code exchange |
+| `GET` | `/auth/github/login` | GitHub OAuth login |
+| `GET` / `POST` | `/auth/github/callback` | GitHub OAuth callback / code exchange |
+| `GET` | `/auth/azure/login` | Azure AD OAuth login |
+| `GET` / `POST` | `/auth/azure/callback` | Azure AD OAuth callback / code exchange |
+| `POST` | `/auth/register/send-code` | Send registration verification code |
+| `POST` | `/auth/register/verify` | Verify the code |
+| `POST` | `/auth/register/complete` | Complete registration |
+| `POST` | `/auth/login` | Email/password login |
+| `POST` | `/auth/password/send-code` | Send password-reset code |
+| `POST` | `/auth/password/verify` | Verify password-reset code |
+| `POST` | `/auth/password/reset` | Reset password |
 
-### 用户（需登录）
+### User (login required)
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `GET` | `/user/get` | 获取当前登录用户 |
-| `PUT` | `/user/update` | 修改用户资料 |
-| `GET` | `/user/search` | 搜索用户 |
-| `GET` | `/user/detail/:id` | 获取用户详情 |
-| `POST` | `/auth/logout` | 注销当前 Token |
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/user/get` | Get current logged-in user |
+| `PUT` | `/user/update` | Update profile |
+| `GET` | `/user/search` | Search users |
+| `GET` | `/user/detail/:id` | Get user detail |
+| `POST` | `/auth/logout` | Revoke current token |
 
-### 分类（需登录）
+### Category (login required)
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `GET` | `/category/get` | 获取全部分类列表 |
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/category/get` | Get all categories |
 
-### 圈子（需登录）
+### Circle
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/circle/create` | 创建新圈子 |
-| `GET` | `/circle/list` | 搜索/浏览圈子列表 |
-| `GET` | `/circle/detail/:id` | 获取圈子详情 |
-| `GET` | `/circle/my` | 我加入的圈子 |
-| `POST` | `/circle/join` | 申请加入圈子 |
-| `POST` | `/circle/leave` | 退出圈子 |
-| `GET` | `/circle/posts` | 圈内帖子列表 |
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/circle/create` | Create a circle (login) |
+| `GET` | `/circle/list` | Search/browse circles (public) |
+| `GET` | `/circle/active` | Recently active circles (public) |
+| `GET` | `/circle/random` | Random circles (public) |
+| `GET` | `/circle/detail/:id` | Circle detail (public) |
+| `GET` | `/circle/user` | Circles a user joined (public) |
+| `GET` | `/circle/posts` | Posts in a circle (public) |
+| `GET` | `/circle/my` | Circles I joined (login) |
+| `POST` | `/circle/join` | Join a circle (login) |
+| `POST` | `/circle/leave` | Leave a circle (login) |
+| `GET` | `/circle/members` | Member list (admin+) |
+| `GET` | `/circle/manage/list` | Circles I can manage (owner/admin) |
+| `POST` | `/circle/manage/role` | Assign/revoke admin (owner) |
+| `POST` | `/circle/manage/transfer` | Transfer ownership (owner) |
+| `POST` | `/circle/manage/mute` / `unmute` | Mute / unmute member (admin+) |
+| `POST` | `/circle/manage/ban` / `unban` | Ban / unban member (admin+) |
+| `POST` | `/circle/manage/review` | Join-request review (admin+) |
+| `PUT` | `/circle/update` | Edit circle profile (owner/admin, field-level) |
 
-### 帖子（需登录）
+### Post
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/post/create` | 发布新帖子 |
-| `GET` | `/post/list` | 搜索帖子列表 |
-| `GET` | `/post/my` | 我的帖子 |
-| `GET` | `/post/user/:user_id` | 指定用户的帖子 |
-| `GET` | `/post/detail/:id` | 帖子详情 |
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/post/create` | Publish a post (login, supports @mentions) |
+| `GET` | `/post/list` | Search posts (public) |
+| `GET` | `/post/home` | Home recommendation feed (public) |
+| `GET` | `/post/my` | My posts (login) |
+| `GET` | `/post/user/:user_id` | Posts by a user (public) |
+| `GET` | `/post/detail/:id` | Post detail (public) |
 
-### 评论（需登录）
+### Comment
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/comment/create` | 发布评论/回复 |
-| `GET` | `/comment/list` | 顶层评论列表 |
-| `GET` | `/comment/replies` | 楼层内回复列表 |
-| `GET` | `/comment/detail/:id` | 单条评论详情 |
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/comment/create` | Post a comment/reply (login) |
+| `GET` | `/comment/list` | Top-level comments (public) |
+| `GET` | `/comment/replies` | Replies within a thread (public) |
+| `GET` | `/comment/detail/:id` | Single comment detail (public) |
 
-### 点赞（需登录）
+### Like & Favorite (login required)
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/like/toggle` | 点赞/取消点赞（帖子/评论通用） |
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/like/toggle` | Like/unlike (posts & comments) |
+| `POST` | `/collect/toggle` | Favorite/unfavorite a post |
+| `GET` | `/collect/posts` | My favorite posts |
 
-### 文件上传（需登录）
+### Message Center (login required)
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/upload/image` | 单张图片上传 |
-| `POST` | `/upload/post-images` | 帖子多图上传 |
-| `POST` | `/upload/video` | 视频上传 |
-| `DELETE` | `/upload/delete` | 删除文件 |
-| `GET` | `/upload/presign` | 获取预签名上传 URL |
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/notice/list` | Notification list |
+| `GET` | `/notice/unread-count` | Unread count |
+| `POST` | `/notice/read` | Mark notifications as read |
+| `POST` | `/notice/read-all` | Mark all as read |
+| `GET` | `/notice/stream` | SSE stream for real-time unread count push |
 
-### 请求头
+### Discovery & History
 
-所有需登录接口请在请求头中携带：
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/discover/` | Discover page aggregation (login) |
+| `GET` | `/trending/` | Trending posts (public) |
+| `GET` | `/history/posts` | Browsing history (login) |
+
+### AI Agents – Global (platform admin only)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/agent` | Create a global agent |
+| `GET` | `/agent/list` | List global agents (offset pagination) |
+| `GET` | `/agent/:id` | Agent detail |
+| `PUT` | `/agent/:id` | Update agent (partial) |
+| `DELETE` | `/agent/:id` | Soft-delete agent |
+| `POST` | `/agent/:id/reply/:postId` | Manually trigger a reply |
+
+### AI Agents – Circle (circle owner/admin)
+
+| Method | Path | Description | Permission |
+|--------|------|-------------|------------|
+| `POST` | `/circle/agent` | Create a circle agent (≤5 per circle) | admin+ |
+| `GET` | `/circle/agent/list` | List circle agents | admin+ |
+| `GET` | `/circle/agent/:id` | Agent detail | admin+ |
+| `PUT` | `/circle/agent/:id` | Update agent | operational fields: admin+; credential fields: owner only |
+| `DELETE` | `/circle/agent/:id` | Soft-delete agent | owner only |
+| `POST` | `/circle/agent/:id/reply/:postId` | Manually trigger a reply (post must be in the agent's circle) | owner only |
+
+### File Upload (login required)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/upload/image` | Single image upload |
+| `POST` | `/upload/post-images` | Multi-image upload for posts |
+| `POST` | `/upload/video` | Video upload |
+| `DELETE` | `/upload/delete` | Delete a file |
+| `GET` | `/upload/presign` | Get a presigned upload URL |
+
+### Request Header
+
+Include this header for all endpoints requiring login:
 
 ```bash
 satoken: your-token-here
 ```
 
-## 🔐 安全特性
+## 🔐 Security
 
-- ✅ CORS 跨域保护（可配置允许的源）
-- ✅ Sa-Token 会话管理（3 天有效期，30 分钟活跃超时）
-- ✅ RBAC 基于角色的访问控制
-- ✅ 邮箱验证码注册
-- ✅ 逻辑删除数据保护
-- ✅ S3 预签名 URL（无需暴露凭证）
+- ✅ CORS protection (configurable allowed origins)
+- ✅ Sa-Token session management (3-day validity, 30-minute active timeout)
+- ✅ RBAC role-based access control
+- ✅ Email verification code registration
+- ✅ Logical deletion for data protection
+- ✅ S3 presigned URLs (no credential exposure)
+- ✅ Agent API keys encrypted at rest, masked in all responses
+- ✅ Dual-scope agent isolation (global ↔ circle, cross-scope returns 404)
 
-## ⚡ 性能优化
+## ⚡ Performance
 
-1. **Redis 多级缓存** - 用户资料、圈子信息、统计数据分层缓存
-2. **Lua 原子操作** - 点赞、浏览计数通过 Lua 脚本保证原子性
-3. **Write-Behind 策略** - 统计更新先写 Redis，Redpanda 异步批量落库
-4. **覆盖索引优化** - PostgreSQL 精心设计的索引避免回表
-5. **ES 全文检索** - 热门搜索走 Elasticsearch，冷数据走 DB
-6. **JSONB 字段** - 多媒体、扩展信息用 PostgreSQL JSONB 存储
+1. **Multi-level Redis caching** – Layered caching for user profiles, circle info and statistics
+2. **Lua atomic operations** – Likes and view counts via Lua scripts
+3. **Write-Behind strategy** – Stats go to Redis first, then async batch persistence via Redpanda
+4. **Covering index optimization** – Carefully designed PostgreSQL indexes avoid table lookups
+5. **ES full-text search** – Hot searches via Elasticsearch, cold data via DB (posts reach ES through external CDC)
+6. **JSONB fields** – Multimedia and extended info stored as PostgreSQL JSONB
 
-## 📝 开发指南
+## 📝 Development Guide
 
-### 添加新领域
+### Adding a New Domain
 
-1. 在 `pkg/domains/` 下创建领域目录，遵循 `application/domain/infrastructure/interfaces` 分层
-2. 在 `pkg/composition/` 中注册依赖装配和路由
-3. 如需跨领域调用，在 `composition/facade_bridges.go` 中添加桥接实现
+1. Create a domain directory under `pkg/domains/` following the `application/domain/infrastructure/interfaces` layering
+2. Register dependency wiring and routes in `pkg/composition/`
+3. For cross-domain calls, add a bridge implementation in `composition/facade_bridges.go`
 
-### 添加新 OAuth Provider
+### Adding a New OAuth Provider
 
-1. 在 `pkg/server/auth/` 中添加 Provider 实现（参考 `google.go`）
-2. 在 `provider.go` 中注册
-3. 更新 `auth` 领域路由
+1. Add a provider implementation in `pkg/server/auth/` (see `google.go`)
+2. Register it in `provider.go`
+3. Update the `auth` domain routes
 
-### 配置说明
+### Configuration
 
-关键配置项说明：
+Key configuration items:
 
 ```yaml
-# CORS 允许的源
+# CORS allowed origins
 cors:
   allowed_origins:
     - "https://qubar.site"
     - "http://localhost:*"
 
-# Sa-Token 会话配置
+# Sa-Token session config
 sa_token:
   token_name: "satoken"
-  timeout: 259200        # 3 天（秒）
-  active_timeout: 1800   # 30 分钟活跃检测
-  is_concurrent: true    # 允许并发登录
+  timeout: 259200        # 3 days (seconds)
+  active_timeout: 1800   # 30-minute activity check
+  is_concurrent: true    # Allow concurrent logins
 
-# 文件上传大小限制（代码中配置 50MB）
+# File upload size limit (50MB configured in code)
 # server.WithMaxRequestBodySize(50 << 20)
 ```
 
-## 🧪 测试
+## 🧪 Testing
 
 ```bash
-# 运行单元测试
+# Run unit tests
 go test ./pkg/...
 
-# 运行特定包测试
+# Run tests for a specific package
 go test ./pkg/composition/middleware/...
 ```
 
-## 📄 许可证
+## 📄 License
 
 [MIT License](LICENSE)
 
-## 🤝 贡献
+## 🤝 Contributing
 
-欢迎提交 Issue 和 Pull Request！
+Issues and Pull Requests are welcome!
 
-## 📧 联系方式
+## 📧 Contact
 
-如有问题或建议，请提交 Issue 或联系维护者。
+For questions or suggestions, please open an Issue or contact the maintainer.
 
 ---
 
-**注意**: 首次运行前请确保正确配置所有必要参数，特别是数据库连接和 OAuth 凭证。
+**Note**: Before the first run, make sure all required parameters are configured correctly, especially database connections and OAuth credentials.
