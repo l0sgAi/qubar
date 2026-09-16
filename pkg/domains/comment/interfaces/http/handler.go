@@ -106,7 +106,7 @@ func (h *Handler) GetComments(c appctx.AppContext) {
 // GetRepliesRequest 获取回复列表的请求结构。
 type GetRepliesRequest struct {
 	RootID string `query:"root_id" binding:"required,uuid"`
-	Sort   int    `query:"sort" binding:"omitempty,oneof=0 1"` // 0=时间倒序(默认), 1=点赞倒序
+	Sort   int    `query:"sort" binding:"omitempty,oneof=0 1"` // 0=点赞倒序(最热), 1=时间倒序(最新)
 	Cursor string `query:"cursor"`
 	Limit  int    `query:"limit" binding:"omitempty,min=1,max=50"`
 }
@@ -143,6 +143,55 @@ func (h *Handler) GetReplies(c appctx.AppContext) {
 		}
 		logger.Log.Error("Failed to get replies: " + err.Error())
 		httputil.InternalError(c, "Failed to get replies")
+		return
+	}
+	httputil.Success(c, result)
+}
+
+// LocateCommentRequest 评论定位请求。
+type LocateCommentRequest struct {
+	CommentID string `query:"comment_id" binding:"required,uuid"`
+	Sort      int    `query:"sort" binding:"omitempty,oneof=0 1"` // 顶层列表排序：0=点赞倒序(默认), 1=时间倒序
+}
+
+// LocateComment GET /comment/locate
+//
+// 通知点击直达评论的定位接口（设计见 docs/comment-locate-design.md）。访客可读。
+// reply_sort 手动解析（缺省=1 时间倒序，对齐前端回复列表当前「最新」用法）：
+// 前端拉回复用哪个 sort，这里就须传哪个，否则回复游标无效。
+// 回复页大小固定取服务端默认值（同 GetReplies 缺省 limit=10），前端不传 limit。
+func (h *Handler) LocateComment(c appctx.AppContext) {
+	var req LocateCommentRequest
+	if err := c.BindQuery(&req); err != nil {
+		httputil.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	commentID, err := uuid.Parse(req.CommentID)
+	if err != nil {
+		httputil.BadRequest(c, "Invalid comment_id")
+		return
+	}
+
+	replySort := 1
+	switch raw := c.Query("reply_sort"); raw {
+	case "":
+		// 缺省：最新（时间倒序）
+	case "0", "1":
+		replySort = int(raw[0] - '0')
+	default:
+		httputil.BadRequest(c, "Invalid reply_sort")
+		return
+	}
+
+	result, err := h.svc.LocateComment(c, commentID, req.Sort, replySort)
+	if err != nil {
+		if errors.Is(err, domain.ErrCommentNotFound) {
+			httputil.NotFound(c, "评论不存在或已删除")
+			return
+		}
+		logger.Log.Error("Failed to locate comment: " + err.Error())
+		httputil.InternalError(c, "Failed to locate comment")
 		return
 	}
 	httputil.Success(c, result)

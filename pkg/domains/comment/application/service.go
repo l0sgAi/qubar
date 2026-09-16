@@ -126,6 +126,27 @@ type CommentListResult struct {
 	NextCursor string      `json:"next_cursor"`
 }
 
+// 页大小常量。LocateComment 的定位计算与列表接口必须共用同一常量，
+// 否则定位游标算出的页与实际分页页大小错位（off-by-one 防线）。
+const (
+	// rootCommentPageSize 顶层评论列表页大小（GetRootComments 固定值）。
+	rootCommentPageSize = 20
+	// defaultReplyPageSize 回复列表默认页大小（GetReplies limit 缺省值；
+	// 前端拉回复不传 limit 时两边一致）。
+	defaultReplyPageSize = 10
+)
+
+// CommentLocateResult 评论定位结果（通知点击直达，设计见 docs/comment-locate-design.md）。
+type CommentLocateResult struct {
+	CommentID   uuid.UUID `json:"comment_id"`   // 回显目标评论 ID
+	PostID      uuid.UUID `json:"post_id"`      // 目标所属帖子 ID（前端防串帖校验）
+	RootID      uuid.UUID `json:"root_id"`      // 所属顶层评论 ID；is_root=1 时等于 comment_id
+	IsRoot      int       `json:"is_root"`      // 1=顶层评论, 0=回复
+	ListCursor  *string   `json:"list_cursor"`  // 顶层列表定位游标；null=根评论在首页
+	ReplyCursor *string   `json:"reply_cursor"` // 仅 is_root=0 有意义；null=在回复首页
+	ReplyPage   int       `json:"reply_page"`   // 仅 is_root=0 有意义（从 1）；is_root=1 固定 0
+}
+
 // CreateCommentInput 发评论/回复入参。
 type CreateCommentInput struct {
 	PostID         uuid.UUID
@@ -146,8 +167,14 @@ type CommentService interface {
 	// sort: 0=按点赞倒序(默认), 1=按时间倒序。
 	GetRootComments(ctx context.Context, userID, postID uuid.UUID, sort int, cursor string) (*CommentListResult, error)
 	// GetReplies 获取某条评论的子回复列表（游标分页）。
-	// sort: 0=按时间倒序(默认), 1=按点赞倒序。
+	// sort: 0=按点赞倒序(默认), 1=按时间倒序（与顶层列表同一套排序键映射）。
 	GetReplies(ctx context.Context, userID, rootID uuid.UUID, limit, sort int, cursor string) (*CommentListResult, error)
+	// LocateComment 定位评论（通知点击直达，设计见 docs/comment-locate-design.md）。
+	// 返回目标所属根评论在顶层列表的定位游标；目标是回复时另返回回复列表定位游标与页码。
+	// sort 语义同 GetRootComments；replySort 语义同 GetReplies（回复页计算用，
+	// 前端须与拉取回复时的 sort 一致，否则回复游标无效）。
+	// 评论或（回复目标的）根评论不存在/已删除时返回 ErrCommentNotFound。
+	LocateComment(ctx context.Context, commentID uuid.UUID, sort, replySort int) (*CommentLocateResult, error)
 	// GetCommentDetail 获取单条评论详情。
 	GetCommentDetail(ctx context.Context, userID, commentID uuid.UUID) (*CommentVO, error)
 
@@ -334,7 +361,7 @@ func (s *commentServiceImpl) CreateComment(ctx context.Context, userID uuid.UUID
 
 // GetRootComments 获取帖子的顶层评论列表（游标分页）。
 func (s *commentServiceImpl) GetRootComments(ctx context.Context, userID, postID uuid.UUID, sort int, cursor string) (*CommentListResult, error) {
-	comments, nextCursor, hasMore, err := s.repo.GetRootCommentsByCursor(ctx, postID, 20, sort, cursor)
+	comments, nextCursor, hasMore, err := s.repo.GetRootCommentsByCursor(ctx, postID, rootCommentPageSize, sort, cursor)
 	if err != nil {
 		return nil, err
 	}
@@ -356,7 +383,7 @@ func (s *commentServiceImpl) GetReplies(ctx context.Context, userID, rootID uuid
 	}
 
 	if limit <= 0 {
-		limit = 10
+		limit = defaultReplyPageSize
 	}
 	comments, nextCursor, hasMore, err := s.repo.GetRepliesByCursor(ctx, rootID, limit, sort, cursor)
 	if err != nil {
@@ -366,6 +393,56 @@ func (s *commentServiceImpl) GetReplies(ctx context.Context, userID, rootID uuid
 	return &CommentListResult{
 		Items: vos, HasMore: hasMore, NextCursor: nextCursor,
 	}, nil
+}
+
+// LocateComment 定位评论（通知点击直达）。
+//
+// 流程：取目标（已删 → ErrCommentNotFound）→ 是回复则解析根评论（根已删则其下回复
+// 在列表中不可达，同样按不存在处理）→ 根评论在顶层列表的定位游标 → 回复时另算
+// 回复列表定位游标与页码。游标语义：目标所在页的「起始游标」（上一页末条 keyset），
+// 首页为 nil（JSON null），前端不传 cursor 直接拉首页。
+func (s *commentServiceImpl) LocateComment(ctx context.Context, commentID uuid.UUID, sort, replySort int) (*CommentLocateResult, error) {
+	target, err := s.repo.GetByID(ctx, commentID)
+	if err != nil {
+		return nil, err
+	}
+
+	root := target
+	if target.RootID != nil {
+		root, err = s.repo.GetByID(ctx, *target.RootID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	listCursor, err := s.repo.LocateRootCursor(ctx, root.PostID, sort, root, rootCommentPageSize)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &CommentLocateResult{
+		CommentID: target.ID,
+		PostID:    target.PostID,
+		RootID:    root.ID,
+		IsRoot:    1,
+	}
+	if listCursor != "" {
+		result.ListCursor = &listCursor
+	}
+	if target.RootID == nil {
+		return result, nil
+	}
+
+	result.IsRoot = 0
+	replyCursor, replyPage, err := s.repo.LocateReplyCursor(ctx, root.ID, replySort, target, defaultReplyPageSize)
+	if err != nil {
+		return nil, err
+	}
+	if replyCursor != "" {
+		result.ReplyCursor = &replyCursor
+	}
+	result.ReplyPage = replyPage
+	return result, nil
 }
 
 // GetCommentDetail 获取单条评论详情。
