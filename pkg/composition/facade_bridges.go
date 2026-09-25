@@ -252,7 +252,7 @@ func (l *commentPostLookup) RestoreStatsAndIncrCommentCount(ctx context.Context,
 	return l.delegate.RestoreStatsAndIncrCommentCount(ctx, postID)
 }
 
-// ===== post → like（帖子存在性 + 统计缓存恢复）=====
+// ===== post → like（帖子存在性 + 统计缓存恢复 + 真实点赞状态）=====
 
 // likePostTarget 把 post.application.PostService 适配为 like.application.PostTarget。
 type likePostTarget struct {
@@ -271,7 +271,11 @@ func (t *likePostTarget) RestoreStats(ctx context.Context, postID uuid.UUID) err
 	return t.delegate.RestoreStats(ctx, postID)
 }
 
-// ===== comment → like（评论存在性 + 所属帖子ID + 统计缓存恢复）=====
+func (t *likePostTarget) IsLiked(ctx context.Context, userID, postID uuid.UUID) (bool, error) {
+	return t.delegate.IsLikedByUser(ctx, userID, postID)
+}
+
+// ===== comment → like（评论存在性 + 所属帖子ID + 统计缓存恢复 + 真实点赞状态）=====
 
 // likeCommentTarget 把 comment.application.CommentService 适配为 like.application.CommentTarget。
 type likeCommentTarget struct {
@@ -291,6 +295,10 @@ func (t *likeCommentTarget) ExistsWithPostID(ctx context.Context, commentID uuid
 
 func (t *likeCommentTarget) RestoreStats(ctx context.Context, commentID uuid.UUID) error {
 	return t.delegate.RestoreCommentStats(ctx, commentID)
+}
+
+func (t *likeCommentTarget) IsLiked(ctx context.Context, userID, commentID uuid.UUID) (bool, error) {
+	return t.delegate.IsLikedByUser(ctx, userID, commentID)
 }
 
 // ===== post → collect（帖子存在性 + 统计缓存恢复 + 列表组装）=====

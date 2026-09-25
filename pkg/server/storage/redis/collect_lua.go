@@ -54,7 +54,7 @@ end
 
 var collectToggleSHA string
 
-// ToggleCollectResult 收藏切换操作结果（与 ToggleLikeResult 值一致）。
+// ToggleCollectResult 收藏切换操作结果（1=收藏 / -1=取消收藏）。
 type ToggleCollectResult int
 
 const (

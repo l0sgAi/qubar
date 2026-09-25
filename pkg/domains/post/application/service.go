@@ -259,6 +259,9 @@ type PostService interface {
 	// RestoreStats 恢复帖子统计缓存（如果不存在）。
 	// 供 like 领域点赞前确保 Redis stats Hash 存在。
 	RestoreStats(ctx context.Context, postID uuid.UUID) error
+	// IsLikedByUser 用户是否已赞该帖（缓存优先，miss 回源 DB，DB 已赞则回填缓存）。
+	// 供 like 领域点赞前解析真实状态；DB 错误原样返回（调用方不得猜测）。
+	IsLikedByUser(ctx context.Context, userID, postID uuid.UUID) (bool, error)
 
 	// SetUserFacade 注入 user Facade（组装作者信息用）。
 	SetUserFacade(f UserFacade)
@@ -678,31 +681,39 @@ func (s *postServiceImpl) assembleMentions(ctx context.Context, postID uuid.UUID
 	return mentions
 }
 
-// checkLiked 检查点赞状态（缓存优先，miss 回源 DB + 回填）。
+// checkLiked 检查点赞状态（详情回显用，best-effort：出错视为未赞）。
 func (s *postServiceImpl) checkLiked(ctx context.Context, userID, postID uuid.UUID) bool {
-	likedMap, missed, err := s.likeCache.BatchCheck(ctx, userID, []uuid.UUID{postID})
-	if err == nil {
-		if likedMap[postID] {
-			return true
-		}
-		if len(missed) > 0 {
-			isLiked, dbErr := s.repo.IsLiked(ctx, userID, postID)
-			if dbErr != nil {
-				return false
-			}
-			if isLiked {
-				_ = s.likeCache.Backfill(ctx, userID, []uuid.UUID{postID})
-			}
-			return isLiked
-		}
+	liked, err := s.IsLikedByUser(ctx, userID, postID)
+	if err != nil {
+		logger.Log.Error("Failed to check post liked: " + err.Error())
 		return false
 	}
-	// 缓存故障：直接回源 DB
-	isLiked, dbErr := s.repo.IsLiked(ctx, userID, postID)
-	if dbErr != nil {
-		return false
+	return liked
+}
+
+// IsLikedByUser 用户是否已赞该帖（缓存优先，miss 回源 DB，DB 已赞则回填缓存）。
+//
+// 用户点赞 ZSET 有 TTL 与容量上限，miss 既可能是"未赞"也可能是"缓存已丢"，必须回源 DB 区分。
+// 缓存故障直接回源 DB；DB 错误原样返回。
+func (s *postServiceImpl) IsLikedByUser(ctx context.Context, userID, postID uuid.UUID) (bool, error) {
+	likedMap, _, err := s.likeCache.BatchCheck(ctx, userID, []uuid.UUID{postID})
+	if err == nil && likedMap[postID] {
+		return true, nil
 	}
-	return isLiked
+	if err != nil {
+		logger.Log.Error("Failed to check post liked from cache, falling back to DB: " + err.Error())
+	}
+
+	liked, err := s.repo.IsLiked(ctx, userID, postID)
+	if err != nil {
+		return false, err
+	}
+	if liked {
+		if bfErr := s.likeCache.Backfill(ctx, userID, []uuid.UUID{postID}); bfErr != nil {
+			logger.Log.Error("Failed to backfill post like cache: " + bfErr.Error())
+		}
+	}
+	return liked, nil
 }
 
 // checkCollected 检查收藏状态（缓存优先，miss 回源 DB + 回填）。

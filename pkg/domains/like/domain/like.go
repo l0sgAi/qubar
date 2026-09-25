@@ -19,7 +19,7 @@ const (
 	TargetTypePost TargetType = "post"
 )
 
-// ToggleResult 点赞切换操作结果（与旧 redispkg.ToggleLikeResult 值一致）。
+// ToggleResult 点赞设值结果（与 redispkg.LikeSetResult 值一致）。
 type ToggleResult int
 
 const (
@@ -27,6 +27,8 @@ const (
 	ToggleResultLiked ToggleResult = 1
 	// ToggleResultUnliked 取消点赞（-1）。
 	ToggleResultUnliked ToggleResult = -1
+	// ToggleResultUnchanged 已处于期望状态，未变化（不发任何事件）。
+	ToggleResultUnchanged ToggleResult = 0
 )
 
 // Int64 返回 ToggleResult 的 int64 值（用于事件发布的 amount 字段）。
