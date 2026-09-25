@@ -106,6 +106,9 @@ func writeCollectError(c appctx.AppContext, err error) {
 		httputil.BadRequest(c, "Invalid search_after parameter")
 	case errors.Is(err, domain.ErrInvalidAction):
 		httputil.BadRequest(c, "Invalid action")
+	case errors.Is(err, domain.ErrEventPublishFailed):
+		logger.Log.Warn("collect event publish failed: " + err.Error())
+		httputil.ServiceUnavailable(c, "Collect is temporarily unavailable, please retry")
 	default:
 		logger.Log.Error("collect service error: " + err.Error())
 		httputil.InternalError(c, "Failed to process collect request")

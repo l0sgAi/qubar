@@ -85,6 +85,9 @@ func writeLikeError(c appctx.AppContext, err error) {
 		httputil.BadRequest(c, "Invalid target type")
 	case errors.Is(err, domain.ErrInvalidAction):
 		httputil.BadRequest(c, "Invalid action")
+	case errors.Is(err, domain.ErrEventPublishFailed):
+		logger.Log.Warn("like event publish failed: " + err.Error())
+		httputil.ServiceUnavailable(c, "Like is temporarily unavailable, please retry")
 	default:
 		logger.Log.Error("like service error: " + err.Error())
 		httputil.InternalError(c, "Failed to toggle like")

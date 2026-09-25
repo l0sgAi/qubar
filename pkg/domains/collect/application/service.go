@@ -103,6 +103,8 @@ func (s *collectServiceImpl) SetPostFetcher(f PostFetcher)     { s.postFetcher =
 //  3. 同步 upsert 流水（单语句，返回行是否真正迁移）；失败直接返回，Redis 未改动无需补偿；
 //  4. Redis Lua 原子设值（与 DB 对齐，幂等）；失败仅记日志——DB 已是权威，缓存随 TTL / 回源自愈；
 //  5. 仅当流水真正迁移时发布 collect_count 增量事件（含热度 / CF / 通知）。
+//     collect_events 同步 ack；投递失败则回滚流水与缓存并返回 ErrEventPublishFailed（可重试），
+//     否则 collect_count 永久少记这次变更。
 func (s *collectServiceImpl) Toggle(ctx context.Context, userID uuid.UUID, input ToggleInput) (*ToggleResult, error) {
 	if s.postTarget == nil {
 		return nil, errors.New("post target is not configured")
@@ -147,7 +149,8 @@ func (s *collectServiceImpl) Toggle(ctx context.Context, userID uuid.UUID, input
 			amount = domain.ToggleResultCollected
 		}
 		if err := s.publisher.PublishPostCollect(ctx, userID, input.PostID, amount.Int64()); err != nil {
-			logger.Log.Error("Failed to publish post collect event: " + err.Error())
+			s.rollbackCollect(ctx, userID, input.PostID, !want)
+			return nil, fmt.Errorf("%w: %v", domain.ErrEventPublishFailed, err)
 		}
 	}
 
@@ -155,6 +158,16 @@ func (s *collectServiceImpl) Toggle(ctx context.Context, userID uuid.UUID, input
 		IsCollected: want,
 		PostID:      input.PostID.String(),
 	}, nil
+}
+
+// rollbackCollect 事件投递失败时把流水与缓存设回原状态（best-effort，失败仅记日志）。
+func (s *collectServiceImpl) rollbackCollect(ctx context.Context, userID, postID uuid.UUID, original bool) {
+	if _, err := s.repo.SetCollected(ctx, userID, postID, original); err != nil {
+		logger.Log.Error("Failed to roll back post collect row: " + err.Error())
+	}
+	if _, err := s.cache.Set(ctx, userID, postID, original); err != nil {
+		logger.Log.Error("Failed to roll back post collect cache: " + err.Error())
+	}
 }
 
 // isCollected 用户当前是否已收藏（缓存优先，miss 回源 DB，DB 已收藏则回填缓存）。

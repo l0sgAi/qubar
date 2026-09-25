@@ -75,9 +75,15 @@ func (r *fakeCollectRepo) SetCollected(_ context.Context, _, postID uuid.UUID, a
 	return changed, nil
 }
 
-type fakeCollectPublisher struct{ amounts []int64 }
+type fakeCollectPublisher struct {
+	amounts []int64
+	err     error
+}
 
 func (p *fakeCollectPublisher) PublishPostCollect(_ context.Context, _, _ uuid.UUID, amount int64) error {
+	if p.err != nil {
+		return p.err
+	}
 	p.amounts = append(p.amounts, amount)
 	return nil
 }
@@ -173,5 +179,23 @@ func TestCollectToggle_InvalidAction(t *testing.T) {
 	_, err := newCollectTestService(cache, repo, pub).Toggle(context.Background(), uuid.New(), ToggleInput{PostID: uuid.New(), Action: "like"})
 	if !errors.Is(err, domain.ErrInvalidAction) {
 		t.Fatalf("want ErrInvalidAction, got %v", err)
+	}
+}
+
+// 事件未投递：流水与缓存都必须设回原状态，返回可重试错误（否则 collect_count 永久少记）。
+func TestCollectToggle_PublishFailureRollsBack(t *testing.T) {
+	cache, repo, pub := newFakes()
+	pub.err = errors.New("broker down")
+	postID := uuid.New()
+
+	_, err := newCollectTestService(cache, repo, pub).Toggle(context.Background(), uuid.New(), ToggleInput{PostID: postID})
+	if !errors.Is(err, domain.ErrEventPublishFailed) {
+		t.Fatalf("want ErrEventPublishFailed, got %v", err)
+	}
+	if repo.rows[postID] {
+		t.Fatal("row must be rolled back to not collected")
+	}
+	if len(cache.setArgs) != 2 || !cache.setArgs[0] || cache.setArgs[1] {
+		t.Fatalf("want cache Set(true) then rollback Set(false), got %v", cache.setArgs)
 	}
 }

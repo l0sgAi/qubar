@@ -78,4 +78,6 @@ var (
 	ErrInvalidCursor = errors.New("invalid search_after cursor")
 	// ErrInvalidAction 无效的期望动作。
 	ErrInvalidAction = errors.New("invalid action, must be 'collect', 'uncollect' or empty")
+	// ErrEventPublishFailed 收藏事件未能投递（已回滚流水与缓存，客户端可重试）。
+	ErrEventPublishFailed = errors.New("collect event publish failed, please retry")
 )

@@ -107,6 +107,8 @@ func (s *likeServiceImpl) SetCommentTarget(t CommentTarget) { s.commentTarget = 
 //     显式 action 也必须先解析：回填后 ZSET 才能正确判断"已处于期望态"。
 //  3. Redis Lua 原子设值；已处于期望状态则 no-op。
 //  4. 状态真正变化时才发布点赞事件（MQ 落库 + 热度 + CF 互动 + 通知）。
+//     like_events 同步 ack；投递失败则把缓存设回原状态并返回 ErrEventPublishFailed（可重试），
+//     否则 Redis 已变而 DB 永远收不到，TTL 后点赞"消失"。
 func (s *likeServiceImpl) Toggle(ctx context.Context, userID uuid.UUID, input ToggleInput) (*ToggleResult, error) {
 	if _, err := domain.ResolveWant(false, input.Action); err != nil {
 		return nil, err
@@ -156,7 +158,10 @@ func (s *likeServiceImpl) togglePostLike(ctx context.Context, userID, postID uui
 
 	if result != domain.ToggleResultUnchanged {
 		if err := s.publisher.PublishPostLike(ctx, userID, postID, result.Int64()); err != nil {
-			logger.Log.Error("Failed to publish post like event: " + err.Error())
+			if _, rbErr := s.postCache.Set(ctx, userID, postID, !want); rbErr != nil {
+				logger.Log.Error("Failed to roll back post like cache: " + rbErr.Error())
+			}
+			return nil, fmt.Errorf("%w: %v", domain.ErrEventPublishFailed, err)
 		}
 	}
 
@@ -205,7 +210,10 @@ func (s *likeServiceImpl) toggleCommentLike(ctx context.Context, userID, comment
 			postID = *postIDPtr
 		}
 		if err := s.publisher.PublishCommentLike(ctx, userID, commentID, postID, result.Int64()); err != nil {
-			logger.Log.Error("Failed to publish comment like event: " + err.Error())
+			if _, rbErr := s.commentCache.Set(ctx, userID, commentID, !want); rbErr != nil {
+				logger.Log.Error("Failed to roll back comment like cache: " + rbErr.Error())
+			}
+			return nil, fmt.Errorf("%w: %v", domain.ErrEventPublishFailed, err)
 		}
 	}
 

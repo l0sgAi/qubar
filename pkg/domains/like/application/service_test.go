@@ -61,13 +61,22 @@ type publishedEvent struct {
 	amount int64
 }
 
-type fakePublisher struct{ events []publishedEvent }
+type fakePublisher struct {
+	events []publishedEvent
+	err    error
+}
 
 func (p *fakePublisher) PublishPostLike(_ context.Context, _, postID uuid.UUID, amount int64) error {
+	if p.err != nil {
+		return p.err
+	}
 	p.events = append(p.events, publishedEvent{postID, amount})
 	return nil
 }
 func (p *fakePublisher) PublishCommentLike(_ context.Context, _, commentID, _ uuid.UUID, amount int64) error {
+	if p.err != nil {
+		return p.err
+	}
 	p.events = append(p.events, publishedEvent{commentID, amount})
 	return nil
 }
@@ -230,5 +239,27 @@ func TestResolveWant(t *testing.T) {
 		if err != nil || got != tc.want {
 			t.Fatalf("ResolveWant(%v, %q) = %v, %v; want %v", tc.current, tc.action, got, err, tc.want)
 		}
+	}
+}
+
+// 事件未投递：缓存必须设回原状态，返回可重试错误（否则 Redis 已赞而 DB 永远不知道）。
+func TestToggle_PublishFailureRollsBackCache(t *testing.T) {
+	for _, typ := range []string{"post", "comment"} {
+		t.Run(typ, func(t *testing.T) {
+			cache := newFakeLikeCache()
+			pub := &fakePublisher{err: errors.New("broker down")}
+			id := uuid.New()
+
+			_, err := newTestService(cache, &fakeTarget{}, pub).Toggle(context.Background(), uuid.New(), ToggleInput{Type: typ, TargetID: id})
+			if !errors.Is(err, domain.ErrEventPublishFailed) {
+				t.Fatalf("want ErrEventPublishFailed, got %v", err)
+			}
+			if len(cache.setArgs) != 2 || !cache.setArgs[0] || cache.setArgs[1] {
+				t.Fatalf("want Set(true) then rollback Set(false), got %v", cache.setArgs)
+			}
+			if cache.liked[id] {
+				t.Fatal("cache must be back to not liked")
+			}
+		})
 	}
 }

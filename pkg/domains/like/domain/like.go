@@ -67,4 +67,6 @@ var (
 	ErrInvalidTargetType = errors.New("invalid target type, must be 'comment' or 'post'")
 	// ErrInvalidAction 无效的期望动作。
 	ErrInvalidAction = errors.New("invalid action, must be 'like', 'unlike' or empty")
+	// ErrEventPublishFailed 点赞事件未能投递（已回滚缓存，客户端可重试）。
+	ErrEventPublishFailed = errors.New("like event publish failed, please retry")
 )

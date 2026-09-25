@@ -236,6 +236,11 @@ func ClosePostStatsProducer() error {
 	return nil
 }
 
+// syncPublishTimeout 同步 ack 的 like / collect 事件单次投递上限。
+// 这两个 writer 在请求路径上同步等待 broker 确认；Redpanda 不可用时须快速失败（返回可重试错误），
+// 而不是让请求卡在 kafka-go 的重试里。
+const syncPublishTimeout = 3 * time.Second
+
 // ==================== 点赞事件消息 ====================
 
 // InitLikeEventProducer 初始化点赞事件Producer
@@ -248,7 +253,7 @@ func InitLikeEventProducer() error {
 		BatchTimeout:           10 * time.Millisecond,
 		RequiredAcks:           kafka.RequireOne,
 		Compression:            kafka.Snappy,
-		Async:                  true,
+		Async:                  false, // 同步 ack：投递失败需回滚 Redis 并返回可重试错误（#46 F2.5）
 		MaxAttempts:            5,
 		ReadTimeout:            10 * time.Second,
 		WriteTimeout:           10 * time.Second,
@@ -295,7 +300,9 @@ func publishLikeEvent(msg LikeEventMessage) error {
 		Key:   []byte(fmt.Sprintf("%s:%s", msg.UserID.String(), msg.TargetID.String())),
 		Value: value,
 	}
-	if err := likeEventWriter.WriteMessages(context.Background(), kafkaMsg); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), syncPublishTimeout)
+	defer cancel()
+	if err := likeEventWriter.WriteMessages(ctx, kafkaMsg); err != nil {
 		return fmt.Errorf("failed to write like event message: %w", err)
 	}
 	logger.Log.Debug(fmt.Sprintf("Published like event: type=%s, user=%s, target=%s, amount=%d",
@@ -327,7 +334,7 @@ func InitCollectEventProducer() error {
 		BatchTimeout:           10 * time.Millisecond,
 		RequiredAcks:           kafka.RequireOne,
 		Compression:            kafka.Snappy,
-		Async:                  true,
+		Async:                  false, // 同步 ack：投递失败需回滚流水与 Redis 并返回可重试错误（#46 F2.5）
 		MaxAttempts:            5,
 		ReadTimeout:            10 * time.Second,
 		WriteTimeout:           10 * time.Second,
@@ -360,7 +367,9 @@ func publishCollectEvent(msg CollectEventMessage) error {
 		Key:   []byte(fmt.Sprintf("%s:%s", msg.UserID.String(), msg.PostID.String())),
 		Value: value,
 	}
-	if err := collectEventWriter.WriteMessages(context.Background(), kafkaMsg); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), syncPublishTimeout)
+	defer cancel()
+	if err := collectEventWriter.WriteMessages(ctx, kafkaMsg); err != nil {
 		return fmt.Errorf("failed to write collect event message: %w", err)
 	}
 	logger.Log.Debug(fmt.Sprintf("Published collect event: type=%s, user=%s, post=%s, amount=%d",
