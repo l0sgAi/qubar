@@ -172,3 +172,63 @@ func TestToggle_InvalidType(t *testing.T) {
 		t.Fatalf("want ErrInvalidTargetType, got %v", err)
 	}
 }
+
+// 显式 action：客户端重试 / 双击同一动作只生效一次。
+func TestToggle_ExplicitActionIsIdempotent(t *testing.T) {
+	cache, pub := newFakeLikeCache(), &fakePublisher{}
+	target := &fakeTarget{}
+	svc := newTestService(cache, target, pub)
+	id, user := uuid.New(), uuid.New()
+
+	for i := 0; i < 2; i++ {
+		res, err := svc.Toggle(context.Background(), user, ToggleInput{Type: "post", TargetID: id, Action: "like"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !res.IsLiked {
+			t.Fatalf("attempt %d: want liked", i)
+		}
+		target.dbLiked = true // 模拟首次成功后真实状态已为已赞
+	}
+	if len(pub.events) != 1 || pub.events[0].amount != 1 {
+		t.Fatalf("want exactly one +1 event, got %+v", pub.events)
+	}
+
+	res, err := svc.Toggle(context.Background(), user, ToggleInput{Type: "post", TargetID: id, Action: "unlike"})
+	if err != nil || res.IsLiked {
+		t.Fatalf("want unliked, got %+v err=%v", res, err)
+	}
+	if len(pub.events) != 2 || pub.events[1].amount != -1 {
+		t.Fatalf("want a -1 event after unlike, got %+v", pub.events)
+	}
+}
+
+func TestToggle_InvalidAction(t *testing.T) {
+	cache := newFakeLikeCache()
+	_, err := newTestService(cache, &fakeTarget{}, &fakePublisher{}).
+		Toggle(context.Background(), uuid.New(), ToggleInput{Type: "post", TargetID: uuid.New(), Action: "flip"})
+	if !errors.Is(err, domain.ErrInvalidAction) {
+		t.Fatalf("want ErrInvalidAction, got %v", err)
+	}
+	if len(cache.setArgs) != 0 {
+		t.Fatal("invalid action must not touch the cache")
+	}
+}
+
+func TestResolveWant(t *testing.T) {
+	cases := []struct {
+		current bool
+		action  string
+		want    bool
+	}{
+		{false, "", true}, {true, "", false},
+		{false, "like", true}, {true, "like", true},
+		{false, "unlike", false}, {true, "unlike", false},
+	}
+	for _, tc := range cases {
+		got, err := domain.ResolveWant(tc.current, tc.action)
+		if err != nil || got != tc.want {
+			t.Fatalf("ResolveWant(%v, %q) = %v, %v; want %v", tc.current, tc.action, got, err, tc.want)
+		}
+	}
+}

@@ -19,6 +19,29 @@ const (
 	TargetTypePost TargetType = "post"
 )
 
+// Action 期望动作（请求可选字段）。空 = 切换（以真实当前状态取反）。
+const (
+	// ActionLike 期望已赞（幂等）。
+	ActionLike = "like"
+	// ActionUnlike 期望未赞（幂等）。
+	ActionUnlike = "unlike"
+)
+
+// ResolveWant 由真实当前状态与期望动作得出期望状态。
+// action 为空时切换；"like"/"unlike" 为显式期望状态，重试/双击天然幂等。
+func ResolveWant(current bool, action string) (bool, error) {
+	switch action {
+	case "":
+		return !current, nil
+	case ActionLike:
+		return true, nil
+	case ActionUnlike:
+		return false, nil
+	default:
+		return false, ErrInvalidAction
+	}
+}
+
 // ToggleResult 点赞设值结果（与 redispkg.LikeSetResult 值一致）。
 type ToggleResult int
 
@@ -42,4 +65,6 @@ var (
 	ErrCommentNotFound = errors.New("comment not found")
 	// ErrInvalidTargetType 无效的点赞目标类型。
 	ErrInvalidTargetType = errors.New("invalid target type, must be 'comment' or 'post'")
+	// ErrInvalidAction 无效的期望动作。
+	ErrInvalidAction = errors.New("invalid action, must be 'like', 'unlike' or empty")
 )

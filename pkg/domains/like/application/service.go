@@ -56,13 +56,14 @@ type ToggleResult struct {
 type ToggleInput struct {
 	Type     string    // "comment" 或 "post"
 	TargetID uuid.UUID // 评论ID 或 帖子ID
+	Action   string    // 可选："like" / "unlike" 显式期望状态；空 = 切换
 }
 
 // ===== Service 接口 =====
 
 // LikeService 是 like 领域的应用服务接口。
 type LikeService interface {
-	// Toggle 点赞/取消点赞：以真实当前状态取反为期望状态，原子设值。
+	// Toggle 点赞/取消点赞：期望状态 = input.Action（显式）或真实当前状态取反（空），原子设值。
 	Toggle(ctx context.Context, userID uuid.UUID, input ToggleInput) (*ToggleResult, error)
 
 	// SetPostTarget 注入帖子查询端口。
@@ -102,22 +103,26 @@ func (s *likeServiceImpl) SetCommentTarget(t CommentTarget) { s.commentTarget = 
 //
 // 流程（设计见 docs/design/like-pipeline-fix-design.md §三 F1.2）：
 //  1. 校验目标存在；恢复统计缓存（Lua 脚本依赖 stats Hash）。
-//  2. 解析真实当前状态（ZSET miss 回源 DB 并回填），期望状态 = 取反。
+//  2. 解析真实当前状态（ZSET miss 回源 DB 并回填），得出期望状态（显式 action 或取反）。
+//     显式 action 也必须先解析：回填后 ZSET 才能正确判断"已处于期望态"。
 //  3. Redis Lua 原子设值；已处于期望状态则 no-op。
 //  4. 状态真正变化时才发布点赞事件（MQ 落库 + 热度 + CF 互动 + 通知）。
 func (s *likeServiceImpl) Toggle(ctx context.Context, userID uuid.UUID, input ToggleInput) (*ToggleResult, error) {
+	if _, err := domain.ResolveWant(false, input.Action); err != nil {
+		return nil, err
+	}
 	switch domain.TargetType(input.Type) {
 	case domain.TargetTypeComment:
-		return s.toggleCommentLike(ctx, userID, input.TargetID)
+		return s.toggleCommentLike(ctx, userID, input.TargetID, input.Action)
 	case domain.TargetTypePost:
-		return s.togglePostLike(ctx, userID, input.TargetID)
+		return s.togglePostLike(ctx, userID, input.TargetID, input.Action)
 	default:
 		return nil, domain.ErrInvalidTargetType
 	}
 }
 
 // togglePostLike 帖子点赞切换。
-func (s *likeServiceImpl) togglePostLike(ctx context.Context, userID, postID uuid.UUID) (*ToggleResult, error) {
+func (s *likeServiceImpl) togglePostLike(ctx context.Context, userID, postID uuid.UUID, action string) (*ToggleResult, error) {
 	if s.postTarget == nil {
 		return nil, errors.New("post target is not configured")
 	}
@@ -139,7 +144,10 @@ func (s *likeServiceImpl) togglePostLike(ctx context.Context, userID, postID uui
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve post like state: %w", err)
 	}
-	want := !current
+	want, err := domain.ResolveWant(current, action)
+	if err != nil {
+		return nil, err
+	}
 
 	result, err := s.postCache.Set(ctx, userID, postID, want)
 	if err != nil {
@@ -160,7 +168,7 @@ func (s *likeServiceImpl) togglePostLike(ctx context.Context, userID, postID uui
 }
 
 // toggleCommentLike 评论点赞切换。
-func (s *likeServiceImpl) toggleCommentLike(ctx context.Context, userID, commentID uuid.UUID) (*ToggleResult, error) {
+func (s *likeServiceImpl) toggleCommentLike(ctx context.Context, userID, commentID uuid.UUID, action string) (*ToggleResult, error) {
 	if s.commentTarget == nil {
 		return nil, errors.New("comment target is not configured")
 	}
@@ -181,7 +189,10 @@ func (s *likeServiceImpl) toggleCommentLike(ctx context.Context, userID, comment
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve comment like state: %w", err)
 	}
-	want := !current
+	want, err := domain.ResolveWant(current, action)
+	if err != nil {
+		return nil, err
+	}
 
 	result, err := s.commentCache.Set(ctx, userID, commentID, want)
 	if err != nil {
