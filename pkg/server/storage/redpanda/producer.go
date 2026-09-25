@@ -244,7 +244,7 @@ func InitLikeEventProducer() error {
 		Addr:                   kafka.TCP(conf.Config.Redpanda.Brokers...),
 		Topic:                  conf.Config.Redpanda.LikeEventTopic,
 		AllowAutoTopicCreation: true,
-		Balancer:               &kafka.LeastBytes{},
+		Balancer:               &kafka.Hash{}, // 按 key(user:target) 哈希分区：同对事件同分区有序（消费者"末态为准"依赖）
 		BatchTimeout:           10 * time.Millisecond,
 		RequiredAcks:           kafka.RequireOne,
 		Compression:            kafka.Snappy,
