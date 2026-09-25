@@ -283,8 +283,8 @@ func newNoticeService(deps *Deps) noticeapp.NoticeService {
 
 // newRecommendService 构造 RecommendService。
 //
-// searcher/seed/checker/feed 为 recommend 同域 infra（直构，走全局 ES/Redis 客户端）；
-// circle/postMeta/hydrator 为跨域桥接器（包 post/circle service）。
+// searcher/seed/feed 为 recommend 同域 infra（直构，走全局 ES/Redis 客户端）；
+// circle/postMeta/hydrator/checker 为跨域桥接器（包 post/circle service）。
 func newRecommendService(postSvc postapp.PostService, circleSvc circleapp.CircleService) recommendapp.RecommendService {
 	return recommendapp.NewRecommendService(
 		recommendinfra.NewHomeFeedSearcher(),        // HomeFeedSearcher
@@ -292,7 +292,7 @@ func newRecommendService(postSvc postapp.PostService, circleSvc circleapp.Circle
 		&recommendPostMetaReader{delegate: postSvc}, // PostMetaReader
 		recommendinfra.NewSeedReader(),              // SeedReader
 		&recommendPostHydrator{delegate: postSvc},   // PostHydrator
-		recommendinfra.NewInteractionChecker(),      // InteractionChecker
+		&postInteractionChecker{delegate: postSvc},  // InteractionChecker（缓存 + DB 回源）
 		recommendinfra.NewFeedCache(),               // FeedCache
 		recommendinfra.NewInterestCircleCache(),     // InterestCircleCache
 	)
@@ -306,14 +306,14 @@ func registerRecommend(root routing.RouterGroup, svc recommendapp.RecommendServi
 // newTrendingService 构造 TrendingService。
 //
 // boardStore 为 trending 同域 infra（直构，走全局 Redis 客户端）；
-// hydrator/checker/circle/user 为跨域桥接器（包 post/circle/user service + redispkg）。
+// hydrator/checker/circle/user 为跨域桥接器（包 post/circle/user service）。
 func newTrendingService(postSvc postapp.PostService, circleRepo circledomain.CircleRepository, userFacade userapp.UserFacade) trendingapp.TrendingService {
 	return trendingapp.NewTrendingService(
-		trendinginfra.NewBoardStore(),             // BoardStore
-		&trendingPostHydrator{delegate: postSvc},  // PostHydrator
-		&trendingInteractionChecker{},             // InteractionChecker
-		&trendingCircleLookup{repo: circleRepo},   // CircleLookup
-		&trendingUserLookup{delegate: userFacade}, // UserLookup
+		trendinginfra.NewBoardStore(),              // BoardStore
+		&trendingPostHydrator{delegate: postSvc},   // PostHydrator
+		&postInteractionChecker{delegate: postSvc}, // InteractionChecker（缓存 + DB 回源）
+		&trendingCircleLookup{repo: circleRepo},    // CircleLookup
+		&trendingUserLookup{delegate: userFacade},  // UserLookup
 	)
 }
 
@@ -330,7 +330,7 @@ func newDiscoverService(postSvc postapp.PostService, circleRepo circledomain.Cir
 	return discoverapp.NewDiscoverService(
 		discoverinfra.NewDiscoverPoolStore(),             // DiscoverPoolStore
 		&discoverPostHydrator{delegate: postSvc},         // PostHydrator（复用 trending/recommend 同款桥接）
-		&discoverInteractionChecker{},                    // InteractionChecker（stateless，直接调 redispkg）
+		&postInteractionChecker{delegate: postSvc},       // InteractionChecker（缓存 + DB 回源，同 recommend/trending）
 		&discoverCircleLookup{repo: circleRepo},          // CircleLookup（复用 trending 同款桥接）
 		&discoverSeedReader{},                            // SeedReader（直接调 redispkg，同 recommend infra）
 		&discoverJoinedCircleLookup{delegate: circleSvc}, // JoinedCircleLookup（复用 recommend 同款桥接）
