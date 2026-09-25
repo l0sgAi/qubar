@@ -70,22 +70,14 @@ func StartPostHotConsumer() error {
 
 	go func() {
 		defer r.Close()
+		backoff := &readBackoff{}
 		for {
 			msg, err := r.ReadMessage(context.Background())
 			if err != nil {
-				errStr := err.Error()
-				if containsIgnoreCase(errStr, "no data") ||
-					containsIgnoreCase(errStr, "multiple Read calls return no data") ||
-					containsIgnoreCase(errStr, "context deadline exceeded") ||
-					containsIgnoreCase(errStr, "timeout") {
-					logger.Log.Debug("No messages in post hot queue, waiting...")
-					time.Sleep(30 * time.Minute)
-					continue
-				}
-				logger.Log.Error("Failed to read post hot message: " + errStr)
-				time.Sleep(5 * time.Second)
+				waitAfterReadError(context.Background(), backoff, "post hot", err)
 				continue
 			}
+			backoff.Reset()
 
 			var hotMsg PostHotMessage
 			if err := json.Unmarshal(msg.Value, &hotMsg); err != nil {
