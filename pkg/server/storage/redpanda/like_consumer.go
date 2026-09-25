@@ -254,7 +254,8 @@ func (a *LikeEventAggregator) run() {
 }
 
 // flush 落库 → 提交 offset。落库失败：末态与 offset 合并回缓冲，下轮重试；
-// 提交失败：仅 offset 合并回（落库已成功，重投也是幂等 no-op）。
+// 提交失败：只记日志、不合并回——同分区后续更大 offset 的提交会覆盖它；即便未覆盖，
+// 重启/再均衡后重投也是幂等 no-op。合并回反而可能让再均衡后失效的 offset 拖累之后每次提交。
 func (a *LikeEventAggregator) flush() {
 	a.mu.Lock()
 	if a.buf.empty() {
@@ -290,10 +291,7 @@ func (a *LikeEventAggregator) flush() {
 	ctx, cancel := context.WithTimeout(context.Background(), likeCommitTimeout)
 	defer cancel()
 	if err := a.committer.CommitMessages(ctx, msgs...); err != nil {
-		logger.Log.Warn("Failed to commit like event offsets, will retry: " + err.Error())
-		a.mu.Lock()
-		a.buf.restoreOffsets(batch.offsets)
-		a.mu.Unlock()
+		logger.Log.Warn("Failed to commit like event offsets (redelivery is idempotent): " + err.Error())
 	}
 }
 

@@ -159,7 +159,7 @@ func TestLikeAggregatorFlush_PersistFailureRestoresAndSkipsCommit(t *testing.T) 
 	}
 }
 
-func TestLikeAggregatorFlush_CommitFailureRestoresOffsetsOnly(t *testing.T) {
+func TestLikeAggregatorFlush_CommitFailureDoesNotRetryOrRepersist(t *testing.T) {
 	c := &fakeCommitter{err: errors.New("broker down")}
 	calls := 0
 	a := newTestAggregator(func([]*likeState) error { calls++; return nil }, c)
@@ -167,20 +167,18 @@ func TestLikeAggregatorFlush_CommitFailureRestoresOffsetsOnly(t *testing.T) {
 
 	a.flush()
 
-	if len(a.buf.states) != 0 {
-		t.Fatal("persisted states must not be restored on commit failure")
-	}
-	if a.buf.offsets[0].Offset != 7 {
-		t.Fatal("offsets must be restored for the next commit attempt")
+	if !a.buf.empty() {
+		t.Fatal("nothing may be restored after a commit failure (persist already succeeded)")
 	}
 
-	// 下一轮：无新状态，仅重试提交，不再落库
+	// 下一批带来更大的 offset：一次提交即覆盖之前失败的 offset。
 	c.err = nil
+	a.addMessage(nil, km(0, 9))
 	a.flush()
 	if calls != 1 {
 		t.Fatalf("persist calls = %d, want 1", calls)
 	}
-	if len(c.committed) != 1 || c.committed[0].Offset != 7 {
+	if len(c.committed) != 1 || c.committed[0].Offset != 9 {
 		t.Fatalf("committed = %v", c.committed)
 	}
 }
