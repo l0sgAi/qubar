@@ -362,7 +362,7 @@ WHERE p.id = p0.id AND p.deleted = 0 AND p.like_count <> COALESCE(s.cnt, 0);
 
 ---
 
-## 八、待决策（请审阅时确认）
+## 八、决策（已确认：全部采用推荐项）
 
 | # | 问题 | 选项 | 推荐 |
 |---|---|---|---|
@@ -372,3 +372,52 @@ WHERE p.id = p0.id AND p.deleted = 0 AND p.like_count <> COALESCE(s.cnt, 0);
 | D4 | 是否执行对账 SQL | 执行 / 不执行 | **执行**，P0 上线后低峰分批 |
 | D5 | feed 回显回源成本 | A. 有 miss 即批量回源（简单，多 ≤2 次索引查询/页）；B. ZSET 过期时整表预热 top-2000 + 完整性标记，miss 才算权威 | **A**，上线后观察 DB QPS 再定是否做 B |
 | D6 | P0 / P1 是否拆成两个 PR | 拆 / 合 | **拆**：P0 纯后端无接口变化，可先上线止血 |
+
+---
+
+## 九、实施记录（`fix/like-pipeline-20260925`）
+
+### 9.1 提交清单
+
+| 阶段 | 提交 | 内容 |
+|---|---|---|
+| P0 | `fix(redpanda): replace 30-minute consumer sleep…` | F4：`redpanda/reader.go`（`readBackoff` + `waitAfterReadError`），6 个非 like 读循环改用 |
+| P0 | `fix(like): make like persistence idempotent…` | F2 + F3：`like_consumer.go` 重写（末态缓冲、`FetchMessage`/落库后 `CommitMessages`、失败合并回、`StopLikeEventConsumerGlobal`、单条 CTE）；like writer `kafka.Hash{}` |
+| P0 | `fix(like): resolve real like state before setting it` | F1.1 + F1.2：`likeSetScript`；post/comment `IsLikedByUser`；like 端口 `IsLiked`；no-op 不发事件；仅 `NOSCRIPT` 重载 |
+| P1 | `feat(like): accept optional action…` | F1.3：`action=like\|unlike`，`domain.ResolveWant` |
+| P1 | `fix(feed): fall back to DB for is_liked/is_collected…` | F1.4：`PostService.BatchCheckInteractions` + repo `BatchIsLiked/BatchIsCollected`；composition `postInteractionChecker` 替换 3 个 checker |
+| P1 | `fix(collect): resolve real collect state…` | F1.5：`collectSetScript`、`SetCollected` 返回 `changed`、`action=collect\|uncollect` |
+| P1 | `fix(like,collect): confirm event delivery…` | F2.5：like/collect writer 同步 ack（`syncPublishTimeout` 3s），失败回滚 → 503 |
+
+D6（拆 PR）：P0 = 前 3 个代码提交，即 `181a34f`–`4c93a6b`（基于 `e17423e`）再 cherry-pick `fix(like): don't carry failed offset commits…`（仅改 `like_consumer.go`，无冲突），可单独开 PR 先上线；P1 在其后。
+
+### 9.2 与方案的差异
+
+| 项 | 方案 | 实际 | 原因 |
+|---|---|---|---|
+| 收藏写入顺序（F1.5） | Redis 设值后同步落行（沿用原顺序 + 补偿） | **先落行（权威、返回 changed）→ 再 Redis 设值** | DB 失败时 Redis 未动，无需补偿；Redis 失败仅记日志，缓存随 TTL/回源自愈 |
+| 收藏投递失败（F2.5） | 回滚 Redis | 回滚**流水行 + Redis** | 流水已同步落库，只回滚 Redis 会让 DB 与计数不一致 |
+| collect writer 分区 | — | 保持 `LeastBytes` | 收藏消费者仍按 ±1 求和；现仅在真实迁移时发事件，与顺序无关 |
+| 信息流回显失败语义 | — | best-effort：DB 失败保留缓存结果，不报错 | 回显是软信号，不应让整页失败 |
+| `post_like` / `comment_like` DDL | 无变更 | 无变更 | 依赖已有唯一索引（上线前在生产确认存在） |
+| offset 提交失败（F2.3） | 保留 pending，下轮重试提交 | **只记日志、不合并回** | 同分区后续更大 offset 的提交会覆盖；未覆盖则重投幂等。合并回在再均衡后可能让失效 offset 拖累之后每次提交 |
+
+### 9.3 验证
+
+- `go build ./... && go vet`（改动包）通过；`go test ./pkg/...` 全绿。新增单测：
+  `redpanda/reader_test.go`、`redpanda/like_consumer_test.go`（末态、合并回、offset、落库后提交、提交失败重试、停机丢弃、行构建）、
+  `like/application/service_test.go`（缓存 miss 取消、no-op 不发布、状态解析失败不猜、显式 action 幂等、投递失败回滚）、
+  `post/application/interactions_test.go`（miss 回源 + 回填、缓存/DB 故障降级）、`collect/application/service_test.go`。
+- **本地 PostgreSQL 16** 执行 F3 两条 CTE：已赞再赞 no-op、复活 +1、新建 +1、取消不存在 no-op、取消 −1、**整批重放计数不变**、评论复活补齐 `post_id`；
+  `SetCollected` upsert：新建 1 行、重复 0 行、复活 1 行。
+- **本地 Redis** 执行 `likeSetScript` / `collectSetScript`：设值 ±1、重复 0、计数 clamp 0、超 cap 淘汰最旧、TTL 续期。
+- 未做：真实 Redpanda 下的 `kill -9` 重投演练（容器内无 broker），上线前在预发按 §七 测试计划执行。
+
+### 9.4 遗留（P2）
+
+- 一次性对账 SQL（§七），P0 上线、消费者追平后低峰分批执行。
+- 其余 consumer（circle/post statistics、collect、history、hot、interaction）仍为"读即提交"，flush 前崩溃会丢缓冲；按 `like_consumer.go` 范式逐个迁移。
+- 若信息流回源导致 DB QPS 明显上升，评估 D5-B（ZSET 完整预热 + 完整性标记）。
+- 已知极端边界：落库失败的批次被合并回后恰逢消费组再均衡，本实例可能把已被转移分区的旧末态晚于新 owner 写入。
+  需"落库失败 + 再均衡"同时发生；下次对同一对象操作即纠正，接受。
+

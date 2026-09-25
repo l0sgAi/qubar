@@ -92,13 +92,14 @@
 - **DB keyset 游标翻页**（`comment_repo_pg.go:186`）。CommentLike 冗余存 `post_id`。
 - domain 哨兵：`ErrPostLocked/ErrRootCommentMismatch/ErrReplyTargetNotInThread/ErrInvalidCursor`（`comment.go:67`）。
 
-### like ⭐（无自带实体，`like/domain/like.go` 只有 `TargetType`+`ToggleResult±1`）
-- Service（`application/service.go:59`）：`Toggle(input{Type,TargetID})` → `togglePostLike`/`toggleCommentLike`。
-  每路：校验存在 → `RestoreStats`(保证 stats Hash 存在) → Lua toggle → 发 like 事件（含 ApplyHotDelta + post_hot + CF interaction）。
-- ** owns post & comment 的原子 toggle**；流水表分别在 post/comment 域。
+### like ⭐（无自带实体，`like/domain/like.go` 只有 `TargetType`+`ToggleResult{±1,0}`+`ResolveWant`）
+- Service（`application/service.go`）：`Toggle(input{Type,TargetID,Action})` → `togglePostLike`/`toggleCommentLike`。
+  每路：校验存在 → `RestoreStats` → `Target.IsLiked`(桥接 post/comment `IsLikedByUser`：缓存 → DB 回源 + 回填) →
+  `ResolveWant`(action 显式 或 取反) → Lua **设值** → 仅变化时发 like 事件（同步 ack；失败回滚缓存 → `ErrEventPublishFailed`/503）。
+- ** owns post & comment 的原子设值**；流水表分别在 post/comment 域。
 
 ### collect ⭐（`PostCollect`，`domains.post_collect`，仅 post 有收藏）
-- Service（`application/service.go:56`）：`Toggle`(校验→RestoreStats→Lua toggle→**同步 upsert** post_collect + Redis 回滚补偿 → 发 collect_count 事件)/
+- Service（`application/service.go`）：`Toggle`(校验→RestoreStats→解析真实状态→**同步 upsert** post_collect(返回 changed)→Lua 设值→仅 changed 发 collect_count 事件，投递失败回滚)/
   `ListCollectedPosts`(DB keyset `(create_time,id)`)。
 - 缓存：`user:collect:posts:{uid}` ZSET。
 
@@ -113,8 +114,9 @@
 - Service（`application/service.go:21`）：`GetHomeFeed` 按 tab 分发 → `getRecommend`(池 offset) / `getSimpleFeed`(hot/latest search_after) / `getFollowing`(已加圈子 latest)。
 - 单端点 `GET /post/home?tab=…`（复用 `/post` 前缀）。
 - Infra：`home_feed_searcher_es.go`、`feed_cache_redis.go`(`feed:recommend:{uid}` LIST + token)、
-  `seed_reader_redis.go`(like/collect/view ZSET + cf:item 聚合)、`interaction_checker_redis.go`、`interest_circle_cache_redis.go`(`user:interest_circles:{uid}` SET)。
-- **`PostHydrator`/`InteractionChecker` 是可复用只读端口**（trending 域复用）。
+  `seed_reader_redis.go`(like/collect/view ZSET + cf:item 聚合)、`interest_circle_cache_redis.go`(`user:interest_circles:{uid}` SET)。
+- **`PostHydrator`/`InteractionChecker` 是可复用只读端口**（trending/discover 复用）。`InteractionChecker` 由 composition
+  `postInteractionChecker` 桥接 `PostService.BatchCheckInteractions`（ZSET 批查 → miss 批量回源 DB → 回填），三个信息流共用。
 
 ### storage（无实体，文件上传 DTO 在 `storage/domain/storage.go`）
 - Service：`UploadImage/UploadPostImages/UploadVideo/DeleteFile/PresignedURL`。Infra：`s3_storage.go`（AWS S3 + 预签名）。
