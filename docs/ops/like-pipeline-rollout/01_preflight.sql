@@ -77,7 +77,7 @@ SELECT tbl, priv,
        CASE WHEN has_table_privilege(:'app_role', tbl, priv) THEN 'OK'
             ELSE 'MISSING -> GRANT ' || priv || ' ON ' || tbl || ' TO ' || :'app_role' END AS status
 FROM required
-ORDER BY status <> 'OK' DESC, tbl, priv;
+ORDER BY has_table_privilege(:'app_role', tbl, priv), tbl, priv;  -- MISSING 在前
 \else
 \echo 'WARN: role' :app_role 'not found; pass -v app_role=<runtime role> (configs pgsql.username)'
 \endif
