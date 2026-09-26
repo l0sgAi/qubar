@@ -15,10 +15,11 @@ type PostTarget interface {
 	RestoreStats(ctx context.Context, postID uuid.UUID) error
 }
 
-// PostCollectCache 帖子收藏缓存（Redis ZSET + stats Hash + Lua 原子切换）。
+// PostCollectCache 帖子收藏缓存（Redis ZSET + stats Hash + Lua 原子设值）。
 type PostCollectCache interface {
-	// Toggle 原子切换帖子收藏状态。
-	Toggle(ctx context.Context, userID, postID uuid.UUID) (ToggleResult, error)
+	// Set 原子设置帖子收藏状态（collected=true 收藏 / false 取消）。
+	// 已处于期望状态时返回 ToggleResultUnchanged，不修改计数。
+	Set(ctx context.Context, userID, postID uuid.UUID, collected bool) (ToggleResult, error)
 	// StatsExists 检查帖子统计 Hash 是否存在（用于恢复缓存）。
 	StatsExists(ctx context.Context, postID uuid.UUID) (bool, error)
 	// BatchCheck 批量检查用户是否收藏了多个帖子（信息流「是否已收藏」回显）。
@@ -46,6 +47,6 @@ type PostCollectRepository interface {
 	IsCollected(ctx context.Context, userID, postID uuid.UUID) (bool, error)
 	// SetCollected 同步 upsert 收藏流水行（active=true 新增/恢复，active=false 标记取消）。
 	// 供 Toggle 即时入库：收藏流水是「我的收藏」列表的权威源，必须即时可见。
-	// 幂等：吞 (user_id, post_id) duplicate key。
-	SetCollected(ctx context.Context, userID, postID uuid.UUID, active bool) error
+	// 返回 changed：行状态是否真正发生迁移（已处于期望态为 false）。幂等、并发安全。
+	SetCollected(ctx context.Context, userID, postID uuid.UUID, active bool) (changed bool, err error)
 }

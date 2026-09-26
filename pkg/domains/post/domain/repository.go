@@ -21,6 +21,12 @@ type PostRepository interface {
 	IsLiked(ctx context.Context, userID, postID uuid.UUID) (bool, error)
 	// IsCollected 检查用户是否收藏了帖子（DB 回源用，详情页 is_collected 缓存 miss 时调用）。
 	IsCollected(ctx context.Context, userID, postID uuid.UUID) (bool, error)
+	// BatchIsLiked 批量检查用户点赞了哪些帖子（DB 回源用，信息流 is_liked 缓存 miss 时调用）。
+	// 返回已赞 postID 集合（未赞的不在 map 中）。
+	BatchIsLiked(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (map[uuid.UUID]bool, error)
+	// BatchIsCollected 批量检查用户收藏了哪些帖子（DB 回源用，信息流 is_collected 缓存 miss 时调用）。
+	// 返回已收藏 postID 集合（未收藏的不在 map 中）。
+	BatchIsCollected(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (map[uuid.UUID]bool, error)
 	// IncrCommentCount 同步递增帖子评论计数（DB UPDATE comment_count + 1）。
 	// 供 comment 领域发评论后调用，替代旧的 Redpanda 异步聚合。
 	IncrCommentCount(ctx context.Context, postID uuid.UUID) error

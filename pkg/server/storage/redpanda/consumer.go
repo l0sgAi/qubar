@@ -76,28 +76,14 @@ func StartStatisticsConsumer() error {
 	// 启动消息接收协程
 	go func() {
 		defer r.Close()
+		backoff := &readBackoff{}
 		for {
 			msg, err := r.ReadMessage(context.Background())
 			if err != nil {
-				// 检查是否为"没有数据"的正常情况
-				errStr := err.Error()
-				if containsIgnoreCase(errStr, "no data") ||
-					containsIgnoreCase(errStr, "multiple Read calls return no data") ||
-					containsIgnoreCase(errStr, "context deadline exceeded") ||
-					containsIgnoreCase(errStr, "timeout") {
-					// 队列中没有数据，这是正常情况，使用DEBUG级别
-					logger.Log.Debug("No messages in redpanda queue in 30 minutes, waiting...")
-					// 短暂等待后继续轮询
-					time.Sleep(30 * time.Minute)
-					continue
-				}
-
-				// 其他错误才记录ERROR
-				logger.Log.Error("Failed to read message from redpanda: " + errStr)
-				// 短暂等待后重试
-				time.Sleep(5 * time.Second)
+				waitAfterReadError(context.Background(), backoff, "circle statistics", err)
 				continue
 			}
+			backoff.Reset()
 
 			// 解析消息
 			var statsMsg CircleStatisticsMessage
@@ -368,22 +354,14 @@ func StartPostStatisticsConsumer() error {
 
 	go func() {
 		defer r.Close()
+		backoff := &readBackoff{}
 		for {
 			msg, err := r.ReadMessage(context.Background())
 			if err != nil {
-				errStr := err.Error()
-				if containsIgnoreCase(errStr, "no data") ||
-					containsIgnoreCase(errStr, "multiple Read calls return no data") ||
-					containsIgnoreCase(errStr, "context deadline exceeded") ||
-					containsIgnoreCase(errStr, "timeout") {
-					logger.Log.Debug("No messages in post statistics queue, waiting...")
-					time.Sleep(30 * time.Minute)
-					continue
-				}
-				logger.Log.Error("Failed to read post stats message: " + errStr)
-				time.Sleep(5 * time.Second)
+				waitAfterReadError(context.Background(), backoff, "post statistics", err)
 				continue
 			}
+			backoff.Reset()
 
 			var statsMsg PostStatisticsMessage
 			if err := json.Unmarshal(msg.Value, &statsMsg); err != nil {

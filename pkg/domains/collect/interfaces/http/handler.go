@@ -24,8 +24,12 @@ func NewHandler(svc application.CollectService) *Handler {
 }
 
 // ToggleCollectRequest 收藏/取消收藏请求。
+//
+// action 可选："collect" / "uncollect" 为显式期望状态（重试/双击幂等，推荐前端使用）；
+// 缺省为切换（兼容旧客户端）。取值校验在 application 层（domain.ErrInvalidAction）。
 type ToggleCollectRequest struct {
 	PostID uuid.UUID `json:"post_id" binding:"required"`
+	Action string    `json:"action,omitempty"` // "collect" / "uncollect" / 空
 }
 
 // ToggleCollect POST /collect/toggle
@@ -41,7 +45,7 @@ func (h *Handler) ToggleCollect(c appctx.AppContext) {
 		return
 	}
 
-	result, err := h.svc.Toggle(c, userID, application.ToggleInput{PostID: req.PostID})
+	result, err := h.svc.Toggle(c, userID, application.ToggleInput{PostID: req.PostID, Action: req.Action})
 	if err != nil {
 		writeCollectError(c, err)
 		return
@@ -100,6 +104,11 @@ func writeCollectError(c appctx.AppContext, err error) {
 		httputil.NotFound(c, "Post not found")
 	case errors.Is(err, domain.ErrInvalidCursor):
 		httputil.BadRequest(c, "Invalid search_after parameter")
+	case errors.Is(err, domain.ErrInvalidAction):
+		httputil.BadRequest(c, "Invalid action")
+	case errors.Is(err, domain.ErrEventPublishFailed):
+		logger.Log.Warn("collect event publish failed: " + err.Error())
+		httputil.ServiceUnavailable(c, "Collect is temporarily unavailable, please retry")
 	default:
 		logger.Log.Error("collect service error: " + err.Error())
 		httputil.InternalError(c, "Failed to process collect request")

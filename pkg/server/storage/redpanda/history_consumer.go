@@ -69,22 +69,14 @@ func StartHistoryEventConsumer() error {
 
 	go func() {
 		defer r.Close()
+		backoff := &readBackoff{}
 		for {
 			msg, err := r.ReadMessage(context.Background())
 			if err != nil {
-				errStr := err.Error()
-				if containsIgnoreCase(errStr, "no data") ||
-					containsIgnoreCase(errStr, "multiple Read calls return no data") ||
-					containsIgnoreCase(errStr, "context deadline exceeded") ||
-					containsIgnoreCase(errStr, "timeout") {
-					logger.Log.Debug("No messages in history event queue, waiting...")
-					time.Sleep(30 * time.Minute)
-					continue
-				}
-				logger.Log.Error("Failed to read history event message: " + errStr)
-				time.Sleep(5 * time.Second)
+				waitAfterReadError(context.Background(), backoff, "history event", err)
 				continue
 			}
+			backoff.Reset()
 
 			var historyMsg HistoryEventMessage
 			if err := json.Unmarshal(msg.Value, &historyMsg); err != nil {

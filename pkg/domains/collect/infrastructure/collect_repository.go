@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -34,45 +33,37 @@ func (r *postCollectRepoGORM) IsCollected(ctx context.Context, userID, postID uu
 	return count > 0, err
 }
 
+// setCollectedSQL 收藏：新建 或 从 deleted=1 复活（已是有效收藏则 0 行受影响）。
+const setCollectedSQL = `
+INSERT INTO domains.post_collect AS pc (id, user_id, post_id, deleted)
+VALUES (?, ?, ?, 0)
+ON CONFLICT (user_id, post_id) DO UPDATE
+	SET deleted = 0, update_time = CURRENT_TIMESTAMP
+	WHERE pc.deleted = 1`
+
 // SetCollected 同步 upsert 收藏流水行（供 Toggle 即时入库）。
 //
-// 复用 collect_consumer.batchUpdatePostCollects 的单条 upsert 语义：
-//   - 行存在 → UPDATE deleted 状态（active=true 恢复 / active=false 取消）；
-//   - 行不存在且 active=true → CREATE（PK 调 sharedomain.NewID()），并发下吞 duplicate key；
-//   - 行不存在且 active=false → no-op（无行可标，等价 0 行 UPDATE）。
-func (r *postCollectRepoGORM) SetCollected(ctx context.Context, userID, postID uuid.UUID, active bool) error {
+// 单条语句完成、依赖 uk_post_collect_user_post，并发安全：
+//   - active=true：新建（PK 调 sharedomain.NewID()）或复活已取消行；已有效则 no-op；
+//   - active=false：仅当前为有效收藏时标记取消；无行或已取消则 no-op。
+//
+// changed 以受影响行数判定，是计数（collect_count）与热度事件是否发布的唯一依据。
+func (r *postCollectRepoGORM) SetCollected(ctx context.Context, userID, postID uuid.UUID, active bool) (bool, error) {
 	db := r.db.WithContext(ctx)
-
-	var existing domain.PostCollect
-	err := db.Where("user_id = ? AND post_id = ?", userID, postID).First(&existing).Error
-	if err == nil {
-		deleted := domain.PostCollectActive
-		if !active {
-			deleted = domain.PostCollectCanceled
+	if active {
+		res := db.Exec(setCollectedSQL, sharedomain.NewID(), userID, postID)
+		if res.Error != nil {
+			return false, fmt.Errorf("failed to set post collected: %w", res.Error)
 		}
-		return db.Model(&domain.PostCollect{}).Where("id = ?", existing.ID).Update("deleted", deleted).Error
+		return res.RowsAffected > 0, nil
 	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return err
+	res := db.Model(&domain.PostCollect{}).
+		Where("user_id = ? AND post_id = ? AND deleted = ?", userID, postID, domain.PostCollectActive).
+		Update("deleted", domain.PostCollectCanceled)
+	if res.Error != nil {
+		return false, fmt.Errorf("failed to cancel post collect: %w", res.Error)
 	}
-
-	// 无流水行：仅收藏时新建，取消收藏 no-op
-	if !active {
-		return nil
-	}
-	err = db.Create(&domain.PostCollect{
-		ID:      sharedomain.NewID(),
-		UserID:  userID,
-		PostID:  postID,
-		Deleted: domain.PostCollectActive,
-	}).Error
-	if err != nil && strings.Contains(err.Error(), "duplicate key") {
-		return nil // 并发下对手已插入，幂等成功
-	}
-	if err != nil {
-		return fmt.Errorf("failed to create post collect: %w", err)
-	}
-	return nil
+	return res.RowsAffected > 0, nil
 }
 
 // collectCursor keyset 游标（base64 编码的 JSON， opaque to client）。
