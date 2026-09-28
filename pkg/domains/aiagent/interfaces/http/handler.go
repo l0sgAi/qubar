@@ -284,6 +284,7 @@ func writeAgentError(c appctx.AppContext, err error) {
 		httputil.Conflict(c, "Agent name already exists")
 	case application.IsInvalidNameErr(err),
 		application.IsInvalidProtocolErr(err),
+		application.IsInvalidBaseURLErr(err),
 		application.IsInvalidModelErr(err),
 		application.IsInvalidTriggerErr(err),
 		application.IsInvalidLLMParamsErr(err),

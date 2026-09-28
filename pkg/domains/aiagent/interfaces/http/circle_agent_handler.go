@@ -232,6 +232,7 @@ func writeCircleAgentError(c appctx.AppContext, err error) {
 		httputil.Conflict(c, "Circle agent limit reached (5)")
 	case application.IsInvalidNameErr(err),
 		application.IsInvalidProtocolErr(err),
+		application.IsInvalidBaseURLErr(err),
 		application.IsInvalidModelErr(err),
 		application.IsInvalidTriggerErr(err),
 		application.IsInvalidLLMParamsErr(err),

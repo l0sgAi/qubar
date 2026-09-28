@@ -55,7 +55,7 @@ Content-Type: application/json   （POST/PUT）
 | `avatar_url` | string | 头像，可空 |
 | `linked_user_id` | string(UUID) | 关联系统用户 ID（机器人以该身份发评论；**只读**，创建时后端自动生成 role=2 机器人账号） |
 | `api_protocol` | string | 协议：`openai` / `anthropic`（gemini/ollama 规划中，暂未开放） |
-| `base_url` | string | 自定义 API 地址，可空（用官方默认端点时留空） |
+| `base_url` | string | 自定义 API 地址，可空（用官方默认端点时留空）。非空时必须是**公网 https** 地址，否则 400 `base_url must be a public https URL`（防 SSRF，#48；内网自建网关需开 `aiagent.allow_private_base_url`） |
 | `has_api_key` | bool | 是否配置了 key |
 | `api_key_masked` | string | key 掩码（如 `sk-****z789`），未配置时无此字段 |
 | `model` | string | 模型名，1-100 字符（如 `gpt-4o-mini` / `claude-sonnet-5`） |
