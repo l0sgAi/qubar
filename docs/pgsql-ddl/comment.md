@@ -104,6 +104,7 @@ COMMENT ON COLUMN domains.comment_like.post_id IS '冗余帖子ID(UUID)，便于
 -- --- 索引优化 ---
 
 -- 1. 【核心】保证每个用户对每个评论只有一条点赞/取消点赞的记录
+-- ⚠️ 应用依赖：like 消费者 INSERT … ON CONFLICT (user_id, comment_id)（#46），缺失则评论点赞无法落库，勿删 / 勿改为部分索引
 CREATE UNIQUE INDEX uk_comment_like_user_comment ON domains.comment_like(user_id, comment_id);
 
 -- 2. 【核心】查询"我点赞过的评论"

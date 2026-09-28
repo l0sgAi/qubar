@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -8,106 +9,101 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// collectToggleScript 帖子收藏原子切换脚本。
+// collectSetScript 帖子收藏"设值"原子脚本（与 likeSetScript 同构，独立脚本不动点赞热代码）。
 //
-// 与 likeToggleScript 逻辑完全一致（方案 B：独立脚本，不动点赞热代码），
-// 仅 HINCRBY 的 Hash 字段从 'like_count' 改为 'collect_count'。
-// 复用同一份 stats Hash（post:stats:{post_id}），收藏数与点赞数同存于该 Hash。
-const collectToggleScript = `
+// 调用方传入期望状态 want（1=收藏 / 0=取消）；仅在状态真正变化时修改 ZSET 与
+// post:stats:{post_id} 的 collect_count，已处于期望态则 no-op 返回 0。
+//
+// 返回：1=新收藏（+1）/ -1=取消（-1）/ 0=未变化。
+const collectSetScript = `
 local statsKey = KEYS[1]
 local zsetKey = KEYS[2]
 local targetId = ARGV[1]
 local now = tonumber(ARGV[2])
 local maxSize = tonumber(ARGV[3])
 local ttl = tonumber(ARGV[4])
+local want = tonumber(ARGV[5])
 
--- Check if the target is already collected (exists in ZSET)
 local score = redis.call('ZSCORE', zsetKey, targetId)
+local result = 0
 
-if score then
-    -- Uncollect: remove from ZSET, decrement count
-    redis.call('ZREM', zsetKey, targetId)
-    local newCount = redis.call('HINCRBY', statsKey, 'collect_count', -1)
-    if tonumber(newCount) < 0 then
-        redis.call('HSET', statsKey, 'collect_count', 0)
+if want == 1 then
+    if not score then
+        redis.call('ZADD', zsetKey, now, targetId)
+        redis.call('HINCRBY', statsKey, 'collect_count', 1)
+        -- Evict oldest entries if ZSET exceeds max size
+        local zsetSize = tonumber(redis.call('ZCARD', zsetKey))
+        if zsetSize > maxSize then
+            redis.call('ZREMRANGEBYRANK', zsetKey, 0, zsetSize - maxSize - 1)
+        end
+        result = 1
     end
-    -- Renew TTL on both keys
-    redis.call('EXPIRE', statsKey, ttl)
-    redis.call('EXPIRE', zsetKey, ttl)
-    return -1
 else
-    -- Collect: add to ZSET with current timestamp, increment count
-    redis.call('ZADD', zsetKey, now, targetId)
-    redis.call('HINCRBY', statsKey, 'collect_count', 1)
-    -- Evict oldest entries if ZSET exceeds max size
-    local zsetSize = redis.call('ZCARD', zsetKey)
-    if tonumber(zsetSize) > maxSize then
-        local removeCount = tonumber(zsetSize) - maxSize
-        redis.call('ZREMRANGEBYRANK', zsetKey, 0, removeCount - 1)
+    if score then
+        redis.call('ZREM', zsetKey, targetId)
+        local newCount = redis.call('HINCRBY', statsKey, 'collect_count', -1)
+        if tonumber(newCount) < 0 then
+            redis.call('HSET', statsKey, 'collect_count', 0)
+        end
+        result = -1
     end
-    -- Renew TTL on both keys
-    redis.call('EXPIRE', statsKey, ttl)
-    redis.call('EXPIRE', zsetKey, ttl)
-    return 1
 end
+
+-- Renew TTL on both keys
+redis.call('EXPIRE', statsKey, ttl)
+redis.call('EXPIRE', zsetKey, ttl)
+return result
 `
 
-var collectToggleSHA string
+// collectZsetMaxSize 用户收藏 ZSET 上限（超出按时间淘汰最旧成员）。
+const collectZsetMaxSize = 2000
 
-// ToggleCollectResult 收藏切换操作结果（与 ToggleLikeResult 值一致）。
-type ToggleCollectResult int
+var collectSetSHA string
+
+// CollectSetResult 收藏设值结果。
+type CollectSetResult int
 
 const (
-	// ToggleCollectCollected 收藏成功（+1）。
-	ToggleCollectCollected ToggleCollectResult = 1
-	// ToggleCollectUncollected 取消收藏（-1）。
-	ToggleCollectUncollected ToggleCollectResult = -1
+	// CollectSetCollected 新收藏（+1）。
+	CollectSetCollected CollectSetResult = 1
+	// CollectSetUncollected 取消收藏（-1）。
+	CollectSetUncollected CollectSetResult = -1
+	// CollectSetUnchanged 已处于期望状态，未变化。
+	CollectSetUnchanged CollectSetResult = 0
 )
 
 // InitCollectLuaScripts 预加载收藏 Lua 脚本到 Redis（启动时调用）。
 func InitCollectLuaScripts() error {
 	var err error
-	collectToggleSHA, err = Client.ScriptLoad(ctx, collectToggleScript).Result()
+	collectSetSHA, err = Client.ScriptLoad(ctx, collectSetScript).Result()
 	if err != nil {
-		return fmt.Errorf("failed to load collect toggle script: %w", err)
+		return fmt.Errorf("failed to load collect set script: %w", err)
 	}
 	return nil
 }
 
-// TogglePostCollect 原子切换帖子收藏状态。
-func TogglePostCollect(userID, postID uuid.UUID) (ToggleCollectResult, error) {
-	statsKey := GetPostStatsKey(postID)
-	zsetKey := GetUserPostCollectListKey(userID)
-	return executeCollectToggle(statsKey, zsetKey, postID)
-}
-
-func executeCollectToggle(statsKey, zsetKey string, targetID uuid.UUID) (ToggleCollectResult, error) {
-	now := time.Now().UnixMilli()
-	maxZsetSize := int64(2000)
-	ttlSeconds := int64(postStatsTTL.Seconds())
-
-	// targetId 以 UUID 字符串形式作为 ARGV 传入(Lua 中 ZADD/ZSCORE 的 member)
-	result, err := Client.EvalSha(ctx, collectToggleSHA,
-		[]string{statsKey, zsetKey},
-		targetID.String(), now, maxZsetSize, ttlSeconds,
-	).Int64()
-
-	if err != nil {
-		// If script SHA is missing (Redis restarted), reload and retry
-		collectToggleSHA, err = Client.ScriptLoad(ctx, collectToggleScript).Result()
-		if err != nil {
-			return 0, fmt.Errorf("failed to reload collect toggle script: %w", err)
-		}
-		result, err = Client.EvalSha(ctx, collectToggleSHA,
-			[]string{statsKey, zsetKey},
-			targetID.String(), now, maxZsetSize, ttlSeconds,
-		).Int64()
-		if err != nil {
-			return 0, fmt.Errorf("failed to execute collect toggle: %w", err)
-		}
+// SetPostCollect 原子设置帖子收藏状态（collected=true 收藏 / false 取消）。
+func SetPostCollect(ctx context.Context, userID, postID uuid.UUID, collected bool) (CollectSetResult, error) {
+	want := 0
+	if collected {
+		want = 1
 	}
+	keys := []string{GetPostStatsKey(postID), GetUserPostCollectListKey(userID)}
+	// targetId 以 UUID 字符串形式作为 ARGV 传入(Lua 中 ZADD/ZSCORE 的 member)
+	args := []interface{}{postID.String(), time.Now().UnixMilli(), collectZsetMaxSize, int64(postStatsTTL.Seconds()), want}
 
-	return ToggleCollectResult(result), nil
+	result, err := Client.EvalSha(ctx, collectSetSHA, keys, args...).Int64()
+	if err != nil && redis.HasErrorPrefix(err, "NOSCRIPT") {
+		// Redis 重启/脚本缓存被清：重新加载后重试一次
+		if collectSetSHA, err = Client.ScriptLoad(ctx, collectSetScript).Result(); err != nil {
+			return 0, fmt.Errorf("failed to reload collect set script: %w", err)
+		}
+		result, err = Client.EvalSha(ctx, collectSetSHA, keys, args...).Int64()
+	}
+	if err != nil {
+		return 0, fmt.Errorf("failed to execute collect set: %w", err)
+	}
+	return CollectSetResult(result), nil
 }
 
 // BatchCheckPostCollected 批量检查用户是否收藏了多个帖子

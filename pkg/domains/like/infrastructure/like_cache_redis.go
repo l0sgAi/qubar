@@ -12,7 +12,7 @@ import (
 
 // postLikeCacheRedis 基于 Redis 的 PostLikeCache 实现。
 //
-// 复用 pkg/server/storage/redis 中已有的 Lua 原子切换脚本和 stats 操作。
+// 复用 pkg/server/storage/redis 中的 Lua 原子设值脚本和 stats 操作。
 type postLikeCacheRedis struct{}
 
 // NewPostLikeCache 构造 PostLikeCache。
@@ -20,8 +20,8 @@ func NewPostLikeCache() domain.PostLikeCache {
 	return &postLikeCacheRedis{}
 }
 
-func (c *postLikeCacheRedis) Toggle(ctx context.Context, userID, postID uuid.UUID) (domain.ToggleResult, error) {
-	r, err := redispkg.TogglePostLike(userID, postID)
+func (c *postLikeCacheRedis) Set(ctx context.Context, userID, postID uuid.UUID, liked bool) (domain.ToggleResult, error) {
+	r, err := redispkg.SetPostLike(ctx, userID, postID, liked)
 	if err != nil {
 		return 0, err
 	}
@@ -40,8 +40,8 @@ func NewCommentLikeCache() domain.CommentLikeCache {
 	return &commentLikeCacheRedis{}
 }
 
-func (c *commentLikeCacheRedis) Toggle(ctx context.Context, userID, commentID uuid.UUID) (domain.ToggleResult, error) {
-	r, err := redispkg.ToggleCommentLike(userID, commentID)
+func (c *commentLikeCacheRedis) Set(ctx context.Context, userID, commentID uuid.UUID, liked bool) (domain.ToggleResult, error) {
+	r, err := redispkg.SetCommentLike(ctx, userID, commentID, liked)
 	if err != nil {
 		return 0, err
 	}

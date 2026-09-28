@@ -85,7 +85,7 @@ type SeedReader interface {
 	CFSimilar(ctx context.Context, seedPostIDs []uuid.UUID, topNPerSeed int) (map[uuid.UUID]float64, error)
 }
 
-// InteractionChecker 批量回填 is_liked/is_collected（基于 user:like/collect ZSET）。
+// InteractionChecker 批量回填 is_liked/is_collected（ZSET 缓存优先，miss 回源 DB；由 composition 桥接 post）。
 type InteractionChecker interface {
 	BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (liked, collected map[uuid.UUID]bool, err error)
 }

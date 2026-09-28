@@ -9,106 +9,111 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const likeToggleScript = `
+// likeSetScript 点赞"设值"原子脚本（设计见 docs/design/like-pipeline-fix-design.md §三 F1.1）。
+//
+// 与旧 toggle 脚本的区别：由调用方传入期望状态 want（1=赞 / 0=取消），脚本只在状态真正变化时
+// 修改 ZSET 与 like_count；已处于期望态则 no-op 返回 0。方向不再由有损的 ZSET 推断，
+// 调用方需先解析真实状态（ZSET miss 时回源 DB 并回填）。
+//
+// 返回：1=新赞（+1）/ -1=取消（-1）/ 0=未变化。
+const likeSetScript = `
 local statsKey = KEYS[1]
 local zsetKey = KEYS[2]
 local targetId = ARGV[1]
 local now = tonumber(ARGV[2])
 local maxSize = tonumber(ARGV[3])
 local ttl = tonumber(ARGV[4])
+local want = tonumber(ARGV[5])
 
--- Check if the target is already liked (exists in ZSET)
 local score = redis.call('ZSCORE', zsetKey, targetId)
+local result = 0
 
-if score then
-    -- Unlike: remove from ZSET, decrement count
-    redis.call('ZREM', zsetKey, targetId)
-    local newCount = redis.call('HINCRBY', statsKey, 'like_count', -1)
-    if tonumber(newCount) < 0 then
-        redis.call('HSET', statsKey, 'like_count', 0)
+if want == 1 then
+    if not score then
+        redis.call('ZADD', zsetKey, now, targetId)
+        redis.call('HINCRBY', statsKey, 'like_count', 1)
+        -- Evict oldest entries if ZSET exceeds max size
+        local zsetSize = tonumber(redis.call('ZCARD', zsetKey))
+        if zsetSize > maxSize then
+            redis.call('ZREMRANGEBYRANK', zsetKey, 0, zsetSize - maxSize - 1)
+        end
+        result = 1
     end
-    -- Renew TTL on both keys
-    redis.call('EXPIRE', statsKey, ttl)
-    redis.call('EXPIRE', zsetKey, ttl)
-    return -1
 else
-    -- Like: add to ZSET with current timestamp, increment count
-    redis.call('ZADD', zsetKey, now, targetId)
-    redis.call('HINCRBY', statsKey, 'like_count', 1)
-    -- Evict oldest entries if ZSET exceeds max size
-    local zsetSize = redis.call('ZCARD', zsetKey)
-    if tonumber(zsetSize) > maxSize then
-        local removeCount = tonumber(zsetSize) - maxSize
-        redis.call('ZREMRANGEBYRANK', zsetKey, 0, removeCount - 1)
+    if score then
+        redis.call('ZREM', zsetKey, targetId)
+        local newCount = redis.call('HINCRBY', statsKey, 'like_count', -1)
+        if tonumber(newCount) < 0 then
+            redis.call('HSET', statsKey, 'like_count', 0)
+        end
+        result = -1
     end
-    -- Renew TTL on both keys
-    redis.call('EXPIRE', statsKey, ttl)
-    redis.call('EXPIRE', zsetKey, ttl)
-    return 1
 end
+
+-- Renew TTL on both keys
+redis.call('EXPIRE', statsKey, ttl)
+redis.call('EXPIRE', zsetKey, ttl)
+return result
 `
 
-var likeToggleSHA string
+// likeZsetMaxSize 用户点赞 ZSET 上限（超出按时间淘汰最旧成员）。
+const likeZsetMaxSize = 2000
 
-// ToggleLikeResult 点赞切换操作结果
-type ToggleLikeResult int
+var likeSetSHA string
+
+// LikeSetResult 点赞设值结果。
+type LikeSetResult int
 
 const (
-	ToggleLikeLiked   ToggleLikeResult = 1
-	ToggleLikeUnliked ToggleLikeResult = -1
+	// LikeSetLiked 新赞（+1）。
+	LikeSetLiked LikeSetResult = 1
+	// LikeSetUnliked 取消赞（-1）。
+	LikeSetUnliked LikeSetResult = -1
+	// LikeSetUnchanged 已处于期望状态，未变化。
+	LikeSetUnchanged LikeSetResult = 0
 )
 
 // InitLikeLuaScripts 预加载 Lua 脚本到 Redis（启动时调用）
 func InitLikeLuaScripts() error {
 	var err error
-	likeToggleSHA, err = Client.ScriptLoad(ctx, likeToggleScript).Result()
+	likeSetSHA, err = Client.ScriptLoad(ctx, likeSetScript).Result()
 	if err != nil {
-		return fmt.Errorf("failed to load like toggle script: %w", err)
+		return fmt.Errorf("failed to load like set script: %w", err)
 	}
 	return nil
 }
 
-// ToggleCommentLike 原子切换评论点赞状态
-func ToggleCommentLike(userID, commentID uuid.UUID) (ToggleLikeResult, error) {
-	statsKey := GetCommentStatsKey(commentID)
-	zsetKey := GetUserCommentLikeListKey(userID)
-	return executeLikeToggle(statsKey, zsetKey, commentID)
+// SetCommentLike 原子设置评论点赞状态（liked=true 赞 / false 取消）。
+func SetCommentLike(ctx context.Context, userID, commentID uuid.UUID, liked bool) (LikeSetResult, error) {
+	return executeLikeSet(ctx, GetCommentStatsKey(commentID), GetUserCommentLikeListKey(userID), commentID, liked)
 }
 
-// TogglePostLike 原子切换帖子点赞状态
-func TogglePostLike(userID, postID uuid.UUID) (ToggleLikeResult, error) {
-	statsKey := GetPostStatsKey(postID)
-	zsetKey := GetUserPostLikeListKey(userID)
-	return executeLikeToggle(statsKey, zsetKey, postID)
+// SetPostLike 原子设置帖子点赞状态（liked=true 赞 / false 取消）。
+func SetPostLike(ctx context.Context, userID, postID uuid.UUID, liked bool) (LikeSetResult, error) {
+	return executeLikeSet(ctx, GetPostStatsKey(postID), GetUserPostLikeListKey(userID), postID, liked)
 }
 
-func executeLikeToggle(statsKey, zsetKey string, targetID uuid.UUID) (ToggleLikeResult, error) {
-	now := time.Now().UnixMilli()
-	maxZsetSize := int64(2000)
-	ttlSeconds := int64(postStatsTTL.Seconds())
-
-	// targetId 以 UUID 字符串形式作为 ARGV 传入(Lua 中 ZADD/ZSCORE 的 member)
-	result, err := Client.EvalSha(ctx, likeToggleSHA,
-		[]string{statsKey, zsetKey},
-		targetID.String(), now, maxZsetSize, ttlSeconds,
-	).Int64()
-
-	if err != nil {
-		// If script SHA is missing (Redis restarted), reload and retry
-		likeToggleSHA, err = Client.ScriptLoad(ctx, likeToggleScript).Result()
-		if err != nil {
-			return 0, fmt.Errorf("failed to reload like toggle script: %w", err)
-		}
-		result, err = Client.EvalSha(ctx, likeToggleSHA,
-			[]string{statsKey, zsetKey},
-			targetID.String(), now, maxZsetSize, ttlSeconds,
-		).Int64()
-		if err != nil {
-			return 0, fmt.Errorf("failed to execute like toggle: %w", err)
-		}
+func executeLikeSet(ctx context.Context, statsKey, zsetKey string, targetID uuid.UUID, liked bool) (LikeSetResult, error) {
+	want := 0
+	if liked {
+		want = 1
 	}
+	keys := []string{statsKey, zsetKey}
+	// targetId 以 UUID 字符串形式作为 ARGV 传入(Lua 中 ZADD/ZSCORE 的 member)
+	args := []interface{}{targetID.String(), time.Now().UnixMilli(), likeZsetMaxSize, int64(postStatsTTL.Seconds()), want}
 
-	return ToggleLikeResult(result), nil
+	result, err := Client.EvalSha(ctx, likeSetSHA, keys, args...).Int64()
+	if err != nil && redis.HasErrorPrefix(err, "NOSCRIPT") {
+		// Redis 重启/脚本缓存被清：重新加载后重试一次
+		if likeSetSHA, err = Client.ScriptLoad(ctx, likeSetScript).Result(); err != nil {
+			return 0, fmt.Errorf("failed to reload like set script: %w", err)
+		}
+		result, err = Client.EvalSha(ctx, likeSetSHA, keys, args...).Int64()
+	}
+	if err != nil {
+		return 0, fmt.Errorf("failed to execute like set: %w", err)
+	}
+	return LikeSetResult(result), nil
 }
 
 // BatchCheckCommentLiked 批量检查用户是否点赞了多条评论

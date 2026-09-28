@@ -70,22 +70,14 @@ func StartPostInteractionConsumer() error {
 
 	go func() {
 		defer r.Close()
+		backoff := &readBackoff{}
 		for {
 			msg, err := r.ReadMessage(context.Background())
 			if err != nil {
-				errStr := err.Error()
-				if containsIgnoreCase(errStr, "no data") ||
-					containsIgnoreCase(errStr, "multiple Read calls return no data") ||
-					containsIgnoreCase(errStr, "context deadline exceeded") ||
-					containsIgnoreCase(errStr, "timeout") {
-					logger.Log.Debug("No messages in post interaction queue, waiting...")
-					time.Sleep(30 * time.Minute)
-					continue
-				}
-				logger.Log.Error("Failed to read post interaction message: " + errStr)
-				time.Sleep(5 * time.Second)
+				waitAfterReadError(context.Background(), backoff, "post interaction", err)
 				continue
 			}
+			backoff.Reset()
 
 			var im PostInteractionMessage
 			if err := json.Unmarshal(msg.Value, &im); err != nil {

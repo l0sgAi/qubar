@@ -106,6 +106,8 @@ user/circle 基础信息走 `SetJSONCompressed`/`GetJSONCompressed`（zstd，`re
 1. 写事件（赞/藏/评论/评论赞）service 先做原子的主操作，再 `redis.ApplyHotDelta(postID,dim,dir)`。
 2. 发 Redpanda 事件（如 `post_statistics`/`like_events`）。
 3. aggregator 内存 `map[id]Δ` + ticker/数量双触发 flush → 批量 `jsonb_to_recordset` UPDATE 落库。
+   **例外：点赞**按 (type,user,target) 保留**末态**，单条 CTE 做行迁移（`INSERT … ON CONFLICT … WHERE deleted=1` / `UPDATE … WHERE deleted=0`
+   `RETURNING`），`like_count` 由迁移行数推导 → 重复投递幂等（`like_consumer.go`）。收藏流水同步落库，`SetCollected` 返回 `changed`，只在真迁移时发事件。
 4. CDC 把 PG 同步进 ES。
 
 **评论数是例外**：同步落库（`post/application/service.go:967`），不走 MQ。

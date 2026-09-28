@@ -138,9 +138,9 @@ var Config *AppConfig
 | `post:hotcap:{id}` | Hash | 43min | 热度上限子计数(comment/comment_like) |
 | `post:viewdedup:{pid}:{uid}` | string | 5min | 浏览去重 |
 | `comment:stats:{id}` | Hash | 43min | like_count |
-| `user:like:posts:{uid}` | ZSET | 43min | 赞过的帖(score=访问ms,cap 500) |
-| `user:like:comments:{uid}` | ZSET | 43min | 赞过的评论 |
-| `user:collect:posts:{uid}` | ZSET | 43min | 收藏的帖 |
+| `user:like:posts:{uid}` | ZSET | 43min | 赞过的帖(score=访问ms,cap 2000；miss≠未赞，须回源 DB) |
+| `user:like:comments:{uid}` | ZSET | 43min | 赞过的评论(cap 2000) |
+| `user:collect:posts:{uid}` | ZSET | 43min | 收藏的帖(cap 2000) |
 | `user:view:posts:{uid}` | ZSET | 43min | 浏览历史 |
 | `cf:item:{postID}` | ZSET | 48h(cfg) | item-CF 相似帖(score=相似度) |
 | `feed:recommend:{uid}` | LIST | 30min(cfg) | 推荐候选池 |
@@ -155,8 +155,9 @@ var Config *AppConfig
 ### 5.4 Lua 脚本（原子多键操作）
 启动时 `Client.ScriptLoad`，缓存 SHA，`EvalSha` + NOSCRIPT 重试重载：
 - `hot_lua.go` `applyHotDeltaScript`（`:33`）：原子 weight×dir×clamp 热度 Δ，对 `post:hotcap`。
-- `like_lua.go` `likeToggleScript`：原子 toggle（ZSET 成员检查 + HINCRBY + LRU 淘汰）。
-- `collect_lua.go` / `view_lua.go` / `history_lua.go`：同构原子 toggle。
+- `like_lua.go` `likeSetScript` / `collect_lua.go` `collectSetScript`：原子**设值**（传期望态 want；已是期望态返回 0 不改计数；否则 ZSET 增删 + HINCRBY + 超 cap 淘汰最旧）。
+  调用方须先解析真实状态（ZSET miss 回源 DB 并回填），见 `like/application/service.go`。仅 `NOSCRIPT` 时重载脚本。
+- `view_lua.go` / `history_lua.go`：浏览/历史原子脚本。
 对应 `Init{Hot,Like,Collect,View,History}LuaScripts` 全在 bootstrap 调。
 
 ### 5.5 计数 helper（`cache.go`）
@@ -198,7 +199,9 @@ var Config *AppConfig
 ### 7.1 producers（`producer.go`）
 7 个包级 writer：circle stats / post stats / like / collect / history / post hot / post interaction。
 共享配置：`AllowAutoTopicCreation: true`、`LeastBytes` balancer、`Snappy`、`Async:true`、`RequiredAcks:RequireOne`、
-`MaxAttempts:5`。message key 用实体 ID（保分区序）。每个 producer `InitXxxProducer()` + `PublishXxx` + `CloseXxxProducer`。
+`MaxAttempts:5`。⚠️ `LeastBytes` **忽略 message key**，不保证同 key 有序。
+**例外（like / collect）**：`Async:false` 同步 ack（`syncPublishTimeout` 3s），投递失败回滚缓存/流水并返回 503；
+like writer 用 `kafka.Hash{}`（key=`user:target`，消费者"末态为准"依赖同分区有序）。每个 producer `InitXxxProducer()` + `PublishXxx` + `CloseXxxProducer`。
 只有 `InitRedpandaProducer`（circle）真拨号 + `conn.Controller()` 验证连通（gate consumer），其余返回 nil（best-effort）。
 
 ### 7.2 topics / groups（`constants.go` + config.yaml）
@@ -209,7 +212,10 @@ var Config *AppConfig
 `StartXxxConsumer()`：`kafka.Dialer{Timeout:10s, DualStack:true, Resolver:nil}`（Resolver nil 故意——避免 advertised-address 缓存）；
 `kafka.NewReader{Brokers,Topic,GroupID,MinBytes:10KB,MaxBytes:10MB,CommitInterval:1s}`；
 创建 `XxxAggregator`（`time.Ticker` @ FlushInterval）两 goroutine：`aggregator.run()`（ticker flush）+ 读循环。
-"No data"/timeout → DEBUG + 30min sleep；真错 → ERROR + 5s 重试。
+读错误 → `waitAfterReadError`（`reader.go`，1s 起倍增封顶 30s，成功读取后 `Reset`）。读阻塞时无数据不会返回错误，出错即真实故障。
+⚠️ `ReadMessage`+`CommitInterval` 是"读即提交"：flush 前崩溃会丢缓冲事件。
+**新 consumer 优先仿 `like_consumer.go`**：`FetchMessage` + 落库成功后 `CommitMessages`、失败合并回缓冲重试、
+可取消 reader ctx + `StopXxxGlobal()` 关停排干（在 `cmd/apps/server.go` 关停序列调用）。
 `StartXxxConsumerWithRetry()` 线性退避重试 10 次。
 
 ### 7.4 aggregator → 批量落库

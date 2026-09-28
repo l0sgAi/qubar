@@ -32,6 +32,7 @@ COMMENT ON COLUMN domains.post_like.deleted IS '点赞状态: 0=有效点赞, 1=
 -- --- 索引优化---
 
 -- 1. 【核心】保证每个用户对每个帖子只有一条点赞/取消点赞的记录
+-- ⚠️ 应用依赖：like 消费者 INSERT … ON CONFLICT (user_id, post_id)（#46），缺失则点赞无法落库，勿删 / 勿改为部分索引
 CREATE UNIQUE INDEX uk_post_like_user_post ON domains.post_like(user_id, post_id);
 
 -- 2. 【核心】查询"我点赞过的帖子"
@@ -80,6 +81,7 @@ COMMENT ON COLUMN domains.post_collect.update_time IS '更新时间(收藏/取�
 -- --- 索引优化 ---
 
 -- 1. 【核心】保证每个用户对每个帖子只有一条收藏/取消收藏的记录
+-- ⚠️ 应用依赖：collect SetCollected 的 INSERT … ON CONFLICT (user_id, post_id)（#46），勿删 / 勿改为部分索引
 CREATE UNIQUE INDEX uk_post_collect_user_post ON domains.post_collect(user_id, post_id);
 
 -- 2. 【核心】查询"我收藏过的帖子"

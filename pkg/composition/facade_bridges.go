@@ -252,7 +252,7 @@ func (l *commentPostLookup) RestoreStatsAndIncrCommentCount(ctx context.Context,
 	return l.delegate.RestoreStatsAndIncrCommentCount(ctx, postID)
 }
 
-// ===== post → like（帖子存在性 + 统计缓存恢复）=====
+// ===== post → like（帖子存在性 + 统计缓存恢复 + 真实点赞状态）=====
 
 // likePostTarget 把 post.application.PostService 适配为 like.application.PostTarget。
 type likePostTarget struct {
@@ -271,7 +271,11 @@ func (t *likePostTarget) RestoreStats(ctx context.Context, postID uuid.UUID) err
 	return t.delegate.RestoreStats(ctx, postID)
 }
 
-// ===== comment → like（评论存在性 + 所属帖子ID + 统计缓存恢复）=====
+func (t *likePostTarget) IsLiked(ctx context.Context, userID, postID uuid.UUID) (bool, error) {
+	return t.delegate.IsLikedByUser(ctx, userID, postID)
+}
+
+// ===== comment → like（评论存在性 + 所属帖子ID + 统计缓存恢复 + 真实点赞状态）=====
 
 // likeCommentTarget 把 comment.application.CommentService 适配为 like.application.CommentTarget。
 type likeCommentTarget struct {
@@ -291,6 +295,10 @@ func (t *likeCommentTarget) ExistsWithPostID(ctx context.Context, commentID uuid
 
 func (t *likeCommentTarget) RestoreStats(ctx context.Context, commentID uuid.UUID) error {
 	return t.delegate.RestoreCommentStats(ctx, commentID)
+}
+
+func (t *likeCommentTarget) IsLiked(ctx context.Context, userID, commentID uuid.UUID) (bool, error) {
+	return t.delegate.IsLikedByUser(ctx, userID, commentID)
 }
 
 // ===== post → collect（帖子存在性 + 统计缓存恢复 + 列表组装）=====
@@ -433,25 +441,6 @@ func (h *trendingPostHydrator) Hydrate(ctx context.Context, postIDs []uuid.UUID)
 	return out, nil
 }
 
-// trendingInteractionChecker 把 redispkg 批量查询适配为 trending.domain.InteractionChecker（无状态）。
-type trendingInteractionChecker struct{}
-
-func (c *trendingInteractionChecker) BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (liked, collected map[uuid.UUID]bool, err error) {
-	_ = ctx
-	if len(postIDs) == 0 {
-		return make(map[uuid.UUID]bool), make(map[uuid.UUID]bool), nil
-	}
-	liked, _, err = redispkg.BatchCheckPostLiked(userID, postIDs)
-	if err != nil {
-		return nil, nil, err
-	}
-	collected, _, err = redispkg.BatchCheckPostCollected(userID, postIDs)
-	if err != nil {
-		return nil, nil, err
-	}
-	return liked, collected, nil
-}
-
 // trendingCircleLookup 把 circle.domain.CircleRepository 适配为 trending.domain.CircleLookup。
 // 返回完整 Circle 实体（含 member_count/post_count/hot），由 trending service 组装 TrendingCircleItem。
 type trendingCircleLookup struct {
@@ -482,7 +471,7 @@ func (l *trendingUserLookup) GetBriefs(ctx context.Context, userIDs []string) (m
 // 编译期保证桥接器满足 trending.domain 端口（与项目其它大适配器的 guard 惯例一致）。
 var (
 	_ trendingdomain.PostHydrator       = (*trendingPostHydrator)(nil)
-	_ trendingdomain.InteractionChecker = (*trendingInteractionChecker)(nil)
+	_ trendingdomain.InteractionChecker = (*postInteractionChecker)(nil)
 	_ trendingdomain.CircleLookup       = (*trendingCircleLookup)(nil)
 	_ trendingdomain.UserLookup         = (*trendingUserLookup)(nil)
 )
@@ -519,26 +508,6 @@ func (h *discoverPostHydrator) Hydrate(ctx context.Context, postIDs []uuid.UUID)
 		})
 	}
 	return out, nil
-}
-
-// discoverInteractionChecker 把 redispkg 批量查询适配为 discover.domain.InteractionChecker（无状态）。
-// 与 trendingInteractionChecker 同款实现。
-type discoverInteractionChecker struct{}
-
-func (c *discoverInteractionChecker) BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (liked, collected map[uuid.UUID]bool, err error) {
-	_ = ctx
-	if len(postIDs) == 0 {
-		return make(map[uuid.UUID]bool), make(map[uuid.UUID]bool), nil
-	}
-	liked, _, err = redispkg.BatchCheckPostLiked(userID, postIDs)
-	if err != nil {
-		return nil, nil, err
-	}
-	collected, _, err = redispkg.BatchCheckPostCollected(userID, postIDs)
-	if err != nil {
-		return nil, nil, err
-	}
-	return liked, collected, nil
 }
 
 // discoverCircleLookup 把 circle.domain.CircleRepository 适配为 discover.domain.CircleLookup。
@@ -610,8 +579,25 @@ func (l *discoverJoinedCircleLookup) ListJoinedCircleIDs(ctx context.Context, us
 // 编译期保证桥接器满足 discover.domain 端口。
 var (
 	_ discoverdomain.PostHydrator       = (*discoverPostHydrator)(nil)
-	_ discoverdomain.InteractionChecker = (*discoverInteractionChecker)(nil)
+	_ discoverdomain.InteractionChecker = (*postInteractionChecker)(nil)
 	_ discoverdomain.CircleLookup       = (*discoverCircleLookup)(nil)
 	_ discoverdomain.SeedReader         = (*discoverSeedReader)(nil)
 	_ discoverdomain.JoinedCircleLookup = (*discoverJoinedCircleLookup)(nil)
 )
+
+// ===== post → recommend / trending / discover（信息流 is_liked / is_collected 回显）=====
+
+// postInteractionChecker 把 post.application.PostService.BatchCheckInteractions 适配为
+// recommend / trending / discover 三个 InteractionChecker 端口（签名一致，共用一个桥接器）。
+//
+// 旧实现各自直接调 redispkg ZSET，miss 一律当 false：ZSET 有 TTL 与容量上限，
+// 已赞帖被显示为未赞会诱发重复点赞（#46）。现统一走 post 的"缓存 → miss 回源 DB → 回填"。
+type postInteractionChecker struct {
+	delegate postapp.PostService
+}
+
+func (c *postInteractionChecker) BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (liked, collected map[uuid.UUID]bool, err error) {
+	return c.delegate.BatchCheckInteractions(ctx, userID, postIDs)
+}
+
+var _ recommenddomain.InteractionChecker = (*postInteractionChecker)(nil)

@@ -12,7 +12,7 @@ import (
 
 // postCollectCacheRedis 基于 Redis 的 PostCollectCache 实现。
 //
-// 复用 pkg/server/storage/redis 中收藏专用的 Lua 原子切换脚本和 stats 操作。
+// 复用 pkg/server/storage/redis 中收藏专用的 Lua 原子设值脚本和 stats 操作。
 type postCollectCacheRedis struct{}
 
 // NewPostCollectCache 构造 PostCollectCache。
@@ -20,8 +20,8 @@ func NewPostCollectCache() domain.PostCollectCache {
 	return &postCollectCacheRedis{}
 }
 
-func (c *postCollectCacheRedis) Toggle(ctx context.Context, userID, postID uuid.UUID) (domain.ToggleResult, error) {
-	r, err := redispkg.TogglePostCollect(userID, postID)
+func (c *postCollectCacheRedis) Set(ctx context.Context, userID, postID uuid.UUID, collected bool) (domain.ToggleResult, error) {
+	r, err := redispkg.SetPostCollect(ctx, userID, postID, collected)
 	if err != nil {
 		return 0, err
 	}

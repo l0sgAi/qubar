@@ -1,10 +1,10 @@
 // Package application 提供 like 领域的应用服务层。
 //
 // 职责：
-//   - 点赞/取消点赞（幂等的 Toggle 操作，Redis Lua 原子切换）
+//   - 点赞/取消点赞（先解析真实状态，再 Redis Lua 原子设值；已处于期望态则 no-op）
 //   - 跨 post / comment 两种目标类型
 //   - 点赞前恢复统计缓存（避免 Lua 脚本读到不存在的 stats Hash）
-//   - 异步发布点赞事件（Redpanda → 消费者批量持久化到 DB）
+//   - 状态真正变化时才异步发布点赞事件（Redpanda → 消费者批量持久化到 DB）
 package application
 
 import (
@@ -27,6 +27,9 @@ type PostTarget interface {
 	// RestoreStats 恢复帖子统计缓存（如果不存在）。
 	// 用于点赞前确保 Redis stats Hash 存在，避免 Lua 脚本读到空 stats。
 	RestoreStats(ctx context.Context, postID uuid.UUID) error
+	// IsLiked 用户当前是否已赞该帖（缓存优先，miss 回源 DB 并回填缓存）。
+	// 用于点赞前解析真实状态：用户点赞 ZSET 有 TTL 和容量上限，miss 不等于未赞。
+	IsLiked(ctx context.Context, userID, postID uuid.UUID) (bool, error)
 }
 
 // CommentTarget like 领域需要的评论查询能力。
@@ -36,6 +39,8 @@ type CommentTarget interface {
 	ExistsWithPostID(ctx context.Context, commentID uuid.UUID) (postID *uuid.UUID, exists bool, err error)
 	// RestoreStats 恢复评论统计缓存（如果不存在）。
 	RestoreStats(ctx context.Context, commentID uuid.UUID) error
+	// IsLiked 用户当前是否已赞该评论（缓存优先，miss 回源 DB 并回填缓存）。
+	IsLiked(ctx context.Context, userID, commentID uuid.UUID) (bool, error)
 }
 
 // ===== DTO =====
@@ -51,13 +56,14 @@ type ToggleResult struct {
 type ToggleInput struct {
 	Type     string    // "comment" 或 "post"
 	TargetID uuid.UUID // 评论ID 或 帖子ID
+	Action   string    // 可选："like" / "unlike" 显式期望状态；空 = 切换
 }
 
 // ===== Service 接口 =====
 
 // LikeService 是 like 领域的应用服务接口。
 type LikeService interface {
-	// Toggle 点赞/取消点赞（幂等操作）。
+	// Toggle 点赞/取消点赞：期望状态 = input.Action（显式）或真实当前状态取反（空），原子设值。
 	Toggle(ctx context.Context, userID uuid.UUID, input ToggleInput) (*ToggleResult, error)
 
 	// SetPostTarget 注入帖子查询端口。
@@ -67,10 +73,10 @@ type LikeService interface {
 }
 
 type likeServiceImpl struct {
-	postCache    domain.PostLikeCache
-	commentCache domain.CommentLikeCache
-	publisher    domain.LikeEventPublisher
-	postTarget   PostTarget
+	postCache     domain.PostLikeCache
+	commentCache  domain.CommentLikeCache
+	publisher     domain.LikeEventPublisher
+	postTarget    PostTarget
 	commentTarget CommentTarget
 }
 
@@ -93,31 +99,36 @@ func NewLikeService(
 func (s *likeServiceImpl) SetPostTarget(t PostTarget)       { s.postTarget = t }
 func (s *likeServiceImpl) SetCommentTarget(t CommentTarget) { s.commentTarget = t }
 
-// Toggle 点赞/取消点赞（幂等操作）。
+// Toggle 点赞/取消点赞。
 //
-// 与旧 controller.ToggleLike 行为一致：
-//  1. 根据 type 分支：comment 需查评论存在性 + 拿 postID + 恢复评论统计缓存；
-//     post 需查帖子存在性 + 恢复帖子统计缓存。
-//  2. 执行 Redis Lua 原子切换（ZSET 增删 + stats Hash 增减）。
-//  3. 发布 Redpanda 点赞事件（异步持久化到 DB）。
+// 流程（设计见 docs/design/like-pipeline-fix-design.md §三 F1.2）：
+//  1. 校验目标存在；恢复统计缓存（Lua 脚本依赖 stats Hash）。
+//  2. 解析真实当前状态（ZSET miss 回源 DB 并回填），得出期望状态（显式 action 或取反）。
+//     显式 action 也必须先解析：回填后 ZSET 才能正确判断"已处于期望态"。
+//  3. Redis Lua 原子设值；已处于期望状态则 no-op。
+//  4. 状态真正变化时才发布点赞事件（MQ 落库 + 热度 + CF 互动 + 通知）。
+//     like_events 同步 ack；投递失败则把缓存设回原状态并返回 ErrEventPublishFailed（可重试），
+//     否则 Redis 已变而 DB 永远收不到，TTL 后点赞"消失"。
 func (s *likeServiceImpl) Toggle(ctx context.Context, userID uuid.UUID, input ToggleInput) (*ToggleResult, error) {
+	if _, err := domain.ResolveWant(false, input.Action); err != nil {
+		return nil, err
+	}
 	switch domain.TargetType(input.Type) {
 	case domain.TargetTypeComment:
-		return s.toggleCommentLike(ctx, userID, input.TargetID)
+		return s.toggleCommentLike(ctx, userID, input.TargetID, input.Action)
 	case domain.TargetTypePost:
-		return s.togglePostLike(ctx, userID, input.TargetID)
+		return s.togglePostLike(ctx, userID, input.TargetID, input.Action)
 	default:
 		return nil, domain.ErrInvalidTargetType
 	}
 }
 
 // togglePostLike 帖子点赞切换。
-func (s *likeServiceImpl) togglePostLike(ctx context.Context, userID, postID uuid.UUID) (*ToggleResult, error) {
+func (s *likeServiceImpl) togglePostLike(ctx context.Context, userID, postID uuid.UUID, action string) (*ToggleResult, error) {
 	if s.postTarget == nil {
 		return nil, errors.New("post target is not configured")
 	}
 
-	// 1. 校验帖子存在
 	exists, err := s.postTarget.Exists(ctx, postID)
 	if err != nil {
 		return nil, err
@@ -126,36 +137,47 @@ func (s *likeServiceImpl) togglePostLike(ctx context.Context, userID, postID uui
 		return nil, domain.ErrPostNotFound
 	}
 
-	// 2. 确保帖子统计缓存存在（Lua 脚本依赖 stats Hash）
 	if err := s.postTarget.RestoreStats(ctx, postID); err != nil {
 		logger.Log.Error("Failed to restore post stats cache: " + err.Error())
 	}
 
-	// 3. 原子切换点赞状态
-	result, err := s.postCache.Toggle(ctx, userID, postID)
+	// 真实状态解析失败时不猜测：猜错会让计数漂移，交由客户端重试。
+	current, err := s.postTarget.IsLiked(ctx, userID, postID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to toggle post like: %w", err)
+		return nil, fmt.Errorf("failed to resolve post like state: %w", err)
+	}
+	want, err := domain.ResolveWant(current, action)
+	if err != nil {
+		return nil, err
 	}
 
-	// 4. 发布点赞事件（异步持久化）
-	if err := s.publisher.PublishPostLike(ctx, userID, postID, result.Int64()); err != nil {
-		logger.Log.Error("Failed to publish post like event: " + err.Error())
+	result, err := s.postCache.Set(ctx, userID, postID, want)
+	if err != nil {
+		return nil, fmt.Errorf("failed to set post like: %w", err)
+	}
+
+	if result != domain.ToggleResultUnchanged {
+		if err := s.publisher.PublishPostLike(ctx, userID, postID, result.Int64()); err != nil {
+			if _, rbErr := s.postCache.Set(ctx, userID, postID, !want); rbErr != nil {
+				logger.Log.Error("Failed to roll back post like cache: " + rbErr.Error())
+			}
+			return nil, fmt.Errorf("%w: %v", domain.ErrEventPublishFailed, err)
+		}
 	}
 
 	return &ToggleResult{
-		IsLiked:  result == domain.ToggleResultLiked,
+		IsLiked:  want,
 		Type:     string(domain.TargetTypePost),
 		TargetID: postID.String(),
 	}, nil
 }
 
 // toggleCommentLike 评论点赞切换。
-func (s *likeServiceImpl) toggleCommentLike(ctx context.Context, userID, commentID uuid.UUID) (*ToggleResult, error) {
+func (s *likeServiceImpl) toggleCommentLike(ctx context.Context, userID, commentID uuid.UUID, action string) (*ToggleResult, error) {
 	if s.commentTarget == nil {
 		return nil, errors.New("comment target is not configured")
 	}
 
-	// 1. 校验评论存在 + 拿到冗余 postID
 	postIDPtr, exists, err := s.commentTarget.ExistsWithPostID(ctx, commentID)
 	if err != nil {
 		return nil, err
@@ -164,28 +186,39 @@ func (s *likeServiceImpl) toggleCommentLike(ctx context.Context, userID, comment
 		return nil, domain.ErrCommentNotFound
 	}
 
-	// 2. 确保评论统计缓存存在（Lua 脚本依赖 stats Hash）
 	if err := s.commentTarget.RestoreStats(ctx, commentID); err != nil {
 		logger.Log.Error("Failed to restore comment stats cache: " + err.Error())
 	}
 
-	// 3. 原子切换点赞状态
-	result, err := s.commentCache.Toggle(ctx, userID, commentID)
+	current, err := s.commentTarget.IsLiked(ctx, userID, commentID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to toggle comment like: %w", err)
+		return nil, fmt.Errorf("failed to resolve comment like state: %w", err)
+	}
+	want, err := domain.ResolveWant(current, action)
+	if err != nil {
+		return nil, err
 	}
 
-	// 4. 发布点赞事件（异步持久化）
-	var postID uuid.UUID
-	if postIDPtr != nil {
-		postID = *postIDPtr
+	result, err := s.commentCache.Set(ctx, userID, commentID, want)
+	if err != nil {
+		return nil, fmt.Errorf("failed to set comment like: %w", err)
 	}
-	if err := s.publisher.PublishCommentLike(ctx, userID, commentID, postID, result.Int64()); err != nil {
-		logger.Log.Error("Failed to publish comment like event: " + err.Error())
+
+	if result != domain.ToggleResultUnchanged {
+		var postID uuid.UUID
+		if postIDPtr != nil {
+			postID = *postIDPtr
+		}
+		if err := s.publisher.PublishCommentLike(ctx, userID, commentID, postID, result.Int64()); err != nil {
+			if _, rbErr := s.commentCache.Set(ctx, userID, commentID, !want); rbErr != nil {
+				logger.Log.Error("Failed to roll back comment like cache: " + rbErr.Error())
+			}
+			return nil, fmt.Errorf("%w: %v", domain.ErrEventPublishFailed, err)
+		}
 	}
 
 	return &ToggleResult{
-		IsLiked:  result == domain.ToggleResultLiked,
+		IsLiked:  want,
 		Type:     string(domain.TargetTypeComment),
 		TargetID: commentID.String(),
 	}, nil

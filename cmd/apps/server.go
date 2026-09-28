@@ -208,6 +208,8 @@ func Run(configPath, bootstrapPath string) {
 	// 先停通知消费者：排干 flush 窗口内缓冲事件（落库 + 未读计数依赖 DB/Redis，
 	// 必须先于 CloseRedis 执行）。
 	redpanda.StopNotificationEventConsumerGlobal()
+	// 停点赞消费者：排干缓冲末态落库并提交 offset（仅依赖 PG）。
+	redpanda.StopLikeEventConsumerGlobal()
 	// 停 SSE 推流 hub 的 sweeper（存量连接由 hertz 关停随连接关闭回收）。
 	composition.StopNoticeStreamHub()
 	redis.CloseRedis()

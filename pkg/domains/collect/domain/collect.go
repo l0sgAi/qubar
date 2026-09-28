@@ -32,7 +32,7 @@ const (
 	PostCollectCanceled = 1
 )
 
-// ToggleResult 收藏切换操作结果（与 redis.ToggleCollectResult 值一致）。
+// ToggleResult 收藏设值结果（与 redis.CollectSetResult 值一致）。
 type ToggleResult int
 
 const (
@@ -40,7 +40,32 @@ const (
 	ToggleResultCollected ToggleResult = 1
 	// ToggleResultUncollected 取消收藏（-1）。
 	ToggleResultUncollected ToggleResult = -1
+	// ToggleResultUnchanged 已处于期望状态，未变化。
+	ToggleResultUnchanged ToggleResult = 0
 )
+
+// Action 期望动作（请求可选字段）。空 = 切换（以真实当前状态取反）。
+const (
+	// ActionCollect 期望已收藏（幂等）。
+	ActionCollect = "collect"
+	// ActionUncollect 期望未收藏（幂等）。
+	ActionUncollect = "uncollect"
+)
+
+// ResolveWant 由真实当前状态与期望动作得出期望状态。
+// action 为空时切换；"collect"/"uncollect" 为显式期望状态，重试/双击天然幂等。
+func ResolveWant(current bool, action string) (bool, error) {
+	switch action {
+	case "":
+		return !current, nil
+	case ActionCollect:
+		return true, nil
+	case ActionUncollect:
+		return false, nil
+	default:
+		return false, ErrInvalidAction
+	}
+}
 
 // Int64 返回 ToggleResult 的 int64 值（用于事件发布的 amount 字段）。
 func (r ToggleResult) Int64() int64 { return int64(r) }
@@ -51,4 +76,8 @@ var (
 	ErrPostNotFound = errors.New("post not found")
 	// ErrInvalidCursor 列表游标非法。
 	ErrInvalidCursor = errors.New("invalid search_after cursor")
+	// ErrInvalidAction 无效的期望动作。
+	ErrInvalidAction = errors.New("invalid action, must be 'collect', 'uncollect' or empty")
+	// ErrEventPublishFailed 收藏事件未能投递（已回滚流水与缓存，客户端可重试）。
+	ErrEventPublishFailed = errors.New("collect event publish failed, please retry")
 )

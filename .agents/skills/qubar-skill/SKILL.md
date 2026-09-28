@@ -95,6 +95,8 @@ interfaces/http/   handler.go（Handler + Request DTO + writeXxxError）+ routes
 
 - 读路径：cache-aside（miss → 查 DB → 回填，best-effort 不返回缓存错）。
 - 计数（浏览/赞/藏）：**Redis Lua 原子为读路径真值** → 发 Redpanda 事件 → 聚合器批量 `jsonb_to_recordset` 落库。评论数是**例外**（同步落库）。
+- 赞/藏是**二元状态**（`docs/design/like-pipeline-fix-design.md`）：用户 ZSET 有 TTL + cap，**miss ≠ 未赞**，必须回源 DB；
+  写路径"先解析真实状态 → Lua 设值（非 toggle）→ 状态真变才发事件"；落库/计数由**行状态迁移**推导（幂等），不对事件 ±1 求和。
 - 计数 Hash 用 `SeedXxxIfAbsent`（`HSetNX` 逐字段）避免覆盖并发 `HINCRBY`。无分布式锁/单飞（stats 是软信号，接受竞态）。
 
 ## 设计文档范式（大改动先写文档）

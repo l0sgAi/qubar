@@ -93,6 +93,36 @@ func (r *postRepoPG) IsCollected(ctx context.Context, userID, postID uuid.UUID) 
 	return count > 0, err
 }
 
+// BatchIsLiked 批量检查用户点赞了哪些帖子（走 uk_post_like_user_post 唯一索引）。
+func (r *postRepoPG) BatchIsLiked(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
+	return r.batchActivePostIDs(ctx, "domains.post_like", userID, postIDs)
+}
+
+// BatchIsCollected 批量检查用户收藏了哪些帖子（走 uk_post_collect_user_post 唯一索引）。
+// post_collect 表属 collect 领域，按表名查询，避免跨领域 import 实体。
+func (r *postRepoPG) BatchIsCollected(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
+	return r.batchActivePostIDs(ctx, "domains.post_collect", userID, postIDs)
+}
+
+// batchActivePostIDs 在 (user_id, post_id, deleted) 结构的交互流水表中批量查有效行（deleted=0）。
+func (r *postRepoPG) batchActivePostIDs(ctx context.Context, table string, userID uuid.UUID, postIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
+	result := make(map[uuid.UUID]bool)
+	if len(postIDs) == 0 {
+		return result, nil
+	}
+	var ids []uuid.UUID
+	err := r.db.WithContext(ctx).Table(table).
+		Where("user_id = ? AND post_id IN ? AND deleted = ?", userID, postIDs, 0).
+		Pluck("post_id", &ids).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range ids {
+		result[id] = true
+	}
+	return result, nil
+}
+
 // IncrCommentCount 同步递增帖子评论计数（comment_count + 1）。
 // 实时持久化到 DB，替代旧的 Redpanda 异步聚合；GREATEST 防御性兜底，与批量聚合语义一致。
 func (r *postRepoPG) IncrCommentCount(ctx context.Context, postID uuid.UUID) error {
