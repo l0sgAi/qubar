@@ -208,18 +208,23 @@ like writer 用 `kafka.Hash{}`（key=`user:target`，消费者"末态为准"依�
 `circle_statistics` / `post_statistics` / `like_events` / `collect_events` / `post_view_history` / `post_hot` / `post_interaction`。
 每个有 `*_consumer_group` + `*_flush_interval`（**单位混杂**：有秒有分，看 config）。
 
-### 7.3 consumer 范式（`consumer.go`）
-`StartXxxConsumer()`：`kafka.Dialer{Timeout:10s, DualStack:true, Resolver:nil}`（Resolver nil 故意——避免 advertised-address 缓存）；
-`kafka.NewReader{Brokers,Topic,GroupID,MinBytes:10KB,MaxBytes:10MB,CommitInterval:1s}`；
-创建 `XxxAggregator`（`time.Ticker` @ FlushInterval）两 goroutine：`aggregator.run()`（ticker flush）+ 读循环。
+### 7.3 consumer 范式（`batch_consumer.go`，#50）
+统计类消费者（圈子/帖子统计、收藏计数、浏览历史、帖子热度、互动灌数）共用泛型骨架 `batchConsumer[T,B]`：
+每个消费者只声明一个 `batchConsumerSpec{name,newBuf,add,size,merge,persist,flushMessages}`，
+`StartXxxConsumer()` 调 `startBatchConsumer(spec, topic, group, flushIntervalOr(cfg, 兜底, 单位))`。
+骨架负责：`kafka.Dialer{Timeout:10s, DualStack:true, Resolver:nil}`（Resolver nil 故意——避免 advertised-address 缓存）；
+`kafka.NewReader{...,CommitInterval:0}` + `FetchMessage`；**落库成功后才 `CommitMessages`**（每分区最大 offset）；
+`persist` 失败 → `merge` 合并回缓冲 + offset 放回，下轮重试；提交失败只记日志（后续提交覆盖）；毒消息只推进 offset；
+定时 / 定量（`flushMessages`）flush；`StopBatchConsumersGlobal()` 并行排干（`cmd/apps/server.go` 关停序列，早于 `CloseRedis`）。
 读错误 → `waitAfterReadError`（`reader.go`，1s 起倍增封顶 30s，成功读取后 `Reset`）。读阻塞时无数据不会返回错误，出错即真实故障。
-⚠️ `ReadMessage`+`CommitInterval` 是"读即提交"：flush 前崩溃会丢缓冲事件。
-**新 consumer 优先仿 `like_consumer.go`**：`FetchMessage` + 落库成功后 `CommitMessages`、失败合并回缓冲重试、
-可取消 reader ctx + `StopXxxGlobal()` 关停排干（在 `cmd/apps/server.go` 关停序列调用）。
-`StartXxxConsumerWithRetry()` 线性退避重试 10 次。
+语义 at-least-once：增量 SQL 非幂等，"落库后、提交前被杀" 或再均衡时可能重复计数一次（窗口毫秒级）。
+点赞（`like_consumer.go`，末态幂等）与通知（`notification_consumer.go`）是独立实现。
+**新 consumer 优先写一个 spec 复用 `batchConsumer`**；`persist` 必须单事务（多步落库拆开会让重试部分重复）。
+`StartXxxConsumerWithRetry()` → `startWithRetry(name, start)` 线性退避重试 10 次。
 
 ### 7.4 aggregator → 批量落库
-内存 `map[uuid.UUID]delta`（mutex），ticker/stop flush，单次 `pgsql.DB.Transaction` + `jsonb_to_recordset` 批量 UPDATE。
+缓冲类型 `B` 用 map（如 `postDeltaBuf map[uuid.UUID]int64`）或指针结构体；`merge` 对增量做加法。
+单次 `pgsql.DB.Transaction` + `jsonb_to_recordset` 批量 UPDATE / upsert。
 
 ### 7.5 syncers（cron 式，非 consumer）
 - `CircleHotSyncer`（`circle_hot_syncer.go:28`）：34min ticker，`SCAN circle:hot:*` + `GETDEL`（读后清零）→ 批量 UPDATE `domains.circle.hot` → `refreshCircleHotCache`（**仅当 stats Hash 已有 member_count 才 HINCRBY**，避免半截 Hash，`:95`）。
