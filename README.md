@@ -148,7 +148,7 @@ qubar/
 │       └── server.go     # Service initialization & resource orchestration
 │
 ├── configs/
-│   ├── config.yaml       # Local config file (fallback when Nacos is unavailable)
+│   ├── config.example.yaml # Config template; copy to config.yaml (git-ignored, fallback when Nacos is unavailable)
 │   └── bootstrap.yaml    # Nacos bootstrap config (address, namespace, group)
 │
 ├── docs/
@@ -210,12 +210,18 @@ For table schemas and seed data, see [docs/pgsql-ddl/](docs/pgsql-ddl/) (split b
 
 #### Option 1: Local config (quick development)
 
-Edit `configs/config.yaml` with your database, Redis and other connection info:
+Copy the template and fill in your database, Redis and other connection info. `configs/config.yaml` is git-ignored — never commit real secrets:
+
+```bash
+cp configs/config.example.yaml configs/config.yaml
+openssl rand -base64 32   # value for security.data_key (encrypts AI agent API keys; back it up, it can't be rotated)
+```
+
+The template defaults are production-safe (`log.level: info`, `pgsql.log_mode: error`, CORS limited to the real domain). For local development, uncomment the `localhost` CORS origins and lower log levels as needed. Unsafe settings are logged as `[config]` warnings at startup.
 
 ```yaml
 server:
   port: 8888
-  mode: debug
 
 pgsql:
   path: 127.0.0.1

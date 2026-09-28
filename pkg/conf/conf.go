@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
@@ -347,6 +348,9 @@ func initFromFile(path string) {
 	v.SetConfigType("yaml")
 
 	if err := v.ReadInConfig(); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			panic(fmt.Errorf("config file %s not found: copy configs/config.example.yaml to %s and fill in real values (#49)", path, path))
+		}
 		panic(fmt.Errorf("fatal error config file: %s", err))
 	}
 

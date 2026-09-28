@@ -1,31 +1,39 @@
+# Qubar 配置模板（l0sgAi/qubar#49）
+#
+# 用法：cp configs/config.example.yaml configs/config.yaml，再填真实值。
+#   - configs/config.yaml 已 git-ignore，真实密钥永远不要提交。
+#   - 生产环境密钥放 Nacos / SSM / Secrets Manager 等，不落仓库。
+#   - 本模板默认值偏生产安全（info 日志、GORM 只记错误、CORS 仅正式域名）；
+#     本地开发按注释放开即可。
 server:
   port: 8888
-  mode: debug
+  mode: release # 当前代码未读取（hertz 无 gin 式 mode），保留作环境标识
 
 # CORS 配置
 cors:
   allowed_origins:
     - "https://qubar.site"
-    - "http://localhost:*"
-    - "http://127.0.0.1:*"
+    # 本地开发时放开（生产勿开）：
+    # - "http://localhost:*"
+    # - "http://127.0.0.1:*"
 
 app:
   name: interestBar
   version: v1.0.0
 log:
-  level: debug
+  level: info # 本地调试可改 debug
   format: console
   director: ./logs
 pgsql:
   path: 127.0.0.1
   port: 5432
-  config: sslmode=disable TimeZone=Asia/Shanghai
+  config: sslmode=disable TimeZone=Asia/Shanghai # 生产（如 RDS）改 sslmode=require 或 verify-full
   db_name: qubar
   username: qubar_web_app
-  password: 1q2w3e4r5t
+  password: "CHANGE_ME"
   max_idle_conns: 10
   max_open_conns: 100
-  log_mode: debug
+  log_mode: error # debug 会打印全部 SQL（含用户数据），仅本地排障时临时开启
 oauth:
   # proxy_url: "http://127.0.0.1:6268" # OAuth 出站代理（本地开发）；生产环境留空直连
   google:
@@ -210,5 +218,8 @@ security:
 
   # 敏感字段应用层加密密钥（AES-256-GCM，任意长度字符串经 SHA-256 派生）
   # 用于 ai_agent.api_key 入库前加密。生产环境必须配置且妥善保管。
-  data_key: "TEST_DATA_KEY_1234567890" # 生产环境请替换为随机安全密钥，并妥善保管
+  # 生成：openssl rand -base64 32 。为空时 AI 机器人 api_key 相关接口返回 503。
+  # ⚠️ 不支持轮换：丢失或更换后，已加密入库的 api_key 全部无法解密。务必离线备份。
+  # 各环境使用独立密钥，禁止复用开发密钥。
+  data_key: ""
 

@@ -148,7 +148,7 @@ qubar/
 │       └── server.go     # 服务初始化与资源编排
 │
 ├── configs/
-│   ├── config.yaml       # 本地配置文件（Nacos 不可用时兜底）
+│   ├── config.example.yaml # 配置模板；复制为 config.yaml（已 git-ignore，Nacos 不可用时兜底）
 │   └── bootstrap.yaml    # Nacos 引导配置（地址、命名空间、分组）
 │
 ├── docs/
@@ -210,12 +210,18 @@ CREATE SCHEMA IF NOT EXISTS domains;
 
 #### 方式一：本地配置（快速开发）
 
-编辑 `configs/config.yaml`，填入数据库、Redis 等连接信息：
+复制模板后填入数据库、Redis 等连接信息。`configs/config.yaml` 已 git-ignore，真实密钥切勿提交：
+
+```bash
+cp configs/config.example.yaml configs/config.yaml
+openssl rand -base64 32   # 作为 security.data_key（加密 AI 机器人 API Key；务必备份，不支持轮换）
+```
+
+模板默认值偏生产安全（`log.level: info`、`pgsql.log_mode: error`、CORS 仅正式域名）。本地开发按需取消 `localhost` CORS 注释、调低日志级别。不安全的配置会在启动时以 `[config]` WARN 日志提示。
 
 ```yaml
 server:
   port: 8888
-  mode: debug
 
 pgsql:
   path: 127.0.0.1
