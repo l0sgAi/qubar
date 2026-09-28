@@ -1,0 +1,7 @@
+# 只把构建需要的文件送进 build context；配置与密钥绝不进镜像。
+*
+!go.mod
+!go.sum
+!cmd/
+!pkg/
+**/*_test.go

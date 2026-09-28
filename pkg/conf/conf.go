@@ -345,6 +345,7 @@ func initFromFile(path string) {
 	v := viper.New()
 	v.SetConfigFile(path)
 	v.SetConfigType("yaml")
+	bindEnv(v)
 
 	if err := v.ReadInConfig(); err != nil {
 		panic(fmt.Errorf("fatal error config file: %s", err))

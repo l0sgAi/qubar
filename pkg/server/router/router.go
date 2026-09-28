@@ -1,6 +1,8 @@
 package router
 
 import (
+	"context"
+	"errors"
 	"fmt"
 
 	"interestBar/pkg/composition"
@@ -8,6 +10,10 @@ import (
 	"interestBar/pkg/composition/middleware"
 	"interestBar/pkg/conf"
 	"interestBar/pkg/logger"
+	"interestBar/pkg/server/health"
+	"interestBar/pkg/server/storage/db/pgsql"
+	"interestBar/pkg/server/storage/elasticsearch"
+	"interestBar/pkg/server/storage/redis"
 
 	"github.com/cloudwego/hertz/pkg/app/server"
 )
@@ -28,6 +34,9 @@ func InitRouter() *server.Hertz {
 	h.Use(middleware.Logger())
 	h.Use(middleware.CORS())
 
+	// 存活 / 就绪探针（#51）：无需登录，访问日志中间件跳过。
+	health.Register(h, readinessChecker())
+
 	// Register Domain Routes（所有领域已搬迁到 pkg/domains/）
 	// 入口层做 engine→RouterGroup 的框架无关包装。
 	streamHub := composition.RegisterDomainRoutes(hertzadapter.ForEngine(h))
@@ -43,4 +52,44 @@ func InitRouter() *server.Hertz {
 		logger.Log.Info("router register success")
 	}
 	return h
+}
+
+// readinessChecker PG / Redis 为必需依赖（启动时即 fatal 的依赖）；ES 为可选（启动时即软依赖）。
+func readinessChecker() *health.Checker {
+	return &health.Checker{
+		Required: map[string]health.Check{
+			"postgres": func(ctx context.Context) error {
+				if pgsql.DB == nil {
+					return errors.New("not initialized")
+				}
+				sqlDB, err := pgsql.DB.DB()
+				if err != nil {
+					return err
+				}
+				return sqlDB.PingContext(ctx)
+			},
+			"redis": func(ctx context.Context) error {
+				if redis.Client == nil {
+					return errors.New("not initialized")
+				}
+				return redis.Client.Ping(ctx).Err()
+			},
+		},
+		Optional: map[string]health.Check{
+			"elasticsearch": func(ctx context.Context) error {
+				if elasticsearch.Client == nil {
+					return errors.New("not initialized")
+				}
+				res, err := elasticsearch.Client.Ping(elasticsearch.Client.Ping.WithContext(ctx))
+				if err != nil {
+					return err
+				}
+				defer res.Body.Close()
+				if res.IsError() {
+					return errors.New(res.Status())
+				}
+				return nil
+			},
+		},
+	}
 }
