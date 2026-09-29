@@ -223,6 +223,9 @@ type AiAgent struct {
 	TimeoutSec       int `mapstructure:"timeout_sec" json:"timeout_sec" yaml:"timeout_sec"`                   // LLM 单次调用超时(秒)，默认 30
 	MaxContentChars  int `mapstructure:"max_content_chars" json:"max_content_chars" yaml:"max_content_chars"` // Prompt 各段(title/summary/评论)截断长度，默认 4000
 	ReplyConcurrency int `mapstructure:"reply_concurrency" json:"reply_concurrency" yaml:"reply_concurrency"` // 关键词触发异步执行并发上限，默认 3
+	// AllowPrivateBaseURL 允许 base_url 使用 http 及内网/环回地址（#48 防 SSRF 开关）。
+	// 默认 false；仅本地开发或内网自建模型网关时开启，开启后圈主可让服务端访问内网。
+	AllowPrivateBaseURL bool `mapstructure:"allow_private_base_url" json:"allow_private_base_url" yaml:"allow_private_base_url"`
 }
 
 // Feed 推荐流候选池 + 多路召回配额配置。

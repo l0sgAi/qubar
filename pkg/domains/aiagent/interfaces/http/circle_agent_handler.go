@@ -232,6 +232,7 @@ func writeCircleAgentError(c appctx.AppContext, err error) {
 		httputil.Conflict(c, "Circle agent limit reached (5)")
 	case application.IsInvalidNameErr(err),
 		application.IsInvalidProtocolErr(err),
+		application.IsInvalidBaseURLErr(err),
 		application.IsInvalidModelErr(err),
 		application.IsInvalidTriggerErr(err),
 		application.IsInvalidLLMParamsErr(err),
@@ -242,6 +243,9 @@ func writeCircleAgentError(c appctx.AppContext, err error) {
 		httputil.BadRequest(c, err.Error())
 	case application.IsAPIKeyNotSetErr(err):
 		httputil.ServiceUnavailable(c, "Data key not configured")
+	case application.IsBaseURLNoDNSErr(err):
+		// 保存时 DNS 临时故障（超时 / SERVFAIL），可重试；与「地址不合规」400 区分。
+		httputil.ServiceUnavailable(c, err.Error())
 	default:
 		httputil.InternalError(c)
 	}

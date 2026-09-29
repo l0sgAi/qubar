@@ -284,6 +284,7 @@ func writeAgentError(c appctx.AppContext, err error) {
 		httputil.Conflict(c, "Agent name already exists")
 	case application.IsInvalidNameErr(err),
 		application.IsInvalidProtocolErr(err),
+		application.IsInvalidBaseURLErr(err),
 		application.IsInvalidModelErr(err),
 		application.IsInvalidTriggerErr(err),
 		application.IsInvalidLLMParamsErr(err),
@@ -294,6 +295,9 @@ func writeAgentError(c appctx.AppContext, err error) {
 		httputil.BadRequest(c, err.Error())
 	case application.IsAPIKeyNotSetErr(err):
 		httputil.ServiceUnavailable(c, "Data key not configured")
+	case application.IsBaseURLNoDNSErr(err):
+		// 保存时 DNS 临时故障（超时 / SERVFAIL），可重试；与「地址不合规」400 区分。
+		httputil.ServiceUnavailable(c, err.Error())
 	default:
 		httputil.InternalError(c)
 	}

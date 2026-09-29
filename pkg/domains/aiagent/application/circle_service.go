@@ -146,7 +146,7 @@ func (s *circleAgentServiceImpl) CreateCircleAgent(ctx context.Context, operator
 	}
 
 	// 复用全局链路的校验函数组 + api_key 加密 + 默认值补齐（语义一致，防规则漂移）。
-	agent, err := validateAndBuildAgent(input)
+	agent, err := validateAndBuildAgent(ctx, input)
 	if err != nil {
 		return nil, err
 	}

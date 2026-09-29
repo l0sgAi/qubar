@@ -3,11 +3,13 @@ package infrastructure
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"interestBar/pkg/conf"
 	agentapp "interestBar/pkg/domains/aiagent/application"
 	"interestBar/pkg/domains/aiagent/domain"
+	"interestBar/pkg/util/netguard"
 
 	"github.com/cloudwego/eino-ext/components/model/claude"
 	"github.com/cloudwego/eino-ext/components/model/openai"
@@ -29,15 +31,24 @@ func NewLLMCaller() agentapp.LLMCaller {
 
 // Generate 非流式单轮生成。
 func (l *llmEino) Generate(ctx context.Context, req agentapp.LLMRequest) (*agentapp.LLMResult, error) {
+	// #48：库里可能有本修复之前保存的 base_url，调用前再做一次静态校验（不合规 = 本次不调用）。
+	allowPrivate := conf.Config.AiAgent.AllowPrivateBaseURL
+	if req.BaseURL != "" {
+		if _, err := netguard.CheckURL(req.BaseURL, allowPrivate); err != nil {
+			return nil, fmt.Errorf("base_url rejected: %w", err)
+		}
+	}
+	httpClient := netguard.NewHTTPClient(llmTimeout(), allowPrivate)
+
 	var (
 		chatModel model.BaseChatModel
 		err       error
 	)
 	switch req.Protocol {
 	case domain.ProtocolOpenAI:
-		chatModel, err = l.newOpenAIModel(req)
+		chatModel, err = l.newOpenAIModel(req, httpClient)
 	case domain.ProtocolAnthropic:
-		chatModel, err = l.newClaudeModel(req)
+		chatModel, err = l.newClaudeModel(req, httpClient)
 	default:
 		return nil, fmt.Errorf("protocol %q not implemented (supported: openai/anthropic)", req.Protocol)
 	}
@@ -62,12 +73,14 @@ func (l *llmEino) Generate(ctx context.Context, req agentapp.LLMRequest) (*agent
 }
 
 // newOpenAIModel 实例化 OpenAI 兼容模型（DeepSeek/Qwen/Kimi/中转站等均可走 base_url）。
-func (l *llmEino) newOpenAIModel(req agentapp.LLMRequest) (model.BaseChatModel, error) {
+//
+// httpClient 为 netguard 受限客户端（拨号时校验目标 IP，#48）；其 Timeout 即单次调用超时。
+func (l *llmEino) newOpenAIModel(req agentapp.LLMRequest, httpClient *http.Client) (model.BaseChatModel, error) {
 	cfg := &openai.ChatModelConfig{
-		APIKey:  req.APIKey,
-		BaseURL: req.BaseURL,
-		Model:   req.Model,
-		Timeout: llmTimeout(),
+		APIKey:     req.APIKey,
+		BaseURL:    req.BaseURL,
+		Model:      req.Model,
+		HTTPClient: httpClient,
 	}
 	if v, ok := paramFloat(req.Params, "temperature"); ok {
 		cfg.Temperature = float32Ptr(v)
@@ -91,12 +104,13 @@ func (l *llmEino) newOpenAIModel(req agentapp.LLMRequest) (model.BaseChatModel, 
 //
 // claude 的 MaxTokens 为必填项：未配置 max_tokens 时用 1024 兜底；
 // presence/frequency_penalty 为 OpenAI 特有参数，Claude 不支持，忽略。
-func (l *llmEino) newClaudeModel(req agentapp.LLMRequest) (model.BaseChatModel, error) {
+func (l *llmEino) newClaudeModel(req agentapp.LLMRequest, httpClient *http.Client) (model.BaseChatModel, error) {
 	cfg := &claude.Config{
 		APIKey:         req.APIKey,
 		Model:          req.Model,
 		MaxTokens:      1024,
 		RequestTimeout: llmTimeout(),
+		HTTPClient:     httpClient,
 	}
 	if req.BaseURL != "" {
 		baseURL := req.BaseURL
