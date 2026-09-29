@@ -34,6 +34,9 @@ func Run(configPath, bootstrapPath string) {
 
 	// 2. Init Logger
 	logger.InitLogger()
+	for _, w := range conf.Config.SecurityWarnings() {
+		logger.Log.Warn("[config] " + w)
+	}
 
 	// 3. Init DB
 	pgsql.InitDB()

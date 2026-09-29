@@ -81,6 +81,11 @@ var Config *AppConfig
 1. 先试 `initFromNacos(bootstrapPath)`，成功返回；`errNoBootstrap` 静默回落，其它错记日志回落。
 2. 兜底 `initFromFile(fallbackPath)`（`conf.go:287`）：viper + `WatchConfig`/`OnConfigChange`（fsnotify 热重载，重 `Unmarshal`）。
 
+### 3.3.1 环境变量覆盖（`pkg/conf/env.go`，#51）
+`QUBAR_` + 配置路径大写、`.`→`_`（如 `QUBAR_PGSQL_PASSWORD`），优先级 env > Nacos/YAML。
+`bindEnv` 按 `AppConfig` 的 mapstructure tag 给每个叶子字段 BindEnv，YAML 缺省的 key 也能覆盖；切片用逗号分隔。
+**加新配置字段无需额外处理**（带 mapstructure tag 即自动支持 env）。
+
 ### 3.4 Nacos（`pkg/conf/nacos.go`）
 - `currentEnv`：读 `APP_ENV`，默认 `dev`，非 `prod` 都当 `dev`。
 - `buildClient`：`NotLoadCacheAtStart: true`（避免 stale cache 掩盖失败）。
@@ -88,7 +93,7 @@ var Config *AppConfig
 - `initFromNacos` 带 `defer recover()` 优雅回落。
 
 ### 3.5 加新配置项的范式（必须三处同步）
-1. `configs/config.yaml` 加 key + 默认值。
+1. `configs/config.example.yaml` 加 key + 默认值（模板入库；`configs/config.yaml` 已 git-ignore，#49）。密钥类字段模板里留空/占位。
 2. `pkg/conf/conf.go` 对应节结构体加字段（带 `mapstructure`/`json`/`yaml` tag）。
 3. 消费处读 `conf.Config.Xxx`，**`<=0` 提供常量兜底**（仿 `circle_hot_syncer.go:40` interval 默认 34）。
 参考现有节：`Hot`（`conf.go:168`）、`Recommend`（`conf.go:190`）、`Feed{PoolSize,TTLMinutes,QuotaC1..C5,...}`（`conf.go:196`）。

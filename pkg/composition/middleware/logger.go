@@ -18,6 +18,10 @@ func Logger() app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		start := time.Now()
 		path := string(c.Request.URI().Path())
+		if isProbePath(path) {
+			c.Next(ctx) // 探针高频调用，不记访问日志
+			return
+		}
 		query := string(c.Request.URI().QueryString())
 
 		c.Next(ctx)
@@ -33,4 +37,10 @@ func Logger() app.HandlerFunc {
 			zap.Duration("cost", cost),
 		)
 	}
+}
+
+// isProbePath 存活 / 就绪探针路径（与 pkg/server/health 保持一致；
+// middleware 不反向依赖 server 包，故此处重复声明）。
+func isProbePath(path string) bool {
+	return path == "/healthz" || path == "/readyz"
 }

@@ -148,7 +148,7 @@ qubar/
 │       └── server.go     # Service initialization & resource orchestration
 │
 ├── configs/
-│   ├── config.yaml       # Local config file (fallback when Nacos is unavailable)
+│   ├── config.example.yaml # Config template; copy to config.yaml (git-ignored, fallback when Nacos is unavailable)
 │   └── bootstrap.yaml    # Nacos bootstrap config (address, namespace, group)
 │
 ├── docs/
@@ -210,12 +210,18 @@ For table schemas and seed data, see [docs/pgsql-ddl/](docs/pgsql-ddl/) (split b
 
 #### Option 1: Local config (quick development)
 
-Edit `configs/config.yaml` with your database, Redis and other connection info:
+Copy the template and fill in your database, Redis and other connection info. `configs/config.yaml` is git-ignored — never commit real secrets:
+
+```bash
+cp configs/config.example.yaml configs/config.yaml
+openssl rand -base64 32   # value for security.data_key (encrypts AI agent API keys; back it up, it can't be rotated)
+```
+
+The template defaults are production-safe (`log.level: info`, `pgsql.log_mode: error`, CORS limited to the real domain). For local development, uncomment the `localhost` CORS origins and lower log levels as needed. Unsafe settings are logged as `[config]` warnings at startup.
 
 ```yaml
 server:
   port: 8888
-  mode: debug
 
 pgsql:
   path: 127.0.0.1
@@ -255,6 +261,32 @@ go run cmd/main.go -c configs/config.yaml -b configs/bootstrap.yaml
 ```
 
 The service starts at `http://localhost:8888`
+
+#### Environment variable overrides
+
+Every config key can be overridden with `QUBAR_` + the key path in upper case, `.` → `_`. Env wins over Nacos / YAML, so secrets can be injected by the platform instead of written to files:
+
+```bash
+QUBAR_PGSQL_PASSWORD=... QUBAR_SECURITY_DATA_KEY=... QUBAR_REDPANDA_BROKERS=a:9092,b:9092 \
+  go run cmd/main.go -c configs/config.yaml -b ""
+```
+
+#### Docker
+
+```bash
+docker build -t qubar .   # multi-arch: docker buildx build --platform linux/amd64,linux/arm64 -t qubar .
+docker run -p 8888:8888 -v "$PWD/configs/config.yaml:/etc/qubar/config.yaml:ro" \
+  -e QUBAR_PGSQL_PASSWORD=... qubar
+```
+
+The image is distroless (nonroot, no shell) and contains no config. It has a built-in `HEALTHCHECK` (`/qubar -probe <url>`).
+
+#### Health probes
+
+| Path | Meaning |
+|------|---------|
+| `GET /healthz` | Liveness: 200 while the process is up; no dependency checks |
+| `GET /readyz` | Readiness: 200 only if PostgreSQL and Redis respond, else 503. Elasticsearch is reported but optional |
 
 ## 🌐 API Endpoints
 
