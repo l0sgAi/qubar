@@ -213,6 +213,9 @@ func Run(configPath, bootstrapPath string) {
 	redpanda.StopNotificationEventConsumerGlobal()
 	// 停点赞消费者：排干缓冲末态落库并提交 offset（仅依赖 PG）。
 	redpanda.StopLikeEventConsumerGlobal()
+	// 停统计类批量消费者（圈子/帖子统计、收藏、浏览历史、热度、互动）：排干缓冲并提交 offset。
+	// 须早于 CloseRedis（帖子热度 fan-out 写 Redis）。
+	redpanda.StopBatchConsumersGlobal()
 	// 停 SSE 推流 hub 的 sweeper（存量连接由 hertz 关停随连接关闭回收）。
 	composition.StopNoticeStreamHub()
 	redis.CloseRedis()
