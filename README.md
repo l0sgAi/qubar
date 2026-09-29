@@ -256,6 +256,32 @@ go run cmd/main.go -c configs/config.yaml -b configs/bootstrap.yaml
 
 The service starts at `http://localhost:8888`
 
+#### Environment variable overrides
+
+Every config key can be overridden with `QUBAR_` + the key path in upper case, `.` → `_`. Env wins over Nacos / YAML, so secrets can be injected by the platform instead of written to files:
+
+```bash
+QUBAR_PGSQL_PASSWORD=... QUBAR_SECURITY_DATA_KEY=... QUBAR_REDPANDA_BROKERS=a:9092,b:9092 \
+  go run cmd/main.go -c configs/config.yaml -b ""
+```
+
+#### Docker
+
+```bash
+docker build -t qubar .   # multi-arch: docker buildx build --platform linux/amd64,linux/arm64 -t qubar .
+docker run -p 8888:8888 -v "$PWD/configs/config.yaml:/etc/qubar/config.yaml:ro" \
+  -e QUBAR_PGSQL_PASSWORD=... qubar
+```
+
+The image is distroless (nonroot, no shell) and contains no config. It has a built-in `HEALTHCHECK` (`/qubar -probe <url>`).
+
+#### Health probes
+
+| Path | Meaning |
+|------|---------|
+| `GET /healthz` | Liveness: 200 while the process is up; no dependency checks |
+| `GET /readyz` | Readiness: 200 only if PostgreSQL and Redis respond, else 503. Elasticsearch is reported but optional |
+
 ## 🌐 API Endpoints
 
 ### Auth (no login required)

@@ -256,6 +256,32 @@ go run cmd/main.go -c configs/config.yaml -b configs/bootstrap.yaml
 
 服务将在 `http://localhost:8888` 启动
 
+#### 环境变量覆盖
+
+任意配置项都可用环境变量覆盖：`QUBAR_` + 配置路径大写，`.` 换成 `_`。环境变量优先于 Nacos / YAML，密钥可由平台注入而不写进文件：
+
+```bash
+QUBAR_PGSQL_PASSWORD=... QUBAR_SECURITY_DATA_KEY=... QUBAR_REDPANDA_BROKERS=a:9092,b:9092 \
+  go run cmd/main.go -c configs/config.yaml -b ""
+```
+
+#### Docker
+
+```bash
+docker build -t qubar .   # 多架构：docker buildx build --platform linux/amd64,linux/arm64 -t qubar .
+docker run -p 8888:8888 -v "$PWD/configs/config.yaml:/etc/qubar/config.yaml:ro" \
+  -e QUBAR_PGSQL_PASSWORD=... qubar
+```
+
+镜像基于 distroless（nonroot、无 shell），不含任何配置；内置 `HEALTHCHECK`（`/qubar -probe <url>`）。
+
+#### 健康探针
+
+| 路径 | 含义 |
+|------|------|
+| `GET /healthz` | 存活：进程在即 200，不检查依赖 |
+| `GET /readyz` | 就绪：PostgreSQL 与 Redis 均可用才 200，否则 503；Elasticsearch 仅报告状态（可选依赖） |
+
 ## 🌐 API 端点
 
 ### 认证（无需登录）
