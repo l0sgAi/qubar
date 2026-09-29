@@ -8,6 +8,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -203,7 +204,7 @@ func (s *agentServiceImpl) CreateAgent(ctx context.Context, adminID uuid.UUID, i
 		return nil, err
 	}
 
-	agent, err := validateAndBuildAgent(input)
+	agent, err := validateAndBuildAgent(ctx, input)
 	if err != nil {
 		return nil, err
 	}
@@ -477,7 +478,7 @@ func botEmailForID(agentID uuid.UUID) string {
 // validateAndBuildAgent 校验创建入参并构建实体公共部分（全局/圈内创建共用）。
 // 全量过 validateXxx 函数组 + api_key 加密 + 默认值补齐；ID/LinkedUserID/CircleID/
 // CreatorID 等归属字段由调用方按各自链路补齐。
-func validateAndBuildAgent(input CreateAgentInput) (*domain.AiAgent, error) {
+func validateAndBuildAgent(ctx context.Context, input CreateAgentInput) (*domain.AiAgent, error) {
 	name := utils.SanitizeForPg(strings.TrimSpace(input.Name))
 	if err := validateName(name); err != nil {
 		return nil, err
@@ -486,7 +487,7 @@ func validateAndBuildAgent(input CreateAgentInput) (*domain.AiAgent, error) {
 		return nil, err
 	}
 	baseURL := utils.SanitizeForPg(strings.TrimSpace(input.BaseURL))
-	if err := validateBaseURL(context.Background(), baseURL); err != nil {
+	if err := validateBaseURL(ctx, baseURL); err != nil {
 		return nil, err
 	}
 	model := utils.SanitizeForPg(strings.TrimSpace(input.Model))
@@ -705,9 +706,15 @@ func validateBaseURL(ctx context.Context, raw string) error {
 	if err != nil {
 		return errInvalidBaseURL
 	}
-	ctx, cancel := context.WithTimeout(ctx, baseURLResolveTimeout)
+	lookupCtx, cancel := context.WithTimeout(ctx, baseURLResolveTimeout)
 	defer cancel()
-	if err := netguard.CheckHostResolves(ctx, baseURLResolver, u.Hostname(), allowPrivate); err != nil {
+	if err := netguard.CheckHostResolves(lookupCtx, baseURLResolver, u.Hostname(), allowPrivate); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr // 请求已取消（客户端断开），不是 base_url 的问题
+		}
+		if errors.Is(err, netguard.ErrUnresolvable) {
+			return errBaseURLNoDNS
+		}
 		return errInvalidBaseURL
 	}
 	return nil

@@ -60,7 +60,7 @@
 | `linked_user_id` | string (UUID) | 机器人关联系统用户 ID（发评论身份，本期不发言） |
 | `circle_id` | string (UUID) | **归属圈子 ID**（本组接口恒返回；全局接口 `/agent/*` 的对象无此字段） |
 | `api_protocol` | string | API 协议：本期仅 `openai` / `anthropic` |
-| `base_url` | string | API 基础地址，可为空/缺失。非空时必须是**公网 https** 地址：内网 / 环回 / 链路本地（含云元数据）IP、解析到这些地址的域名、带 userinfo 的 URL 一律 400 `base_url must be a public https URL`（防 SSRF，#48） |
+| `base_url` | string | API 基础地址，可为空/缺失。非空时必须是**公网 https** 地址：内网 / 环回 / 链路本地（含云元数据）IP、解析到这些地址的域名、带 userinfo 的 URL 一律 400 `base_url must be a public https URL`（防 SSRF，#48）。保存时 DNS 临时故障（超时 / SERVFAIL）返回 503 `base_url host could not be resolved right now, please retry`，可重试 |
 | `has_api_key` | boolean | 是否已配置 API key |
 | `api_key_masked` | string | 掩码（如 `sk-***abc`）；未配置时缺失 |
 | `model` | string | 模型名（1-100 字符） |

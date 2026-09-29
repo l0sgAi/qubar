@@ -196,6 +196,9 @@ aiagent:
   max_content_chars: 4000  # Prompt 各段(title/summary/评论)截断长度，默认 4000
   reply_concurrency: 3     # 关键词触发异步执行并发上限，默认 3
   allow_private_base_url: false # true 时 base_url 允许 http/内网地址（仅本地开发或内网网关；#48 防 SSRF）
+  # ⚠️ LLM 出站直连，不读取 HTTPS_PROXY / HTTP_PROXY 环境变量（#48）：经代理时拨号校验只能看到代理地址，
+  # 防 SSRF 失效。依赖出口代理访问 OpenAI / Anthropic 等的部署需改为直连可达（或换用可直连的中转 base_url），
+  # 否则机器人调用会报拨号 / 超时错误。
 
 # 安全相关配置
 security:

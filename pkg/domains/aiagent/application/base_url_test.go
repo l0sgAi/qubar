@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"net"
 	"net/netip"
 	"testing"
 
@@ -54,6 +55,35 @@ func TestValidateBaseURL(t *testing.T) {
 	}
 }
 
+type dnsErrResolver struct{ err error }
+
+func (r dnsErrResolver) LookupNetIP(context.Context, string, string) ([]netip.Addr, error) {
+	return nil, r.err
+}
+
+// DNS 临时故障 → 可重试错误（503），不误报「必须是公网 https」；请求已取消 → 透传 ctx 错误。
+func TestValidateBaseURL_DNSFailure(t *testing.T) {
+	prev := baseURLResolver
+	t.Cleanup(func() { baseURLResolver = prev })
+
+	baseURLResolver = dnsErrResolver{&net.DNSError{Err: "i/o timeout", Name: "api.example.com", IsTimeout: true}}
+	if err := validateBaseURL(context.Background(), "https://api.example.com/v1"); !IsBaseURLNoDNSErr(err) {
+		t.Errorf("timeout: want errBaseURLNoDNS, got %v", err)
+	}
+
+	baseURLResolver = dnsErrResolver{&net.DNSError{Err: "no such host", Name: "api.example.com", IsNotFound: true}}
+	if err := validateBaseURL(context.Background(), "https://api.example.com/v1"); !IsInvalidBaseURLErr(err) {
+		t.Errorf("nxdomain: want errInvalidBaseURL, got %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	baseURLResolver = dnsErrResolver{context.Canceled}
+	if err := validateBaseURL(ctx, "https://api.example.com/v1"); !errors.Is(err, context.Canceled) {
+		t.Errorf("canceled: want context.Canceled, got %v", err)
+	}
+}
+
 func TestValidateBaseURL_AllowPrivateFlag(t *testing.T) {
 	withBaseURLResolver(t, stubResolver{})
 	conf.Config.AiAgent.AllowPrivateBaseURL = true
@@ -69,7 +99,7 @@ func TestValidateBaseURL_AllowPrivateFlag(t *testing.T) {
 func TestCreateAndUpdate_RejectPrivateBaseURL(t *testing.T) {
 	withBaseURLResolver(t, stubResolver{})
 
-	_, err := validateAndBuildAgent(CreateAgentInput{
+	_, err := validateAndBuildAgent(context.Background(), CreateAgentInput{
 		Name: "bot", APIProtocol: "openai", Model: "gpt-x", TriggerMode: 3,
 		BaseURL: "https://169.254.169.254/",
 	})

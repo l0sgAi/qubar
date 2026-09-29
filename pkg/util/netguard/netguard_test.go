@@ -114,6 +114,31 @@ func TestCheckHostResolves(t *testing.T) {
 	}
 }
 
+type errResolver struct{ err error }
+
+func (r errResolver) LookupNetIP(context.Context, string, string) ([]netip.Addr, error) {
+	return nil, r.err
+}
+
+// 解析失败分类：临时故障（超时 / SERVFAIL）可重试；NXDOMAIN 等确定性失败与拦截同文案（不泄露内网域名是否存在）。
+func TestCheckHostResolves_DNSFailureKinds(t *testing.T) {
+	ctx := context.Background()
+	for name, tc := range map[string]struct {
+		err  error
+		want error
+	}{
+		"timeout":  {&net.DNSError{Err: "i/o timeout", Name: "h", IsTimeout: true}, ErrUnresolvable},
+		"servfail": {&net.DNSError{Err: "server misbehaving", Name: "h", IsTemporary: true}, ErrUnresolvable},
+		"deadline": {context.DeadlineExceeded, ErrUnresolvable},
+		"nxdomain": {&net.DNSError{Err: "no such host", Name: "h", IsNotFound: true}, ErrBlocked},
+		"other":    {errors.New("boom"), ErrBlocked},
+	} {
+		if err := CheckHostResolves(ctx, errResolver{tc.err}, "h.example", false); !errors.Is(err, tc.want) {
+			t.Errorf("%s: want %v, got %v", name, tc.want, err)
+		}
+	}
+}
+
 func TestControl(t *testing.T) {
 	c := Control(false)
 	if err := c("tcp", "93.184.216.34:443", nil); err != nil {

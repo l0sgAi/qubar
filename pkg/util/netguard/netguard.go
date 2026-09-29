@@ -8,6 +8,9 @@
 //
 // allowPrivate=true（配置 aiagent.allow_private_base_url）时两道闸都放行 http 与内网地址，
 // 仅用于本地开发或内网自建模型网关。
+//
+// 注意：NewHTTPClient 不读取 HTTPS_PROXY / HTTP_PROXY 环境变量（allowPrivate 与否都一样），
+// 依赖出口代理的部署需保证目标可直连。
 package netguard
 
 import (
@@ -26,6 +29,10 @@ import (
 
 // ErrBlocked 目标 URL 或地址不被允许。对外统一文案，不区分具体原因（避免成为内网探测 oracle）。
 var ErrBlocked = errors.New("destination not allowed")
+
+// ErrUnresolvable 保存时 DNS 暂时不可用（超时 / SERVFAIL），可重试。
+// 只用于临时故障；NXDOMAIN 等确定性失败仍归 ErrBlocked，避免泄露内网域名是否存在。
+var ErrUnresolvable = errors.New("host could not be resolved, retry later")
 
 // blockedPrefixes net/netip 的 Is* 判断之外还需拦截的特殊用途网段。
 var blockedPrefixes = mustPrefixes(
@@ -135,8 +142,9 @@ type Resolver interface {
 	LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error)
 }
 
-// CheckHostResolves 解析 host，任一结果落在拦截网段即拒绝；解析失败同样拒绝（统一文案）。
-// 仅用于保存时的提前反馈，连接时由 NewHTTPClient 再次强制校验。
+// CheckHostResolves 解析 host，任一结果落在拦截网段即拒绝。
+// 解析失败：临时故障（超时 / SERVFAIL）返回 ErrUnresolvable 供调用方提示重试，其余（NXDOMAIN、无记录）
+// 与拦截同文案返回 ErrBlocked。仅用于保存时的提前反馈，连接时由 NewHTTPClient 再次强制校验。
 func CheckHostResolves(ctx context.Context, r Resolver, host string, allowPrivate bool) error {
 	if allowPrivate {
 		return nil
@@ -151,7 +159,13 @@ func CheckHostResolves(ctx context.Context, r Resolver, host string, allowPrivat
 		r = net.DefaultResolver
 	}
 	addrs, err := r.LookupNetIP(ctx, "ip", host)
-	if err != nil || len(addrs) == 0 {
+	if err != nil {
+		if isTemporaryDNSError(err) {
+			return ErrUnresolvable
+		}
+		return ErrBlocked
+	}
+	if len(addrs) == 0 {
 		return ErrBlocked
 	}
 	for _, a := range addrs {
@@ -160,6 +174,15 @@ func CheckHostResolves(ctx context.Context, r Resolver, host string, allowPrivat
 		}
 	}
 	return nil
+}
+
+// isTemporaryDNSError 解析超时或 DNS 服务端临时故障（非 NXDOMAIN）。
+func isTemporaryDNSError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var dnsErr *net.DNSError
+	return errors.As(err, &dnsErr) && !dnsErr.IsNotFound && (dnsErr.IsTimeout || dnsErr.IsTemporary)
 }
 
 // Control 供 net.Dialer.Control 使用：在建立连接前校验解析后的真实 IP。
