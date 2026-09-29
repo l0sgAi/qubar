@@ -288,6 +288,10 @@ The image is distroless (nonroot, no shell) and contains no config. It has a bui
 | `GET /healthz` | Liveness: 200 while the process is up; no dependency checks |
 | `GET /readyz` | Readiness: 200 only if PostgreSQL and Redis respond, else 503. Elasticsearch is reported but optional |
 
+#### Production deployment
+
+Single-VPS stack (Docker Compose + Cloudflare Tunnel + R2), Terraform and the GitHub Actions pipeline (merge to `main` → CI → build → deploy) live in [`deploy/`](deploy/README.md); design and cost in [`docs/deploy/low-cost-deployment-plan.md`](docs/deploy/low-cost-deployment-plan.md).
+
 ## 🌐 API Endpoints
 
 ### Auth (no login required)

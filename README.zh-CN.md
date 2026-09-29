@@ -288,6 +288,10 @@ docker run -p 8888:8888 -v "$PWD/configs/config.yaml:/etc/qubar/config.yaml:ro" 
 | `GET /healthz` | 存活：进程在即 200，不检查依赖 |
 | `GET /readyz` | 就绪：PostgreSQL 与 Redis 均可用才 200，否则 503；Elasticsearch 仅报告状态（可选依赖） |
 
+#### 生产部署
+
+单机 VPS 方案（Docker Compose + Cloudflare Tunnel + R2）、Terraform 与 GitHub Actions 流水线（合并 main → CI → 构建 → 部署）见 [`deploy/`](deploy/README.md)；设计与成本见 [`docs/deploy/low-cost-deployment-plan.md`](docs/deploy/low-cost-deployment-plan.md)（英文）。
+
 ## 🌐 API 端点
 
 ### 认证（无需登录）

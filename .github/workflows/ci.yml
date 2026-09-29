@@ -1,0 +1,102 @@
+# CI：PR 上跑；合并到 main 时由 deploy.yml 复用（workflow_call），CI 不过就不部署。
+name: ci
+
+on:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  go:
+    name: go build / vet / test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test -race -count=1 ./pkg/...
+
+  image:
+    name: docker build + scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: qubar:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Trivy (fixable CRITICAL/HIGH fail the build)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: qubar:ci
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+  deploy-config:
+    name: deploy files (shellcheck / compose / config drift / actionlint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck -x deploy/scripts/*.sh deploy/host/*.sh deploy/compose/postgres/initdb/*.sh
+      - name: compose file is valid (dummy env)
+        run: |
+          cp deploy/compose/.env.example /tmp/ci.env
+          # 占位：.env.example 里必填项留空，补上非空假值只为通过 ${VAR:?} 检查
+          for k in PG_SUPERUSER_PASSWORD PG_OWNER_PASSWORD PG_APP_PASSWORD PG_DEBEZIUM_PASSWORD REDIS_PASSWORD DATA_KEY \
+                   S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY ES_VERSION DEBEZIUM_TAG ES_SINK_VERSION CLOUDFLARE_TUNNEL_TOKEN; do
+            sed -i "s|^${k}=.*|${k}=x|" /tmp/ci.env
+          done
+          docker compose --env-file /tmp/ci.env -f deploy/compose/compose.prod.yml config -q
+      - name: prod config has the same keys as the template
+        run: |
+          python3 - <<'PY'
+          import sys, yaml
+          def keys(d, p=""):
+              out = set()
+              for k, v in d.items():
+                  out |= keys(v, p + k + ".") if isinstance(v, dict) else {p + k}
+              return out
+          a = keys(yaml.safe_load(open("configs/config.example.yaml")))
+          b = keys(yaml.safe_load(open("deploy/config/config.prod.yaml")))
+          if a != b:
+              print("only in example:", sorted(a - b)); print("only in prod:", sorted(b - a)); sys.exit(1)
+          PY
+      - name: actionlint
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+
+  terraform:
+    name: terraform fmt / validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: deploy/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate

@@ -1,0 +1,20 @@
+{
+  "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+  "tasks.max": "1",
+  "plugin.name": "pgoutput",
+  "database.hostname": "postgres",
+  "database.port": "5432",
+  "database.user": "debezium",
+  "database.password": "${PG_DEBEZIUM_PASSWORD}",
+  "database.dbname": "qubar",
+  "topic.prefix": "pg",
+  "schema.include.list": "domains",
+  "publication.name": "dbz_publication",
+  "publication.autocreate.mode": "disabled",
+  "slot.name": "qubar_dbz",
+  "snapshot.mode": "initial",
+  "tombstones.on.delete": "true",
+  "decimal.handling.mode": "string",
+  "time.precision.mode": "connect",
+  "heartbeat.interval.ms": "30000"
+}

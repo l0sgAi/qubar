@@ -1,0 +1,226 @@
+# Qubar 生产配置（单机低成本方案）：只放「非机密」值，随仓库版本化。
+# 机密与随环境变化的值（域名、密码、密钥、端点）一律由 compose 用 QUBAR_* 环境变量注入，
+# 见 deploy/compose/compose.prod.yml 与 pkg/conf/env.go。
+# CI 会校验本文件的 key 集合与 configs/config.example.yaml 一致（防漂移）。
+server:
+  port: 8888
+  mode: release # 当前代码未读取（hertz 无 gin 式 mode），保留作环境标识
+
+# CORS 配置
+cors:
+  allowed_origins:
+    - "https://qubar.site"
+    # 本地开发时放开（生产勿开）：
+    # - "http://localhost:*"
+    # - "http://127.0.0.1:*"
+
+app:
+  name: interestBar
+  version: v1.0.0
+log:
+  level: info # 本地调试可改 debug
+  format: console
+  director: ./logs
+pgsql:
+  path: postgres # 由 QUBAR_PGSQL_PATH 注入
+  port: 5432
+  config: sslmode=disable TimeZone=Asia/Shanghai # 同机容器内网，不出主机
+  db_name: qubar
+  username: qubar_web_app
+  password: "CHANGE_ME"
+  max_idle_conns: 10
+  max_open_conns: 100
+  log_mode: error # debug 会打印全部 SQL（含用户数据），仅本地排障时临时开启
+oauth:
+  # proxy_url: "http://127.0.0.1:6268" # OAuth 出站代理（本地开发）；生产环境留空直连
+  google:
+    client_id: "xxx"
+    client_secret: "xxx"
+    redirect_url: "xxx/auth/google/callback"
+    frontend_redirect_url: "xxx/success"
+  github:
+    client_id: "xxx"
+    client_secret: "xxx"
+    redirect_url: "xxx/auth/github/callback"
+    frontend_redirect_url: "xxx/success"
+  microsoft:
+    client_id: "xxx"
+    client_secret: "xxx"
+    redirect_url: "xxx/auth/microsoft/callback"
+    frontend_redirect_url: "xxx/success"
+
+redis:
+  host: "redis"
+  port: 6379
+  password: ""
+  db: 0
+  pool_size: 10
+# Sa-Token 配置 (可选,用于覆盖默认配置)
+sa_token:
+  token_name: "satoken" # 请求头名称
+  timeout: 259200 # 3天过期时间(秒)
+  active_timeout: 1800 # 30分钟活跃检测(秒)
+  is_concurrent: true # 允许并发登录
+  is_share: false # 不共享session
+
+# AWS S3 对象存储配置
+s3:
+  access_key_id: "xxx" # AWS 访问密钥 ID
+  secret_access_key: "xxx" # AWS 访问密钥
+  region: "auto" # Cloudflare R2 固定填 auto
+  bucket: "xxx" # S3 存储桶名称
+  endpoint: "" # 可选: 自定义端点 (用于兼容 S3 的服务，如 MinIO)
+  presign_url_expire: 3600 # 预签名 URL 过期时间(秒)，默认 1 小时
+  cloudfront_domain: "xxx" # CloudFront 分发域名（用于生成文件访问 URL）
+
+# Mailtrap 邮件发送配置
+mailtrap:
+  api_token: "xxx" # Mailtrap API Token
+  sender_email: "hello@demomailtrap.co" # 默认发件人邮箱
+  sender_name: "Qubar" # 默认发件人名称
+  api_url: "https://send.api.mailtrap.io/api/send" # API 地址
+  templates:
+    verification_code:
+      zh: "0949ad10-fcef-47b9-bb44-562697a7748e" # 中文验证码模板
+      en: "b3a087bd-b578-4345-bd9b-daf11e6a8bfe" # 英文验证码模板
+    password_reset:
+      zh: "b5e1132d-4401-41a4-b562-8b0a6d8fb792" # 中文找回密码模板 UUID（需在 Mailtrap 平台创建后填入）
+      en: "a757cb90-a638-486e-92e7-0bce2b8839b4" # 英文找回密码模板 UUID（create on Mailtrap first）
+
+# Elasticsearch 配置
+elasticsearch:
+  url: "http://elasticsearch:9200" # 同机容器内网
+  index_prefix: "pg.domains" # ES 索引前缀（用于构建完整索引名）
+  refresh_interval: "5s" # 索引刷新间隔，提升性能
+
+# Redpanda 配置 (Kafka兼容)
+redpanda:
+  brokers:
+    - "redpanda:9092"
+  topic: "circle_statistics" # 统计数据topic
+  consumer_group: "circle_statistics_consumer_group" # 消费者组
+  flush_interval: 27 # 消费者刷新间隔(分钟)
+  flush_messages: 1000 # 消费者批量刷新消息数量阈值
+  post_topic: "post_statistics" # 帖子统计数据topic
+  post_consumer_group: "post_statistics_consumer_group" # 帖子统计消费者组
+  post_flush_interval: 15 # 帖子统计刷新间隔(分钟)
+  post_stats_ttl: 43 # 帖子统计Redis缓存TTL(分钟)
+  like_event_topic: "like_events" # 点赞事件topic
+  like_event_consumer_group: "like_events_consumer_group" # 点赞事件消费者组
+  like_event_flush_interval: 10 # 点赞事件刷写间隔(秒)
+  collect_event_topic: "collect_events" # 收藏事件topic
+  collect_event_consumer_group: "collect_events_consumer_group" # 收藏事件消费者组
+  collect_event_flush_interval: 10 # 收藏事件刷写间隔(秒)
+  history_event_topic: "post_view_history" # 浏览历史事件topic
+  history_event_consumer_group: "post_view_history_consumer_group" # 浏览历史事件消费者组
+  history_event_flush_interval: 10 # 浏览历史事件刷写间隔(秒)
+  post_hot_topic: "post_hot" # 帖子热度增量topic
+  post_hot_consumer_group: "post_hot_consumer_group" # 帖子热度消费者组
+  post_hot_flush_interval: 13 # 帖子热度刷新间隔(分钟)
+  post_hot_flush_messages: 500 # 帖子热度批量刷新条数阈值
+  circle_hot_flush_interval: 34 # 圈子热度落库间隔(分钟)
+  circle_hot_ttl: 50 # 圈子热度累加器key TTL(小时)
+  post_interaction_topic: "post_interaction" # 帖子互动事件topic（CF 灌数）
+  post_interaction_consumer_group: "post_interaction_consumer_group" # 帖子互动消费者组
+  post_interaction_flush_interval: 2 # 帖子互动刷新间隔(分钟)
+  post_interaction_flush_messages: 1000 # 帖子互动批量刷新条数阈值
+  notice_event_topic: "notification_events" # 通知事件topic（消息中心）
+  notice_event_consumer_group: "notification_events_consumer_group" # 通知事件消费者组
+  notice_event_flush_interval: 5 # 通知落库间隔(秒)
+
+# 消息中心配置（设计见 docs/notice-design.md）
+notice:
+  mention_max: 10 # 单条内容 @ 提及用户上限(<=0 兜底 10)
+
+# 未读通知数 SSE 实时推送（设计见 docs/design/sse-notification-design.md）
+notice_stream:
+  enabled: true            # false 时不注册路由（灰度开关）
+  heartbeat_sec: 25        # 心跳+token复检周期(秒)，<=0 兜底 25
+  max_conns_per_user: 5    # 每用户连接上限，<=0 兜底 5
+  coalesce_ms: 1000        # 合并推送窗口(毫秒)，<=0 兜底 1000
+  retry_ms: 5000           # 写给客户端的重连建议(毫秒)，<=0 兜底 5000
+
+# 热度计算配置（权重 + 上限）
+hot:
+  weight:
+    post_like: 2      # 帖子点赞
+    post_collect: 5   # 帖子收藏
+    post_share: 7     # 帖子分享（TODO: 分享功能未实现，预留）
+    comment: 5        # 评论
+    comment_like: 1   # 评论点赞
+  cap:
+    comment: 5000     # 评论 hot 贡献上限（=1000 条，weight 整数倍）
+    comment_like: 25000 # 评论点赞 hot 贡献上限（weight 整数倍）
+
+# 推荐流配置（首页「推荐」tab）
+recommend:
+  cf:
+    enabled: true                  # 是否启用 CF（灌数 + Syncer 全开关）
+    interaction_window_days: 90    # 共现计算回溯窗口(天)
+    candidate_fresh_days: 30       # 候选帖创建时间窗(天)，防爆
+    min_cooccur: 2                 # 最小共现次数(砍噪声)
+    topk: 50                       # 每帖保留相似帖数
+    seed_collect: 20               # C5 召回取收藏 seed 数(P2)
+    seed_like: 30                  # C5 召回取点赞 seed 数(P2)
+    recall_top: 40                 # C5 输出候选数(P2)
+    zset_ttl_hours: 48             # cf:item ZSET TTL(小时)
+    sync_interval_hours: 24        # ItemCFSyncer 运行间隔(小时)
+    cleanup_days: 120              # interaction 行保留天数(超出删除)
+  feed:
+    pool_size: 150                 # 候选池大小（各路按配额比例填充）
+    ttl_minutes: 30                # 候选池 TTL(分钟)
+    quota_c1: 35                   # 兴趣圈子热门配额(%)
+    quota_c2: 25                   # 全局热门配额(%)
+    quota_c3: 15                   # 行为圈子配额(%)
+    quota_c4: 10                   # 最新配额(%)
+    quota_c5: 15                   # CF 相似配额(%)
+    exclude_interacted: true       # 剔除已点赞/收藏/浏览过的帖
+    interest_circles_ttl_minutes: 120 # C3 行为圈子缓存 TTL(分钟)
+
+# 热点榜配置（trending 领域 + TrendingRankSyncer）。设计见 docs/trending-design.md §九
+trending:
+  flush_interval_minutes: 5        # TrendingRankSyncer 周期(分钟)
+  top_n: 100                       # 每个 ZSET 榜单保留条数(> max_size 留翻页余量)
+  windows: ["24h", "7d"]           # 启用的时间窗
+  default_size: 20                 # 接口默认 size
+  max_size: 50                     # 接口 size 上限
+
+# 发现页配置（discover 领域 + DiscoverPoolSyncer）。设计见 docs/discover-design.md §九
+discover:
+  refresh_interval_minutes: 10     # DiscoverPoolSyncer 周期(分钟)
+  pool_size: 200                   # 每分区候选池大小(采样数)
+  min_pool_posts: 50               # 反气泡剔除后帖子最少保留数(不足则不排除重采)
+  ttl_minutes: 30                  # 候选池 + token TTL(分钟)
+  default_size: 20                 # 接口默认 size
+  max_size: 50                     # 接口 size 上限
+  seed_limit: 500                  # 反气泡读取已交互帖上限(liked/collected/viewed 各)
+
+# AI 机器人回复执行链路（<=0 时用代码内默认值）
+aiagent:
+  timeout_sec: 30          # LLM 单次调用超时(秒)，默认 30
+  max_content_chars: 4000  # Prompt 各段(title/summary/评论)截断长度，默认 4000
+  reply_concurrency: 3     # 关键词触发异步执行并发上限，默认 3
+  allow_private_base_url: false # true 时 base_url 允许 http/内网地址（仅本地开发或内网网关；#48 防 SSRF）
+  # ⚠️ LLM 出站直连，不读取 HTTPS_PROXY / HTTP_PROXY 环境变量（#48）：经代理时拨号校验只能看到代理地址，
+  # 防 SSRF 失效。依赖出口代理访问 OpenAI / Anthropic 等的部署需改为直连可达（或换用可直连的中转 base_url），
+  # 否则机器人调用会报拨号 / 超时错误。
+
+# 安全相关配置
+security:
+  # 密码哈希参数 (Argon2id, OWASP 2024 推荐 RFC 9106)
+  # 调参指南：单次哈希耗时控制在 100~300ms 之间，过长会拖慢登录/注册。
+  # 任一字段留空/为 0 时使用代码内默认值。
+  password_hash:
+    time: 3            # 迭代次数 (>=2)，默认 3
+    memory: 65536      # 内存 KiB (>=19456=19MB)，默认 65536=64MB
+    threads: 4         # 并行度 (1-4)，默认 4
+    key_len: 32        # 输出哈希长度（字节），默认 32
+    salt_len: 16       # 随机 salt 长度（字节），默认 16
+
+  # 敏感字段应用层加密密钥（AES-256-GCM，任意长度字符串经 SHA-256 派生）
+  # 用于 ai_agent.api_key 入库前加密。生产环境必须配置且妥善保管。
+  # 生成：openssl rand -base64 32 。为空时 AI 机器人 api_key 相关接口返回 503。
+  # ⚠️ 不支持轮换：丢失或更换后，已加密入库的 api_key 全部无法解密。务必离线备份。
+  # 各环境使用独立密钥，禁止复用开发密钥。
+  data_key: ""
+

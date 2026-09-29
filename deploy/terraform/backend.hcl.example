@@ -1,0 +1,19 @@
+# terraform init -backend-config=backend.hcl   （backend.hcl 已 git-ignore）
+# 先在 R2 手工建一个私有 bucket 存状态（鸡生蛋问题，一次性），并建一把只限该 bucket 的 R2 API token。
+bucket = "qubar-tfstate"
+key    = "prod/terraform.tfstate"
+region = "auto"
+
+endpoints = {
+  s3 = "https://<account_id>.r2.cloudflarestorage.com"
+}
+
+# R2 不是 AWS：关掉 AWS 专属校验
+skip_credentials_validation = true
+skip_region_validation      = true
+skip_requesting_account_id  = true
+skip_metadata_api_check     = true
+skip_s3_checksum            = true
+use_path_style              = true
+
+# 访问密钥走环境变量：AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY（填 R2 token 的）

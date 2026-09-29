@@ -1,0 +1,152 @@
+# 合并到 main → 跑 CI → 构建多架构镜像推 GHCR → 经 Cloudflare Access 的 SSH 部署到服务器 → 冒烟检查。
+# 失败（就绪探针不过）时服务器上的 deploy.sh 会自动回滚到上一版本，本 job 仍然标红。
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    # 只改文档不触发部署
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "跳过构建，直接部署已有镜像 tag（如 sha-1a2b3c4，用于手动回滚）。留空 = 构建当前提交。"
+        required: false
+        default: ""
+
+# 同一时刻只允许一个生产部署；排队而不是取消，避免部署到一半被打断。
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    if: ${{ github.event.inputs.tag == '' }}
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: build & push image
+    needs: ci
+    if: ${{ github.event.inputs.tag == '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: meta
+        run: |
+          echo "tag=sha-${GITHUB_SHA::7}" >>"$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >>"$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Go 在 BUILDPLATFORM 上交叉编译，最终 distroless 阶段没有 RUN，不需要 QEMU。
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+            ${{ steps.meta.outputs.image }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+  deploy:
+    name: deploy to production
+    needs: build
+    # build 被跳过（手动指定 tag）时也要跑；build 失败则不跑
+    if: ${{ !cancelled() && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # 在仓库 Settings → Environments → production 里可加「必须人工批准」。
+    environment:
+      name: production
+      url: ${{ vars.PUBLIC_API_URL }}
+    env:
+      TAG: ${{ github.event.inputs.tag || needs.build.outputs.tag }}
+      IMAGE: ${{ needs.build.outputs.image || format('ghcr.io/{0}', github.repository) }}
+      SSH_HOSTNAME: ${{ vars.SSH_HOSTNAME }}
+      SSH_HOST_KEY: ${{ vars.SSH_HOST_KEY }}
+      # cloudflared 从这两个环境变量读服务令牌
+      TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+      TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cloudflared
+        run: |
+          curl -fsSL -o cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          sudo install -m 0755 cloudflared /usr/local/bin/cloudflared
+          cloudflared --version
+
+      - name: Configure ssh (via Cloudflare Access)
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          install -d -m 700 ~/.ssh
+          umask 077
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_deploy
+          if [ -n "${SSH_HOST_KEY:-}" ]; then
+            echo "$SSH_HOST_KEY" > ~/.ssh/known_hosts
+            STRICT=yes
+          else
+            echo "::warning::SSH_HOST_KEY variable not set; trusting host key on first use"
+            STRICT=accept-new
+          fi
+          cat > ~/.ssh/config <<CFG
+          Host prod
+            HostName ${SSH_HOSTNAME}
+            User deploy
+            IdentityFile ~/.ssh/id_deploy
+            IdentitiesOnly yes
+            StrictHostKeyChecking ${STRICT}
+            ServerAliveInterval 15
+            ProxyCommand cloudflared access ssh --hostname %h
+          CFG
+
+      - name: Sync deploy files + env to server
+        env:
+          PROD_ENV_FILE: ${{ secrets.PROD_ENV_FILE }}
+        run: |
+          tar czf - -C deploy compose config scripts | ssh prod 'tar xzf - -C /opt/qubar && chmod +x /opt/qubar/scripts/*.sh'
+          # .env 通过 stdin 写入，不出现在命令行里
+          printf '%s\n' "$PROD_ENV_FILE" | ssh prod 'umask 077 && cat > /opt/qubar/.env'
+
+      - name: Deploy ${{ env.TAG }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # TAG 可能来自手动触发的输入：严格校验后才拼进远程命令（下面两行是有意的客户端展开）
+          [[ "$TAG" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || { echo "invalid tag: $TAG" >&2; exit 1; }
+          [[ "$IMAGE" =~ ^[a-z0-9./_-]+$ ]] || { echo "invalid image: $IMAGE" >&2; exit 1; }
+          # shellcheck disable=SC2029
+          # 私有镜像：用本次 job 的短期 GITHUB_TOKEN 登录 GHCR（job 结束即失效，服务器上不留长期凭据）
+          printf '%s' "$GH_TOKEN" | ssh prod "docker login ghcr.io -u '${GITHUB_ACTOR}' --password-stdin"
+          # shellcheck disable=SC2029
+          ssh prod "QUBAR_IMAGE='${IMAGE}' /opt/qubar/scripts/deploy.sh '${TAG}'"
+
+      - name: Smoke test (public URL)
+        env:
+          API_URL: ${{ vars.PUBLIC_API_URL }}
+        run: |
+          for _ in $(seq 1 12); do
+            if curl -fsS -m 10 "${API_URL}/healthz"; then echo; echo "ok"; exit 0; fi
+            sleep 5
+          done
+          echo "public /healthz did not come up" >&2
+          exit 1

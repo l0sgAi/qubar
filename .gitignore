@@ -87,3 +87,10 @@ tmp/
 
 # Real runtime config (secrets). Commit only configs/config.example.yaml (#49).
 configs/config.yaml
+
+# terraform
+deploy/terraform/.terraform/
+deploy/terraform/*.tfstate*
+deploy/terraform/backend.hcl
+deploy/terraform/terraform.tfvars
+deploy/terraform/crash.log

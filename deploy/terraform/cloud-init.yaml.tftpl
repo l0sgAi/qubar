@@ -1,0 +1,9 @@
+#cloud-config
+# 首次开机：落盘 bootstrap.sh 并执行（之后 user_data 变更不会重建服务器，见 server.tf 的 ignore_changes）。
+write_files:
+  - path: /root/bootstrap.sh
+    permissions: "0700"
+    encoding: b64
+    content: ${bootstrap_b64}
+runcmd:
+  - [bash, -c, "DEPLOY_SSH_PUBKEY='${deploy_pubkey}' ALLOW_SSH_FROM='${allow_ssh_from}' /root/bootstrap.sh > /var/log/qubar-bootstrap.log 2>&1"]

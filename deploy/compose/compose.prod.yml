@@ -1,0 +1,245 @@
+# Qubar 单机生产栈（低成本方案，见 docs/deploy/low-cost-deployment-plan.md）。
+#
+#   cd /opt/qubar/compose && docker compose --env-file ../.env -f compose.prod.yml up -d
+#
+# 网络：所有端口只绑 127.0.0.1（或不发布），公网入口只有 Cloudflare Tunnel（cloudflared 主动外连）。
+# Docker 发布的端口会绕过 ufw，所以绝不能写成 "8888:8888"。
+name: qubar
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  qubar:
+    image: ${QUBAR_IMAGE:-ghcr.io/l0sgai/qubar}:${QUBAR_TAG:-latest}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8888:8888"
+    # 应用只在启动时连 Redpanda / ES；起早了会「静默降级」到下次重启（producer/consumer 不重连），所以要等它们健康。
+    # 整机重启时 Docker 不遵守 depends_on，由 qubar-postboot.service（host/bootstrap.sh）兜底重启一次应用。
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      redpanda: { condition: service_healthy }
+      elasticsearch: { condition: service_healthy }
+    volumes:
+      - ../config/config.prod.yaml:/etc/qubar/config.yaml:ro
+    environment:
+      GOMEMLIMIT: 600MiB
+      QUBAR_PGSQL_PATH: postgres
+      QUBAR_PGSQL_PASSWORD: ${PG_APP_PASSWORD:?set PG_APP_PASSWORD}
+      QUBAR_REDIS_HOST: redis
+      QUBAR_REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
+      QUBAR_ELASTICSEARCH_URL: http://elasticsearch:9200
+      QUBAR_REDPANDA_BROKERS: redpanda:9092
+      QUBAR_SECURITY_DATA_KEY: ${DATA_KEY:?set DATA_KEY}
+      QUBAR_S3_ENDPOINT: ${S3_ENDPOINT:?set S3_ENDPOINT}
+      QUBAR_S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET}
+      QUBAR_S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID}
+      QUBAR_S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY}
+      QUBAR_S3_CLOUDFRONT_DOMAIN: ${S3_PUBLIC_DOMAIN:?set S3_PUBLIC_DOMAIN}
+      QUBAR_CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?set CORS_ALLOWED_ORIGINS}
+      QUBAR_MAILTRAP_API_TOKEN: ${MAILTRAP_API_TOKEN:-}
+      QUBAR_OAUTH_GOOGLE_CLIENT_ID: ${OAUTH_GOOGLE_CLIENT_ID:-}
+      QUBAR_OAUTH_GOOGLE_CLIENT_SECRET: ${OAUTH_GOOGLE_CLIENT_SECRET:-}
+      QUBAR_OAUTH_GOOGLE_REDIRECT_URL: ${PUBLIC_API_URL:?set PUBLIC_API_URL}/auth/google/callback
+      QUBAR_OAUTH_GOOGLE_FRONTEND_REDIRECT_URL: ${PUBLIC_WEB_URL:?set PUBLIC_WEB_URL}/success
+      QUBAR_OAUTH_GITHUB_CLIENT_ID: ${OAUTH_GITHUB_CLIENT_ID:-}
+      QUBAR_OAUTH_GITHUB_CLIENT_SECRET: ${OAUTH_GITHUB_CLIENT_SECRET:-}
+      QUBAR_OAUTH_GITHUB_REDIRECT_URL: ${PUBLIC_API_URL:?set PUBLIC_API_URL}/auth/github/callback
+      QUBAR_OAUTH_GITHUB_FRONTEND_REDIRECT_URL: ${PUBLIC_WEB_URL:?set PUBLIC_WEB_URL}/success
+      QUBAR_OAUTH_MICROSOFT_CLIENT_ID: ${OAUTH_MICROSOFT_CLIENT_ID:-}
+      QUBAR_OAUTH_MICROSOFT_CLIENT_SECRET: ${OAUTH_MICROSOFT_CLIENT_SECRET:-}
+      QUBAR_OAUTH_MICROSOFT_REDIRECT_URL: ${PUBLIC_API_URL:?set PUBLIC_API_URL}/auth/microsoft/callback
+      QUBAR_OAUTH_MICROSOFT_FRONTEND_REDIRECT_URL: ${PUBLIC_WEB_URL:?set PUBLIC_WEB_URL}/success
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 768m
+    stop_grace_period: 45s
+    logging: *logging
+
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    # PG 18 镜像的数据目录在 /var/lib/postgresql/18/docker，官方要求挂载父目录 /var/lib/postgresql。
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PG_SUPERUSER_PASSWORD:?set PG_SUPERUSER_PASSWORD}
+      POSTGRES_DB: qubar
+      PG_OWNER_PASSWORD: ${PG_OWNER_PASSWORD:?set PG_OWNER_PASSWORD}
+      PG_APP_PASSWORD: ${PG_APP_PASSWORD}
+      PG_DEBEZIUM_PASSWORD: ${PG_DEBEZIUM_PASSWORD:?set PG_DEBEZIUM_PASSWORD}
+      TZ: Asia/Shanghai
+    command:
+      - postgres
+      # Debezium 逻辑复制；slot 落后时限制 WAL 保留，避免 Connect 挂了把磁盘写满
+      - -c
+      - wal_level=logical
+      - -c
+      - max_wal_senders=4
+      - -c
+      - max_replication_slots=4
+      - -c
+      - max_slot_wal_keep_size=4GB
+      # 8 GB 整机预算下的内存参数（16 GB 机器可翻倍）
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - effective_cache_size=2GB
+      - -c
+      - work_mem=8MB
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - max_connections=150
+      - -c
+      - wal_compression=on
+      - -c
+      - log_min_duration_statement=500
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d qubar"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    mem_limit: 1536m
+    shm_size: 256m
+    logging: *logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    command:
+      - sh
+      - -c
+      - exec redis-server /usr/local/etc/redis/redis.conf --requirepass "$$REDIS_PASSWORD"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    mem_limit: 640m
+    logging: *logging
+
+  redpanda:
+    image: redpandadata/redpanda:${REDPANDA_TAG:-latest}
+    restart: unless-stopped
+    volumes:
+      - redpandadata:/var/lib/redpanda/data
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=1G
+      - --reserve-memory=0M
+      - --overprovisioned
+      - --check=false
+      - --node-id=0
+      - --kafka-addr=internal://0.0.0.0:9092
+      - --advertise-kafka-addr=internal://redpanda:9092
+      # 代码依赖自动建 topic（AllowAutoTopicCreation）；事件是过渡数据，保留 3 天即可
+      # 注意：--set 与 key=value 必须是两个参数（--set=k=v 会被 Redpanda 拒绝）
+      - --set
+      - redpanda.auto_create_topics_enabled=true
+      - --set
+      - redpanda.log_retention_ms=259200000
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    mem_limit: 1400m
+    logging: *logging
+
+  elasticsearch:
+    build:
+      context: ./elasticsearch
+      args:
+        # 必须与你本地跑通的 ES 版本一致（curl localhost:9200 看 version.number），且 IK 有同版本发行
+        ES_VERSION: ${ES_VERSION:?set ES_VERSION}
+    image: qubar/elasticsearch-ik:${ES_VERSION}
+    restart: unless-stopped
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    environment:
+      discovery.type: single-node
+      # 网络隔离（仅 compose 内网可达）。当前代码没有 ES 认证选项，所以关掉 xpack security。
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms1g -Xmx1g
+      ingest.geoip.downloader.enabled: "false"
+    ulimits:
+      nofile: { soft: 65535, hard: 65535 }
+      memlock: { soft: -1, hard: -1 }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s' >/dev/null"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 60s
+    mem_limit: 2g
+    logging: *logging
+
+  connect:
+    build:
+      context: ./connect
+      args:
+        DEBEZIUM_TAG: ${DEBEZIUM_TAG:?set DEBEZIUM_TAG}
+        ES_SINK_VERSION: ${ES_SINK_VERSION:?set ES_SINK_VERSION}
+    image: qubar/connect:${DEBEZIUM_TAG}-${ES_SINK_VERSION}
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      redpanda: { condition: service_healthy }
+      elasticsearch: { condition: service_healthy }
+    ports:
+      - "127.0.0.1:8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: redpanda:9092
+      GROUP_ID: qubar-connect
+      CONFIG_STORAGE_TOPIC: _connect_configs
+      OFFSET_STORAGE_TOPIC: _connect_offsets
+      STATUS_STORAGE_TOPIC: _connect_status
+      CONFIG_STORAGE_REPLICATION_FACTOR: "1"
+      OFFSET_STORAGE_REPLICATION_FACTOR: "1"
+      STATUS_STORAGE_REPLICATION_FACTOR: "1"
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx640m
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8083/connectors >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    mem_limit: 1g
+    logging: *logging
+
+  # 公网入口：Cloudflare Tunnel（出站长连接，服务器不开任何入站端口）。
+  # host 网络：既能转发到 127.0.0.1:8888（API），也能转发到 127.0.0.1:22（CI 的 SSH，经 Cloudflare Access）。
+  cloudflared:
+    image: cloudflare/cloudflared:${CLOUDFLARED_TAG:-latest}
+    restart: unless-stopped
+    network_mode: host
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN}
+    mem_limit: 128m
+    logging: *logging
+
+volumes:
+  pgdata:
+  redisdata:
+  redpandadata:
+  esdata:
