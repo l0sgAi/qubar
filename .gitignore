@@ -84,3 +84,6 @@ tmp/
 
 # Test files
 *.test
+
+# Real runtime config (secrets). Commit only configs/config.example.yaml (#49).
+configs/config.yaml

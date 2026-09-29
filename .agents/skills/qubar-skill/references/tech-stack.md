@@ -93,7 +93,7 @@ var Config *AppConfig
 - `initFromNacos` 带 `defer recover()` 优雅回落。
 
 ### 3.5 加新配置项的范式（必须三处同步）
-1. `configs/config.yaml` 加 key + 默认值。
+1. `configs/config.example.yaml` 加 key + 默认值（模板入库；`configs/config.yaml` 已 git-ignore，#49）。密钥类字段模板里留空/占位。
 2. `pkg/conf/conf.go` 对应节结构体加字段（带 `mapstructure`/`json`/`yaml` tag）。
 3. 消费处读 `conf.Config.Xxx`，**`<=0` 提供常量兜底**（仿 `circle_hot_syncer.go:40` interval 默认 34）。
 参考现有节：`Hot`（`conf.go:168`）、`Recommend`（`conf.go:190`）、`Feed{PoolSize,TTLMinutes,QuotaC1..C5,...}`（`conf.go:196`）。

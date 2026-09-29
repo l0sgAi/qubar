@@ -44,7 +44,7 @@ qubar（Go module `interestBar`）是一个 DDD 模块化单体的兴趣社区�
 1. **有没有现成的？** 先翻 `references/domain-guide.md` 或 grep，确认要加的能力不是某个域已实现的方法（如 `circleRepo.GetByIDs`、`UserFacade.GetBriefs`）。**复用优先于新建。**
 2. **改动落在哪一层？** 每层职责固定（见"四层职责"）。别把 infra 接口写进 application，别把 ES/Redis import 进 domain。
 3. **要不要跨域？** 跨域必须走 Facade/Port 接口 + composition 桥接器，**禁止** import 兄弟域包。
-4. **新配置项？** 同步改 `configs/config.yaml` + `pkg/conf/conf.go` 结构体，并提供 `<=0` 兜底默认值。
+4. **新配置项？** 同步改 `configs/config.example.yaml`（模板，入库）+ `pkg/conf/conf.go` 结构体，并提供 `<=0` 兜底默认值。
 5. **新后台 job？** 仿 `circle_hot_syncer.go`（`{mu,ticker,stopChan,stopped}` + 优雅排干），在 `cmd/apps/server.go` 启停。
 6. **新 Redis key？** 前缀常量 + `GetXxxKey` helper 加到 `pkg/server/storage/redis/constants.go`，写明类型/TTL/语义。
 7. **设计文档先写？** 较大改动（新子系统/新聚合接口）参照 `docs/active-circles-design.md` 范式先写设计文档，caveman mode 规划待审。
@@ -121,6 +121,6 @@ go run ./cmd -c configs/config.yaml -b configs/bootstrap.yaml   # 本地启动�
 - 装配根：`pkg/composition/server.go`（RegisterDomainRoutes）、`facade_bridges.go`、`deps.go`、`auth.go`
 - 共享内核：`pkg/shared/domain/base.go`（NewID/BeforeCreate）、`appctx/context.go`、`routing/group.go`、`httputil/response.go`
 - 基础设施全局：`pkg/server/storage/{db/pgsql,redis,elasticsearch,redpanda,s3}`
-- 配置：`pkg/conf/conf.go`（Config 结构体）、`configs/config.yaml`、`configs/bootstrap.yaml`
+- 配置：`pkg/conf/conf.go`（Config 结构体）、`configs/config.example.yaml`（模板；本地 `configs/config.yaml` 已 git-ignore，勿提交密钥）、`configs/bootstrap.yaml`
 - schema：`docs/pgsql-ddl/`（DDL 权威来源，按领域拆分，入口 README.md；docs/db.md 仅作跳转入口）
 - 路由抽象适配：`pkg/composition/hertzadapter/group.go`、`pkg/shared/appctx/hertzadapter/adapter.go`
