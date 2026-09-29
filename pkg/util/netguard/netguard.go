@@ -19,6 +19,7 @@ import (
 	"net/netip"
 	"net/url"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -186,18 +187,13 @@ const maxRedirects = 10
 //   - 每次拨号经 Control 校验目标 IP（含重定向后的连接）
 //   - 不走环境变量代理（否则只能校验到代理地址，真实目标失控）
 //   - 重定向不得降级为 http（allowPrivate 时除外）
+//
+// Client 本身很轻，可每次调用新建；底层 Transport 按 allowPrivate 进程内共享，
+// 复用连接池（避免每次调用重新握手 TLS、以及每个新 Transport 的空闲连接滞留到 IdleConnTimeout）。
 func NewHTTPClient(timeout time.Duration, allowPrivate bool) *http.Client {
-	dialer := &net.Dialer{
-		Timeout:   10 * time.Second,
-		KeepAlive: 30 * time.Second,
-		Control:   Control(allowPrivate),
-	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
-	transport.DialContext = dialer.DialContext
 	return &http.Client{
 		Timeout:   timeout,
-		Transport: transport,
+		Transport: sharedTransport(allowPrivate),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= maxRedirects {
 				return fmt.Errorf("stopped after %d redirects", maxRedirects)
@@ -208,4 +204,35 @@ func NewHTTPClient(timeout time.Duration, allowPrivate bool) *http.Client {
 			return nil
 		},
 	}
+}
+
+// sharedTransports [0] = 受限（allowPrivate=false），[1] = 放行内网；首次使用时创建。
+var sharedTransports [2]struct {
+	once sync.Once
+	t    *http.Transport
+}
+
+// sharedTransport 返回 allowPrivate 对应的进程级共享 Transport。
+// 拨号校验挂在 Transport 的 DialContext 上，共享不削弱防护；两种模式各用独立连接池，互不复用。
+func sharedTransport(allowPrivate bool) *http.Transport {
+	i := 0
+	if allowPrivate {
+		i = 1
+	}
+	s := &sharedTransports[i]
+	s.once.Do(func() { s.t = newTransport(allowPrivate) })
+	return s.t
+}
+
+// newTransport 基于 http.DefaultTransport 的参数，替换为受限拨号器并禁用环境变量代理。
+func newTransport(allowPrivate bool) *http.Transport {
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Control:   Control(allowPrivate),
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DialContext = dialer.DialContext
+	return transport
 }

@@ -3,6 +3,7 @@ package netguard
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -156,5 +157,37 @@ func TestNewHTTPClient_RejectsDowngradeRedirect(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
 	if err := c.CheckRedirect(req, []*http.Request{{}}); !errors.Is(err, ErrBlocked) {
 		t.Errorf("want ErrBlocked on https->http redirect, got %v", err)
+	}
+}
+
+// Transport 按模式共享（连接复用），两种模式的连接池互不相通。
+func TestNewHTTPClient_SharesTransportPerMode(t *testing.T) {
+	if NewHTTPClient(time.Second, false).Transport != NewHTTPClient(2*time.Second, false).Transport {
+		t.Error("guarded clients should share one transport")
+	}
+	if NewHTTPClient(time.Second, true).Transport != NewHTTPClient(2*time.Second, true).Transport {
+		t.Error("allowPrivate clients should share one transport")
+	}
+	if NewHTTPClient(time.Second, false).Transport == NewHTTPClient(time.Second, true).Transport {
+		t.Error("guarded and allowPrivate clients must not share a transport")
+	}
+}
+
+// allowPrivate 客户端先连上内网并留下空闲连接后，受限客户端仍须在拨号时被拦截（不能复用对方连接池）。
+func TestNewHTTPClient_PooledPrivateConnNotReusedByGuarded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("internal"))
+	}))
+	defer srv.Close()
+
+	resp, err := NewHTTPClient(5*time.Second, true).Get(srv.URL)
+	if err != nil {
+		t.Fatalf("allowPrivate client: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close() // 连接回到 allowPrivate 的空闲池
+
+	if _, err := NewHTTPClient(5*time.Second, false).Get(srv.URL); !errors.Is(err, ErrBlocked) {
+		t.Errorf("want ErrBlocked at dial, got %v", err)
 	}
 }
