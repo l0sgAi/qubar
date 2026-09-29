@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"interestBar/pkg/conf"
 	"interestBar/pkg/logger"
+	"net/url"
+	"strconv"
 
 	sahertz "github.com/sa-tokens/sa-token-go/integrations/hertz"
 	"github.com/sa-tokens/sa-token-go/storage/redis"
@@ -17,25 +19,7 @@ import (
 // composition.RequireLogin 鉴权逻辑零改动。
 func InitSaToken() error {
 	// 创建 Redis 存储 (使用完整的 Redis URL)
-	var redisURL string
-
-	// 格式: redis://[password@]host:port/db
-	if conf.Config.Redis.Password != "" {
-		// 有密码的情况: redis://password@host:port/db
-		redisURL = fmt.Sprintf("redis://%s@%s:%d/%d",
-			conf.Config.Redis.Password,
-			conf.Config.Redis.Host,
-			conf.Config.Redis.Port,
-			conf.Config.Redis.D,
-		)
-	} else {
-		// 无密码的情况: redis://host:port/db
-		redisURL = fmt.Sprintf("redis://%s:%d/%d",
-			conf.Config.Redis.Host,
-			conf.Config.Redis.Port,
-			conf.Config.Redis.D,
-		)
-	}
+	redisURL := buildRedisURL(conf.Config.Redis.Host, conf.Config.Redis.Port, conf.Config.Redis.D, conf.Config.Redis.Password)
 
 	storage, err := redis.NewStorage(redisURL)
 	if err != nil {
@@ -84,4 +68,21 @@ func CloseSaToken() error {
 		}).Close()
 	}
 	return nil
+}
+
+// buildRedisURL 组装 Sa-Token redis 存储用的 URL：redis://[:password@]host:port/db。
+//
+// 密码必须放在 userinfo 的「密码」位（":" 之后）并做转义：
+// go-redis 把 "redis://pw@host" 解析成「用户名=pw、密码为空」，带密码的 Redis 会因此认证失败；
+// 密码含 @ / : # 等字符时不转义也会解析错位。
+func buildRedisURL(host string, port, db int, password string) string {
+	u := url.URL{
+		Scheme: "redis",
+		Host:   host + ":" + strconv.Itoa(port),
+		Path:   "/" + strconv.Itoa(db),
+	}
+	if password != "" {
+		u.User = url.UserPassword("", password)
+	}
+	return u.String()
 }
