@@ -1,0 +1,3 @@
+server_type           = "cax21"
+server_location       = "fsn1"
+deploy_ssh_public_key = "ssh-ed25519 AAAA... qubar-ci-deploy"

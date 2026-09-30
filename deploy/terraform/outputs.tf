@@ -7,11 +7,6 @@ output "ssh_hostname" {
   value       = local.ssh_fqdn
 }
 
-output "server_ipv4" {
-  description = "仅用于排障；公网无法直连（防火墙零入站）"
-  value       = try(hcloud_server.app[0].ipv4_address, null)
-}
-
 output "tunnel_token" {
   description = ".env 的 CLOUDFLARE_TUNNEL_TOKEN"
   value       = cloudflare_tunnel.qubar.tunnel_token

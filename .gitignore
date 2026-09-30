@@ -89,8 +89,8 @@ tmp/
 configs/config.yaml
 
 # terraform
-deploy/terraform/.terraform/
-deploy/terraform/*.tfstate*
-deploy/terraform/backend.hcl
-deploy/terraform/terraform.tfvars
+deploy/terraform/**/.terraform/
+deploy/terraform/**/*.tfstate*
+deploy/terraform/**/backend.hcl
+deploy/terraform/**/terraform.tfvars
 deploy/terraform/crash.log

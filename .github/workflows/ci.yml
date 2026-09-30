@@ -88,15 +88,19 @@ jobs:
           ./actionlint -color
 
   terraform:
-    name: terraform fmt / validate
+    name: terraform fmt / validate (${{ matrix.dir }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: [deploy/terraform, deploy/terraform/hetzner]
     defaults:
       run:
-        working-directory: deploy/terraform
+        working-directory: ${{ matrix.dir }}
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
-      - run: terraform fmt -check -recursive
+      - run: terraform fmt -check
       - run: terraform init -backend=false -input=false
       - run: terraform validate

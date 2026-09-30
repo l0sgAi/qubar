@@ -1,9 +1,4 @@
 cloudflare_account_id = "0123456789abcdef0123456789abcdef"
 cloudflare_zone_id    = "0123456789abcdef0123456789abcdef"
 domain                = "example.com"
-
-# Hetzner（不用 Hetzner 时：manage_server = false）
-manage_server         = true
-server_type           = "cax21"
-server_location       = "fsn1"
-deploy_ssh_public_key = "ssh-ed25519 AAAA... qubar-ci-deploy"
+r2_location           = "APAC"

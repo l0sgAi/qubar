@@ -8,7 +8,8 @@ compose/    compose.prod.yml, .env.example, postgres init, redis.conf, ES(+IK) a
 config/     config.prod.yaml — non-secret app config (secrets/domains come in as QUBAR_* env vars)
 scripts/    deploy.sh (rollout+rollback) · backup.sh · restore.sh · register-connectors.sh · postboot.sh
 host/       bootstrap.sh — one-time VPS setup (Docker, swap, sysctl, deploy user, sshd, firewall, systemd timers)
-terraform/  Hetzner server + firewall, Cloudflare tunnel/DNS/Access/R2 buckets
+terraform/  Cloudflare root: tunnel, DNS, Access (CI service token), R2 buckets
+terraform/hetzner/  OPTIONAL separate root: Hetzner server + firewall (Hetzner is Europe-only for the cheap ARM plans — not recommended for an Asian audience)
 ```
 
 ## First-time setup
@@ -19,17 +20,17 @@ terraform/  Hetzner server + firewall, Cloudflare tunnel/DNS/Access/R2 buckets
 |---|---|
 | Domain on Cloudflare (free plan) | Tunnel, Access and R2 custom domains need it. |
 | Cloudflare API token | Account: *Cloudflare Tunnel: Edit*, *Access: Apps and Policies: Edit*, *Access: Service Tokens: Edit*, *Workers R2 Storage: Edit*; Zone: *DNS: Edit*. → `CLOUDFLARE_API_TOKEN` |
-| Hetzner Cloud project + API token | Read/Write. → `HCLOUD_TOKEN` (skip if `manage_server=false`) |
+| A VPS ≥ 8 GB, Ubuntu 24.04 / Debian 12 | **Hong Kong** (e.g. Tencent Cloud Lighthouse 4c/8GB) or **Tokyo** (e.g. Contabo) for Singapore + Japan/Korea + mainland China users — see plan doc §3. Hetzner only via the optional `terraform/hetzner` root. |
 | R2 bucket for Terraform state | Create once by hand (chicken-and-egg), private, e.g. `qubar-tfstate`, plus an R2 API token limited to it. |
-| Deploy SSH key | `ssh-keygen -t ed25519 -f deploy_key -C qubar-ci-deploy` — public → Terraform, private → GitHub secret. |
+| Deploy SSH key | `ssh-keygen -t ed25519 -f deploy_key -C qubar-ci-deploy` — public → `bootstrap.sh`, private → GitHub secret. |
 
-### 2. Terraform
+### 2. Cloudflare (Terraform)
 
 ```bash
 cd deploy/terraform
 cp terraform.tfvars.example terraform.tfvars      # fill in
 cp backend.hcl.example backend.hcl                # fill in R2 endpoint
-export CLOUDFLARE_API_TOKEN=... HCLOUD_TOKEN=...
+export CLOUDFLARE_API_TOKEN=...
 export AWS_ACCESS_KEY_ID=<r2-token-id> AWS_SECRET_ACCESS_KEY=<r2-token-secret>   # state backend
 terraform init -backend-config=backend.hcl        # commit the generated .terraform.lock.hcl
 terraform plan && terraform apply
@@ -37,12 +38,36 @@ terraform plan && terraform apply
 
 Outputs you need: `tunnel_token`, `access_client_id`, `access_client_secret`, `ssh_hostname`.
 
-> The Cloudflare half of this config could not be `terraform validate`d where it was written (registry
-> blocked). If `init`/`validate` complains, the fix is small and local — please report it or fix it in the PR.
+> This root could not be `terraform validate`d where it was written (registry blocked). If `init`/`validate`
+> complains, the fix is small and local — please report it or fix it in the PR.
 
-**Not using Hetzner?** Set `manage_server=false`, rent any Ubuntu 24.04/Debian 12 box (≥ 8 GB), then as root:
-`DEPLOY_SSH_PUBKEY="ssh-ed25519 …" bash deploy/host/bootstrap.sh`.
-(Set `ALLOW_SSH_FROM=<your CIDR>` if you can't use the tunnel for the first login.)
+### 2b. The server
+
+**Any provider (recommended path):** create an Ubuntu 24.04 / Debian 12 VPS (≥ 8 GB), log in as root
+(`sudo -i` if the image gives you `ubuntu`), then:
+
+```bash
+DEPLOY_SSH_PUBKEY="ssh-ed25519 AAAA… qubar-ci-deploy" bash deploy/host/bootstrap.sh
+```
+
+`bootstrap.sh` installs Docker, adds swap, sets kernel params, creates the `deploy` user, **disables root/password SSH,
+and blocks all inbound ports**. Before you log out, be sure the tunnel/Access path works and you know how to open the
+provider's web console. (`ALLOW_SSH_FROM=<your CIDR>` keeps port 22 open for that CIDR while you get set up.)
+
+To make the tunnel reach the box, put `tunnel_token` into `.env` (`CLOUDFLARE_TUNNEL_TOKEN`); the first deploy starts
+`cloudflared`.
+
+**Hetzner only (optional):** `deploy/terraform/hetzner` is a separate root with its own state key:
+
+```bash
+cd deploy/terraform/hetzner
+cp terraform.tfvars.example terraform.tfvars      # set deploy_ssh_public_key, server_type, location
+export HCLOUD_TOKEN=...
+terraform init -backend-config=../backend.hcl -backend-config="key=prod/hetzner.tfstate"
+terraform apply
+```
+
+It creates the server with a zero-inbound firewall and runs `bootstrap.sh` via cloud-init.
 
 ### 3. Cloudflare dashboard (one-time, not in Terraform v1)
 
@@ -52,7 +77,7 @@ Outputs you need: `tunnel_token`, `access_client_id`, `access_client_secret`, `s
 
 ### 4. Server host key (recommended pinning)
 
-From the Hetzner console (or any earlier shell): `cat /etc/ssh/ssh_host_ed25519_key.pub`.
+From the provider console (or any earlier shell): `cat /etc/ssh/ssh_host_ed25519_key.pub`.
 GitHub variable `SSH_HOST_KEY` = `ssh.<domain> ssh-ed25519 AAAA…` (one line).
 
 ### 5. GitHub
@@ -70,7 +95,7 @@ Generate secrets: `openssl rand -hex 24` for passwords; `openssl rand -base64 32
 2. Move data from the Mac:
    ```bash
    pg_dump -h 127.0.0.1 -U <owner> -d qubar -n domains -Fc --no-owner -f qubar.dump
-   # copy to the server (scp through the tunnel, or the Hetzner console upload), then on the server:
+   # copy to the server (scp through the tunnel, or the provider console upload), then on the server:
    /opt/qubar/scripts/restore.sh /opt/qubar/qubar.dump      # stops the app; refuses on a non-empty DB
    /opt/qubar/scripts/deploy.sh "$(cat /opt/qubar/.deploy/current)"   # start the app again
    ```
@@ -96,7 +121,7 @@ free -h; docker stats --no-stream   # memory pressure → time for a bigger box
 - **Rebuild Elasticsearch:** stop Connect's sink, delete `pg.domains.*` indices (keep templates), delete the source connector and its slot
   (`select pg_drop_replication_slot('qubar_dbz')`), re-register → snapshot re-indexes.
 - **Disk:** `max_slot_wal_keep_size=4GB` caps WAL if Connect dies (slot gets invalidated instead of filling the disk — then re-snapshot).
-- **Emergency shell if the tunnel is down:** Hetzner web console (root login over SSH is disabled), or set `break_glass_ssh_cidrs` and apply.
+- **Emergency shell if the tunnel is down:** the provider's web console (root login over SSH is disabled), or temporarily allow your IP: `ufw allow from <ip> to any port 22 proto tcp` from the console.
 
 ## Local sanity check of the compose file
 
