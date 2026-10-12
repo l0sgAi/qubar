@@ -81,14 +81,17 @@ SSH_TARGET=deploy@43.107.44.74 SSH_OPTS="-i ~/deployements/aliyun-deployment/ALI
 `api_cutover = true` 后 apply 原地改 content → 零中断。本机开发 tunnel 已改用 `api-dev.qubar.site`。
 回切（应急）：`api_cutover = false` 会**删除** api 记录——应急时直接在 CF 控制台把 content 改回 `b13234a3-….cfargotunnel.com`。
 
-### 收尾加固
+### 收尾加固（2026-10-12 已完成）
 
-- `group_vars/all.yml` 设 `ssh_permit_root_login: "no"`、`ssh_listen_local_only: true` → sshd 只监听 127.0.0.1，公网 22 彻底关闭。
-  前提：CF Access SSH 已验证可用。cloudflared 故障时用阿里云控制台「远程连接 → VNC」救援（把 `/etc/ssh/sshd_config.d/10-qubar.conf` 的 ListenAddress 删掉再 `systemctl restart sshd`）。
+`ssh_permit_root_login: "no"`、`ssh_listen_local_only: true`：sshd 只监听 127.0.0.1 / ::1，公网 22 已不通，唯一入口是 CF Access（`ssh.qubar.site`）。
+
+**救援（cloudflared 故障 / Access 配置出错时）**：阿里云控制台 → 实例 → 远程连接 → **Workbench「免密登录 / 会话管理」**（走云助手 aliyun.service，不需要 22 端口和密码）。
+登录后删掉 `/etc/ssh/sshd_config.d/10-qubar.conf` 里的两行 `ListenAddress`，`systemctl restart sshd`，必要时安全组临时放行你的 IP。
+VNC 也可用，但需要实例登录密码（密钥实例默认没有，重置密码要重启）。
 
 ### 阿里云控制台手工项（Terraform 不管）
 
-- **安全组**：入方向只需保留 MCSManager 用的端口；22 规则在 `ssh_listen_local_only` 打开后删除（或先限制为你的 IP/32）。80/443 不需要。
+- **安全组**：入方向只需保留 MCSManager 用的端口；22 规则已无用（sshd 不监听公网），可删除。80/443 不需要。
 - **自动快照**（可选，整机兜底）：云服务器 ECS → 存储与快照 → 自动快照策略 → 创建（每日 04:00、保留 14 天）→ 关联系统盘。按快照容量计费。
 
 ## 运维速查
