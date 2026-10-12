@@ -4,4 +4,4 @@ cloudflare_zone_id    = "f38d3520e876c5ef39d7ecd162f900c0"
 domain                = "qubar.site"
 owner_emails          = ["losgai719@gmail.com"]
 
-api_cutover = false
+api_cutover = true

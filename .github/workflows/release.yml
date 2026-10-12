@@ -36,7 +36,7 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/l0sgai/qubar
-  SMOKE_URL: https://api-next.qubar.site/healthz
+  SMOKE_URL: https://api.qubar.site/healthz
 
 jobs:
   changes:
