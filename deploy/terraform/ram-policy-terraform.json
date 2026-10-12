@@ -1,0 +1,75 @@
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Sid": "OssStateAndBackupBuckets",
+      "Effect": "Allow",
+      "Action": "oss:*",
+      "Resource": [
+        "acs:oss:*:*:qubar-tfstate-l0sgai",
+        "acs:oss:*:*:qubar-tfstate-l0sgai/*",
+        "acs:oss:*:*:qubar-backup-l0sgai",
+        "acs:oss:*:*:qubar-backup-l0sgai/*"
+      ]
+    },
+    {
+      "Sid": "OssList",
+      "Effect": "Allow",
+      "Action": ["oss:ListBuckets", "oss:GetService"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "EcsReadOnly",
+      "Effect": "Allow",
+      "Action": "ecs:Describe*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "EcsManagedBits",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:AuthorizeSecurityGroup",
+        "ecs:RevokeSecurityGroup",
+        "ecs:ModifySecurityGroupRule",
+        "ecs:CreateAutoSnapshotPolicy",
+        "ecs:ModifyAutoSnapshotPolicyEx",
+        "ecs:DeleteAutoSnapshotPolicy",
+        "ecs:ApplyAutoSnapshotPolicy",
+        "ecs:CancelAutoSnapshotPolicy",
+        "ecs:AttachInstanceRamRole",
+        "ecs:DetachInstanceRamRole",
+        "ecs:ListTagResources",
+        "ecs:TagResources",
+        "ecs:UntagResources"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "RamInstanceRoleAndPolicy",
+      "Effect": "Allow",
+      "Action": [
+        "ram:CreateRole",
+        "ram:GetRole",
+        "ram:UpdateRole",
+        "ram:DeleteRole",
+        "ram:ListPoliciesForRole",
+        "ram:AttachPolicyToRole",
+        "ram:DetachPolicyFromRole",
+        "ram:PassRole",
+        "ram:CreatePolicy",
+        "ram:GetPolicy",
+        "ram:GetPolicyVersion",
+        "ram:ListPolicyVersions",
+        "ram:CreatePolicyVersion",
+        "ram:DeletePolicyVersion",
+        "ram:SetDefaultPolicyVersion",
+        "ram:DeletePolicy",
+        "ram:ListEntitiesForPolicy"
+      ],
+      "Resource": [
+        "acs:ram:*:*:role/qubar-ecs",
+        "acs:ram:*:*:policy/qubar-backup-write"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,122 @@
+# 主机基线：软件包、内核参数、swap、日志、自动安全更新、deploy 用户、sshd 加固。
+# 注意：机器上还跑着 MCSManager（mcsm 用户 / 23333 / 24444），本角色不触碰。
+
+- name: Base packages
+  ansible.builtin.dnf:
+    name: [jq, tar, unzip, curl, dnf-automatic]
+    state: present
+
+- name: Kernel params (ES mmap / Redis fork / low swappiness)
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/90-qubar.conf
+    reload: true
+  loop: "{{ params | dict2items }}"
+  vars:
+    params:
+      vm.max_map_count: 262144
+      vm.overcommit_memory: 1
+      vm.swappiness: 1
+      net.core.somaxconn: 4096
+      fs.inotify.max_user_watches: 524288
+
+- name: Disable transparent hugepages (Redis / PG latency)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/disable-thp.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Disable Transparent Huge Pages
+      Before=docker.service
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/enabled && echo never > /sys/kernel/mm/transparent_hugepage/defrag'
+      [Install]
+      WantedBy=multi-user.target
+  register: thp_unit
+
+- name: Enable disable-thp
+  ansible.builtin.systemd:
+    name: disable-thp
+    enabled: true
+    state: started
+    daemon_reload: "{{ thp_unit.changed }}"
+
+- name: Swapfile (兜底防 OOM，swappiness=1 平时不用)
+  ansible.builtin.command:
+    cmd: >-
+      sh -c 'fallocate -l {{ swap_size_mb }}M /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile'
+    creates: /swapfile
+
+- name: Swapfile in fstab
+  ansible.posix.mount:
+    src: /swapfile
+    path: none
+    fstype: swap
+    opts: sw
+    state: present
+
+- name: Journald drop-in dir
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    mode: "0755"
+
+- name: Journald size cap
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/qubar.conf
+    mode: "0644"
+    content: |
+      [Journal]
+      SystemMaxUse=1G
+  notify: Restart journald
+
+- name: dnf-automatic only applies security updates
+  ansible.builtin.lineinfile:
+    path: /etc/dnf/automatic.conf
+    regexp: "^{{ item.key }}\\s*="
+    line: "{{ item.key }} = {{ item.value }}"
+  loop:
+    - { key: upgrade_type, value: security }
+    - { key: apply_updates, value: "yes" }
+
+- name: Enable dnf-automatic timer
+  ansible.builtin.systemd:
+    name: dnf-automatic.timer
+    enabled: true
+    state: started
+
+- name: Deploy user
+  ansible.builtin.user:
+    name: "{{ deploy_user }}"
+    shell: /bin/bash
+    create_home: true
+
+- name: Deploy user authorized keys
+  ansible.posix.authorized_key:
+    user: "{{ deploy_user }}"
+    key: "{{ deploy_ssh_public_keys | join('\n') }}"
+    exclusive: true
+
+- name: Deploy user passwordless sudo (Ansible become；docker 组本就等价 root)
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/90-qubar-deploy
+    mode: "0440"
+    content: "{{ deploy_user }} ALL=(ALL) NOPASSWD: ALL\n"
+    validate: visudo -cf %s
+
+- name: sshd hardening (drop-in 先于发行版默认文件加载，首个匹配生效)
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/10-qubar.conf
+    mode: "0600"
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin {{ ssh_permit_root_login }}
+      MaxAuthTries 4
+      ClientAliveInterval 60
+      ClientAliveCountMax 3
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Reload sshd

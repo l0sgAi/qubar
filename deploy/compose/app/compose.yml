@@ -1,0 +1,45 @@
+# Qubar API。由 Ansible 下发到 /opt/qubar/app/；镜像版本由 deploy-app.sh 写入 image.env。
+#   docker compose --env-file .env --env-file image.env up -d --wait
+#
+# 配置：config.yaml = 生产配置（原 Nacos qubar-prod-conf，来自 GitHub Secret QUBAR_CONFIG_YAML）。
+# 连接类配置在此用 QUBAR_* 环境变量覆盖（优先级高于 YAML），保证与中间件栈一致。
+name: qubar-app
+
+services:
+  qubar:
+    image: ${QUBAR_IMAGE:?}
+    container_name: qubar
+    restart: unless-stopped
+    environment:
+      GOMEMLIMIT: 1800MiB
+      TZ: Asia/Shanghai
+      QUBAR_PGSQL_PATH: postgres
+      QUBAR_PGSQL_PORT: "5432"
+      QUBAR_PGSQL_DB_NAME: qubar
+      QUBAR_PGSQL_USERNAME: qubar_web_app
+      QUBAR_PGSQL_PASSWORD: ${PG_APP_PASSWORD:?}
+      QUBAR_REDIS_HOST: redis
+      QUBAR_REDIS_PORT: "6379"
+      QUBAR_REDIS_PASSWORD: ${REDIS_PASSWORD:?}
+      QUBAR_ELASTICSEARCH_URL: http://elasticsearch:9200
+      QUBAR_REDPANDA_BROKERS: redpanda:9092
+    volumes:
+      - ./config.yaml:/etc/qubar/config.yaml:ro
+    ports:
+      - "127.0.0.1:8888:8888" # cloudflared(host 网络) → api.qubar.site
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 2g
+    stop_grace_period: 30s # 让 Redpanda 聚合器 flush 完再退出
+    # healthcheck 继承镜像（/qubar -probe http://127.0.0.1:8888/healthz）
+    networks: [qubar]
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "10" }
+
+networks:
+  qubar:
+    name: qubar-net
+    external: true

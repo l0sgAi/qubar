@@ -1,0 +1,86 @@
+name: prod-access
+description: >-
+  Terraform init（OSS backend）→ 可选 apply → 读取输出到 $RUNNER_TEMP/tf-outputs.json（0600，敏感值已 mask）
+  → 安装 cloudflared → 配置经 Cloudflare Access 的 SSH（Host ssh.qubar.site，用户 deploy）。
+
+inputs:
+  apply:
+    description: "true 时执行 terraform apply"
+    default: "false"
+  alicloud-access-key:
+    required: true
+  alicloud-secret-key:
+    required: true
+  cloudflare-api-token:
+    description: apply 时必需；只读输出时可留空
+    default: ""
+  deploy-ssh-key:
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: "1.16.4"
+        terraform_wrapper: false
+
+    - name: Terraform
+      shell: bash
+      working-directory: deploy/terraform/prod
+      env:
+        ALICLOUD_ACCESS_KEY: ${{ inputs.alicloud-access-key }}
+        ALICLOUD_SECRET_KEY: ${{ inputs.alicloud-secret-key }}
+        CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        TF_IN_AUTOMATION: "1"
+        TF_INPUT: "0"
+      run: |
+        set -euo pipefail
+        terraform init -no-color
+        if [ "${{ inputs.apply }}" = "true" ]; then
+          terraform apply -auto-approve -no-color
+        fi
+        out="$RUNNER_TEMP/tf-outputs.json"
+        (umask 077; terraform output -json > "$out")
+        for k in tunnel_token ci_access_client_id ci_access_client_secret; do
+          echo "::add-mask::$(jq -r ".${k}.value" "$out")"
+        done
+
+    - name: cloudflared
+      shell: bash
+      run: |
+        set -euo pipefail
+        curl -fsSL -o "$RUNNER_TEMP/cloudflared" \
+          https://github.com/cloudflare/cloudflared/releases/download/2026.10.0/cloudflared-linux-amd64
+        sudo install -m 0755 "$RUNNER_TEMP/cloudflared" /usr/local/bin/cloudflared
+        cloudflared --version
+
+    - name: SSH via Cloudflare Access
+      shell: bash
+      env:
+        DEPLOY_SSH_KEY: ${{ inputs.deploy-ssh-key }}
+      run: |
+        set -euo pipefail
+        out="$RUNNER_TEMP/tf-outputs.json"
+        host=$(jq -r .ssh_hostname.value "$out")
+        id=$(jq -r .ci_access_client_id.value "$out")
+        secret=$(jq -r .ci_access_client_secret.value "$out")
+        install -d -m 700 ~/.ssh
+        (umask 077; printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/qubar_deploy)
+        cp deploy/known_hosts ~/.ssh/known_hosts
+        (umask 077; cat > ~/.ssh/config <<EOF
+        Host $host
+          User deploy
+          IdentityFile ~/.ssh/qubar_deploy
+          IdentitiesOnly yes
+          StrictHostKeyChecking yes
+          ServerAliveInterval 30
+          ProxyCommand /usr/local/bin/cloudflared access ssh --hostname %h --service-token-id $id --service-token-secret $secret
+        EOF
+        )
+        for i in 1 2 3 4 5; do
+          ssh -o ConnectTimeout=20 "$host" true && break
+          [ "$i" = 5 ] && { echo "SSH via Cloudflare Access failed"; exit 1; }
+          sleep 10
+        done
+        echo "PROD_SSH=$host" >> "$GITHUB_ENV"

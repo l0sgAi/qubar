@@ -1,0 +1,118 @@
+# Qubar 生产部署（阿里云 ECS + Cloudflare Tunnel）
+
+单机 ECS（ap-southeast-8，4C / 30G，Alibaba Cloud Linux 4）跑全部中间件 + API，公网**零入站端口**，
+流量经 Cloudflare Tunnel 进入。机器上另有 MCSManager（23333 / 24444），本套 IaC 不触碰。
+
+```
+用户 ─HTTPS─► Cloudflare ─tunnel(出站)─► cloudflared(host 网络) ─► 127.0.0.1:8888 qubar
+                                                      │                    │ docker 网络 qubar-net
+CI / 运维 ─► Cloudflare Access(ssh.qubar.site) ───────┘ 127.0.0.1:22       ▼
+                                          postgres:18.4 · redis:8.2.7 · elasticsearch+IK:8.15.3 · kibana
+                                          redpanda:v26.1.10 · console · kafka-connect(Debezium PG→ES)
+```
+
+| 层 | 工具 | 目录 | 管什么 |
+|---|---|---|---|
+| 云资源 | Terraform | `terraform/prod` | CF tunnel / DNS / Access；阿里云安全组（应急 22）、系统盘自动快照、OSS 备份桶、ECS RAM 角色 |
+| 主机 + 中间件 | Ansible | `ansible/` | 内核参数 / swap / sshd / docker / deploy 用户；中间件 compose、PG 角色与 publication、topic、备份 timer |
+| 运行时 | Docker Compose | `compose/` | `middleware/`（中间件）、`app/`（qubar） |
+| 自建镜像 | Dockerfile | `images/` | ES+IK、Kafka Connect+Debezium（服务器本地构建，tag 含 Dockerfile 哈希） |
+| 流水线 | GitHub Actions | `.github/workflows/` | `ci.yml`（PR）、`release.yml`（develop → main 合并即发布） |
+
+## 发布流程（日常）
+
+develop → main 合并（PR merge）→ `release.yml`：
+
+1. `deploy/**` 有变更 → **infra**：`terraform apply` → `ansible-playbook site.yml`（幂等）
+2. 应用代码有变更 → **test → build**：`ghcr.io/l0sgai/qubar:<sha>`（linux/amd64）
+3. **deploy**：经 CF Access SSH → `deploy-app.sh <image>`（`compose up --wait` 等健康检查，失败自动回滚上一版）
+   → `register-connectors.sh`（幂等）→ 外网冒烟 `https://api-next.qubar.site/healthz`
+
+回滚：Actions → release → Run workflow → 勾 `rollback`；或服务器上 `/opt/qubar/bin/deploy-app.sh --rollback`。
+
+## 密钥清单（GitHub → Settings → Environments → `production`，仅允许 main）
+
+| Secret | 来源 |
+|---|---|
+| `ALICLOUD_ACCESS_KEY` / `ALICLOUD_SECRET_KEY` | RAM 子用户（见下方最小权限） |
+| `CLOUDFLARE_API_TOKEN` | CF API Token（见下方权限） |
+| `DEPLOY_SSH_PRIVATE_KEY` | CI 登录 deploy 用户的私钥（公钥在 `ansible/group_vars/all.yml`） |
+| `PG_SUPERUSER_PASSWORD` / `PG_OWNER_PASSWORD` / `PG_APP_PASSWORD` / `PG_DEBEZIUM_PASSWORD` / `REDIS_PASSWORD` | 随机生成，本机副本见 `~/deployements/aliyun-deployment/secrets.local.yml` |
+| `QUBAR_CONFIG_YAML` | 生产 `config.yaml` 全文（原 Nacos `qubar-prod-conf`）。连接类配置（pgsql/redis/es/redpanda 地址与密码）由 `compose/app/compose.yml` 的 `QUBAR_*` 环境变量覆盖，YAML 里的值无所谓 |
+
+`QUBAR_CONFIG_YAML` 注意：`oauth.proxy_url` 留空（服务器在海外，直连 Google）；OAuth `redirect_url` / CORS 用 `https://api.qubar.site` / `https://qubar.site`；
+`security.data_key` 必须与旧环境一致，否则已加密入库的 AI 机器人 api_key 无法解密。
+
+**阿里云 RAM 子用户权限**（Terraform 用）：自定义策略 [`terraform/ram-policy-terraform.json`](terraform/ram-policy-terraform.json)（最小权限：两个 qubar 桶、ECS 只读 + 快照策略 / 安全组规则 / 绑实例角色、只能管 `qubar-ecs` 角色与 `qubar-backup-write` 策略）。
+apply 报 `Forbidden` / `NoPermission` 时按报错里的 Action 补进该策略。
+**Cloudflare API Token 权限**：Account → Cloudflare Tunnel: Edit、Access: Apps and Policies: Edit、Access: Service Tokens: Edit；Zone(qubar.site) → DNS: Edit。
+Cloudflare 控制台需先开通 Zero Trust（免费版），登录方式保留 One-time PIN。
+
+## 首次引导（只做一次，按顺序）
+
+```bash
+# 0. 凭证（本机 shell）
+export ALICLOUD_ACCESS_KEY=... ALICLOUD_SECRET_KEY=... CLOUDFLARE_API_TOKEN=...
+
+# 1. state bucket
+terraform -chdir=deploy/terraform/bootstrap init && terraform -chdir=deploy/terraform/bootstrap apply
+
+# 2. 云资源（tunnel / Access / DNS / 快照 / 备份桶 / RAM 角色）
+terraform -chdir=deploy/terraform/prod init && terraform -chdir=deploy/terraform/prod apply
+
+# 3. 主机 + 中间件（tunnel 未通前走公网 IP；带上 tunnel token 让 cloudflared 起来）
+cd deploy/ansible
+ansible-playbook site.yml -e ansible_host=43.107.44.74 -e ansible_user=deploy \
+  --private-key ~/deployements/aliyun-deployment/ALIYUN.pem \
+  -e @~/deployements/aliyun-deployment/secrets.local.yml \
+  -e tunnel_token="$(terraform -chdir=../terraform/prod output -raw tunnel_token)" \
+  -e qubar_config_yaml="$(cat ~/deployements/aliyun-deployment/config.prod.yaml)"
+
+# 4. 数据迁移（本机 PG → 生产；必须在注册 connectors 之前）
+SSH_TARGET=deploy@43.107.44.74 SSH_OPTS="-i ~/deployements/aliyun-deployment/ALIYUN.pem" deploy/scripts/migrate-pg.sh
+
+# 5. 首次发布：合并 develop → main，或 Actions 手动 release(force_deploy)
+```
+
+### 切流 api.qubar.site（冒烟通过后）
+
+1. Cloudflare 控制台删除 `api` 的 CNAME（当前指向本机 `dev-debug` tunnel）。
+2. `terraform.tfvars` 设 `api_cutover = true`，合并到 main（或本机 apply）。
+3. 本机开发 tunnel 改用 `api-dev.qubar.site`：`cloudflared tunnel route dns dev-debug api-dev.qubar.site`，并改 `~/.cloudflared/config.yml` 的 hostname。
+4. 冒烟 URL（`release.yml` 的 `SMOKE_URL`）可改回 `https://api.qubar.site/healthz`。
+
+### 收尾加固
+
+- CF SSH 验证通过后：阿里云控制台删掉手工建的 22 入站规则；`group_vars/all.yml` 设 `ssh_permit_root_login: "no"`。
+- 应急直连：`terraform.tfvars` 加 `ssh_allowed_cidrs = ["<你的IP>/32"]` apply，用完删掉。
+
+## 运维速查
+
+本机 `~/.ssh/config`（需本机已 `cloudflared`；首次连接浏览器邮箱 OTP 登录）：
+
+```
+Host ssh.qubar.site
+  User deploy
+  IdentityFile ~/deployements/aliyun-deployment/ALIYUN.pem
+  ProxyCommand cloudflared access ssh --hostname %h
+```
+
+| 场景 | 命令 |
+|---|---|
+| 连生产 PG（DDL 用 `qubar_owner`） | `ssh -L 15432:127.0.0.1:5432 ssh.qubar.site` → `psql -h 127.0.0.1 -p 15432 -U qubar_owner qubar` |
+| Kibana / Redpanda Console | https://kibana.qubar.site 、 https://redpanda.qubar.site （CF Access 邮箱 OTP） |
+| 应用日志 | `docker logs -f --tail 200 qubar` |
+| 中间件状态 | `cd /opt/qubar/middleware && sudo docker compose ps` |
+| CDC 状态 | `curl -s localhost:8083/connectors?expand=status \| jq` |
+| 手动备份 | `sudo systemctl start qubar-pg-backup && journalctl -u qubar-pg-backup -n 20` |
+| 发布历史 | `cat /opt/qubar/app/releases.log` |
+
+DDL 变更：仍由 DB-owner 按 `docs/pgsql-ddl/` 手工执行（用 `qubar_owner`，default privileges 自动给 `qubar_web_app` / `debezium` 授权）；
+新表要进 CDC 时，在 `ansible/group_vars/all.yml` 的 `cdc_tables` 加表名，合并后 Ansible 会更新 publication 与 connector。
+
+## 备份与恢复
+
+- PG：每日 03:30 `pg_dump -Fc` → OSS `qubar-backup-l0sgai/pg/YYYY/MM/`（30 天过期），本地留 3 天 `/var/backups/qubar`。
+- 整机：系统盘每日 04:00 自动快照，保留 14 天。
+- ES：不备份，可重建 —— 删 `pg.domains.*` 索引 + 删 `pg-source` connector 与 slot 后重跑 `register-connectors.sh`（Debezium 重新全量快照）。
+- 恢复 PG：`docker exec -i qubar-postgres pg_restore -U postgres -d qubar --role=qubar_owner --no-owner --no-privileges --clean --if-exists < dump`，再重跑 `/opt/qubar/middleware/pg/bootstrap.sql`。

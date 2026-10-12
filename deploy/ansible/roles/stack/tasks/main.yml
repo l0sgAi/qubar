@@ -1,0 +1,175 @@
+# 中间件栈 + 应用运行目录。应用镜像的发布由 deploy-app.sh（CI 调用）负责，本角色只管配置。
+
+- name: Require secrets
+  ansible.builtin.assert:
+    that: lookup('ansible.builtin.vars', item, default='') | length >= 16
+    fail_msg: "缺少密钥变量 {{ item }}（>=16 位），见 deploy/README.md"
+    quiet: true
+  loop: [pg_superuser_password, pg_owner_password, pg_app_password, pg_debezium_password, redis_password]
+
+- name: Directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: "{{ deploy_user }}"
+    mode: "0750"
+  loop:
+    - "{{ qubar_root }}"
+    - "{{ qubar_root }}/middleware"
+    - "{{ qubar_root }}/middleware/pg"
+    - "{{ qubar_root }}/middleware/connectors"
+    - "{{ qubar_root }}/images"
+    - "{{ qubar_root }}/bin"
+
+- name: App directory (deploy 可写：image.env / releases.log)
+  ansible.builtin.file:
+    path: "{{ qubar_root }}/app"
+    state: directory
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_user }}"
+    mode: "0750"
+
+# ---------- 自建中间件镜像：服务器本地构建，tag 含 Dockerfile 哈希 ----------
+- name: Image tags
+  ansible.builtin.set_fact:
+    es_image: "qubar/elasticsearch-ik:{{ es_version }}-{{ (lookup('ansible.builtin.file', images_src + '/elasticsearch-ik/Dockerfile') | hash('sha1'))[:10] }}"
+    connect_image: "qubar/kafka-connect:{{ connect_version }}-{{ (lookup('ansible.builtin.file', images_src + '/kafka-connect/Dockerfile') | hash('sha1'))[:10] }}"
+  vars:
+    images_src: "{{ playbook_dir }}/../images"
+
+- name: Image build contexts
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../images/"
+    dest: "{{ qubar_root }}/images/"
+    mode: "0644"
+    directory_mode: "0755"
+
+- name: Build middleware images (仅当 tag 不存在)
+  ansible.builtin.shell: |
+    set -e
+    if docker image inspect {{ item.tag }} >/dev/null 2>&1; then echo exists; exit 0; fi
+    docker build --pull -t {{ item.tag }} {{ qubar_root }}/images/{{ item.dir }}
+    echo built
+  args:
+    executable: /bin/bash
+  register: image_build
+  changed_when: "'built' in image_build.stdout_lines"
+  loop:
+    - { tag: "{{ es_image }}", dir: elasticsearch-ik }
+    - { tag: "{{ connect_image }}", dir: kafka-connect }
+
+# ---------- 中间件 compose ----------
+- name: Middleware compose files
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../compose/middleware/{{ item }}"
+    dest: "{{ qubar_root }}/middleware/{{ item }}"
+    mode: "0644"
+  loop: [compose.yml, redis.conf]
+
+- name: Middleware .env
+  ansible.builtin.template:
+    src: middleware.env.j2
+    dest: "{{ qubar_root }}/middleware/.env"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Middleware up
+  ansible.builtin.command:
+    cmd: docker compose up -d --wait --wait-timeout 600 --remove-orphans
+    chdir: "{{ qubar_root }}/middleware"
+  register: mw_up
+  changed_when: mw_up.stderr is search('Recreate|Creat|Start')
+
+# ---------- Redpanda ----------
+- name: Redpanda cluster config + topics
+  ansible.builtin.shell: |
+    set -eo pipefail
+    rpk() { docker exec qubar-redpanda rpk "$@"; }
+    changed=0
+    set_cfg() {
+      cur=$(rpk cluster config get "$1" 2>/dev/null | tail -n1)
+      if [ "$cur" != "$2" ]; then rpk cluster config set "$1" "$2" >/dev/null; changed=1; fi
+    }
+    set_cfg auto_create_topics_enabled true     # 应用 producer + Debezium 依赖自动建 topic
+    set_cfg core_balancing_continuous false     # 企业版特性，单节点无意义，关掉避免 license 告警
+    set_cfg partition_autobalancing_mode node_add
+    existing=$(rpk topic list | awk 'NR>1 {print $1}')
+    for t in {{ redpanda_topics | join(' ') }}; do
+      echo "$existing" | grep -qx "$t" || { rpk topic create "$t" -p 1 -r 1 >/dev/null; changed=1; }
+    done
+    echo "changed=$changed"
+  args:
+    executable: /bin/bash
+  register: rp
+  changed_when: "'changed=1' in rp.stdout"
+
+# ---------- PostgreSQL 角色 / 权限 / publication ----------
+- name: PG bootstrap SQL
+  ansible.builtin.template:
+    src: bootstrap.sql.j2
+    dest: "{{ qubar_root }}/middleware/pg/bootstrap.sql"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Apply PG bootstrap SQL
+  ansible.builtin.shell: >-
+    docker exec -i qubar-postgres psql -U postgres -d qubar -q -v ON_ERROR_STOP=1
+    < {{ qubar_root }}/middleware/pg/bootstrap.sql
+  changed_when: false
+
+# ---------- CDC connectors（注册由 register-connectors.sh 在应用启动后执行） ----------
+- name: Debezium source connector config
+  ansible.builtin.template:
+    src: pg-source.json.j2
+    dest: "{{ qubar_root }}/middleware/connectors/01-pg-source.json"
+    owner: root
+    group: "{{ deploy_user }}"
+    mode: "0640"
+
+- name: ES sink connector configs
+  ansible.builtin.template:
+    src: es-sink.json.j2
+    dest: "{{ qubar_root }}/middleware/connectors/02-es-sink-{{ item.key }}.json"
+    owner: root
+    group: "{{ deploy_user }}"
+    mode: "0640"
+  loop: "{{ es_sinks | dict2items }}"
+
+# ---------- 运维脚本 ----------
+- name: Scripts
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/{{ item }}"
+    dest: "{{ qubar_root }}/bin/{{ item }}"
+    mode: "0755"
+  loop: [deploy-app.sh, register-connectors.sh, pg-backup.sh]
+
+# ---------- 应用运行目录 ----------
+- name: App compose
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../compose/app/compose.yml"
+    dest: "{{ qubar_root }}/app/compose.yml"
+    mode: "0644"
+  notify: Recreate qubar
+
+- name: App .env
+  ansible.builtin.template:
+    src: app.env.j2
+    dest: "{{ qubar_root }}/app/.env"
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_user }}"
+    mode: "0600"
+  notify: Recreate qubar
+
+- name: App config.yaml（容器 nonroot uid/gid 65532 经组权限只读）
+  ansible.builtin.copy:
+    content: "{{ qubar_config_yaml }}"
+    dest: "{{ qubar_root }}/app/config.yaml"
+    owner: root
+    group: "65532"
+    mode: "0640"
+  when: qubar_config_yaml | length > 0
+  no_log: true
+  notify: Recreate qubar

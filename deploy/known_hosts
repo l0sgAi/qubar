@@ -1,0 +1,2 @@
+# 生产主机 SSH host key（CI 经 Cloudflare Access 登录时校验，防中间人）。主机重装后需更新。
+ssh.qubar.site ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGnQq2yLKi5IXM22Xf9yY2M6LHWEVzWXG3Xk0UUH/5HC

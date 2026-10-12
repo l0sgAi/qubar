@@ -1,0 +1,77 @@
+# PG 每日逻辑备份 → OSS（ECS RAM 角色凭证）。RAM 角色 / bucket 由 Terraform 创建。
+
+- name: Check ossutil
+  ansible.builtin.command: ossutil version
+  register: ossutil_ver
+  changed_when: false
+  failed_when: false
+
+- name: Install ossutil v2
+  when: ossutil_ver.rc != 0 or ossutil_version not in ossutil_ver.stdout
+  block:
+    - name: Download ossutil
+      ansible.builtin.unarchive:
+        src: "https://gosspublic.alicdn.com/ossutil/v2/{{ ossutil_version }}/ossutil-{{ ossutil_version }}-linux-amd64.zip"
+        dest: /tmp
+        remote_src: true
+
+    - name: Install ossutil binary
+      ansible.builtin.copy:
+        src: "/tmp/ossutil-{{ ossutil_version }}-linux-amd64/ossutil"
+        dest: /usr/local/bin/ossutil
+        remote_src: true
+        mode: "0755"
+
+- name: Backup env
+  ansible.builtin.copy:
+    dest: /etc/qubar/backup.env
+    mode: "0644"
+    content: |
+      BACKUP_BUCKET={{ backup_bucket }}
+
+# ossutil v2 无 --ecs-role-name 命令行参数，只能走配置文件；走内网 endpoint 免流量费
+- name: ossutil config (ECS RAM role)
+  ansible.builtin.copy:
+    dest: /etc/qubar/ossutil.ini
+    mode: "0644"
+    content: |
+      [default]
+      mode = EcsRamRole
+      ecsRoleName = {{ ecs_ram_role }}
+      region = {{ oss_region }}
+      endpoint = oss-{{ oss_region }}-internal.aliyuncs.com
+
+- name: Backup systemd units
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item.name }}"
+    mode: "0644"
+    content: "{{ item.content }}"
+  loop:
+    - name: qubar-pg-backup.service
+      content: |
+        [Unit]
+        Description=Qubar PostgreSQL logical backup to OSS
+        Requires=docker.service
+        After=docker.service
+        [Service]
+        Type=oneshot
+        Environment=PATH=/usr/local/bin:/usr/bin:/bin
+        ExecStart={{ qubar_root }}/bin/pg-backup.sh
+    - name: qubar-pg-backup.timer
+      content: |
+        [Unit]
+        Description=Daily Qubar PG backup
+        [Timer]
+        OnCalendar=*-*-* 03:30:00
+        RandomizedDelaySec=5m
+        Persistent=true
+        [Install]
+        WantedBy=timers.target
+  register: backup_units
+
+- name: Enable backup timer
+  ansible.builtin.systemd:
+    name: qubar-pg-backup.timer
+    enabled: true
+    state: started
+    daemon_reload: "{{ backup_units.changed }}"

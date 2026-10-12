@@ -87,3 +87,11 @@ tmp/
 
 # Real runtime config (secrets). Commit only configs/config.example.yaml (#49).
 configs/config.yaml
+
+# IaC (deploy/)：state / provider 缓存 / 本地密钥绝不入库
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+deploy/ansible/secrets*.yml

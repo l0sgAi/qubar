@@ -1,0 +1,10 @@
+# 配置变了且应用已发布过（有 image.env）才重建；首次发布交给 deploy-app.sh。
+- name: Recreate qubar
+  ansible.builtin.shell: |
+    set -e
+    cd {{ qubar_root }}/app
+    [ -f image.env ] || { echo "no image.env, skip"; exit 0; }
+    docker compose -f compose.yml --env-file .env --env-file image.env up -d --force-recreate --wait --wait-timeout 180 qubar
+  args:
+    executable: /bin/bash
+  changed_when: true

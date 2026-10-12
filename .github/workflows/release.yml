@@ -1,0 +1,202 @@
+# 生产发布：develop → main 合并（push main）触发。
+#
+#   changes ─┬─ infra（deploy/** 变更）：Terraform apply → Ansible 收敛主机 / 中间件
+#            └─ test → build（应用代码变更）：镜像推 GHCR ghcr.io/l0sgai/qubar:<sha>
+#   deploy（needs infra + build）：SSH(经 Cloudflare Access) → deploy-app.sh（失败自动回滚）
+#            → register-connectors.sh → 外网冒烟 https://api-next.qubar.site/healthz
+#
+# 手动触发：Actions → release → Run workflow（可强制 infra / 回滚上一版本）。
+# 密钥全部在 GitHub Environment「production」（限 main 分支），清单见 deploy/README.md。
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force_infra:
+        description: 强制执行 Terraform + Ansible
+        type: boolean
+        default: false
+      force_deploy:
+        description: 强制构建并发布当前 main
+        type: boolean
+        default: false
+      rollback:
+        description: 回滚到上一个成功版本（不构建）
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-prod
+  cancel-in-progress: false # 不打断进行中的 apply / 发布
+
+env:
+  IMAGE: ghcr.io/l0sgai/qubar
+  SMOKE_URL: https://api-next.qubar.site/healthz
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      infra: ${{ steps.f.outputs.infra == 'true' || inputs.force_infra == true }}
+      app: ${{ (steps.f.outputs.app == 'true' || inputs.force_deploy == true) && inputs.rollback != true }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: f
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            infra:
+              - 'deploy/**'
+              - '.github/actions/**'
+              - '.github/workflows/release.yml'
+            app:
+              - 'cmd/**'
+              - 'pkg/**'
+              - 'go.mod'
+              - 'go.sum'
+              - 'Dockerfile'
+              - '.dockerignore'
+
+  test:
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./pkg/...
+
+  build:
+    needs: [changes, test]
+    if: needs.changes.outputs.app == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64 # ECS r9ae = x86_64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:main
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  infra:
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/prod-access
+        with:
+          apply: "true"
+          alicloud-access-key: ${{ secrets.ALICLOUD_ACCESS_KEY }}
+          alicloud-secret-key: ${{ secrets.ALICLOUD_SECRET_KEY }}
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          deploy-ssh-key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+
+      - name: Install Ansible
+        run: |
+          pipx install --include-deps ansible-core
+          ansible-galaxy collection install ansible.posix community.general
+
+      - name: Ansible vars (0600, 不进命令行)
+        env:
+          PG_SUPERUSER_PASSWORD: ${{ secrets.PG_SUPERUSER_PASSWORD }}
+          PG_OWNER_PASSWORD: ${{ secrets.PG_OWNER_PASSWORD }}
+          PG_APP_PASSWORD: ${{ secrets.PG_APP_PASSWORD }}
+          PG_DEBEZIUM_PASSWORD: ${{ secrets.PG_DEBEZIUM_PASSWORD }}
+          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+          QUBAR_CONFIG_YAML: ${{ secrets.QUBAR_CONFIG_YAML }}
+        run: |
+          umask 077
+          jq -n --slurpfile tf "$RUNNER_TEMP/tf-outputs.json" '{
+            pg_superuser_password: env.PG_SUPERUSER_PASSWORD,
+            pg_owner_password:     env.PG_OWNER_PASSWORD,
+            pg_app_password:       env.PG_APP_PASSWORD,
+            pg_debezium_password:  env.PG_DEBEZIUM_PASSWORD,
+            redis_password:        env.REDIS_PASSWORD,
+            qubar_config_yaml:     env.QUBAR_CONFIG_YAML,
+            tunnel_token:          $tf[0].tunnel_token.value,
+            backup_bucket:         $tf[0].backup_bucket.value,
+            ecs_ram_role:          $tf[0].ecs_ram_role.value,
+            ansible_host:          $tf[0].ssh_hostname.value
+          }' > "$RUNNER_TEMP/ansible-vars.json"
+
+      - name: Ansible apply
+        working-directory: deploy/ansible
+        env:
+          ANSIBLE_FORCE_COLOR: "1"
+        run: ansible-playbook site.yml -e "@$RUNNER_TEMP/ansible-vars.json" --private-key ~/.ssh/qubar_deploy
+
+  deploy:
+    needs: [changes, build, infra]
+    # infra / build 允许被跳过，但不能失败；回滚不依赖 build
+    if: >-
+      always() && !cancelled() &&
+      needs.build.result != 'failure' && needs.infra.result != 'failure' &&
+      (needs.build.result == 'success' || inputs.rollback == true)
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/prod-access
+        with:
+          alicloud-access-key: ${{ secrets.ALICLOUD_ACCESS_KEY }}
+          alicloud-secret-key: ${{ secrets.ALICLOUD_SECRET_KEY }}
+          deploy-ssh-key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+
+      - name: GHCR login on host（GITHUB_TOKEN 仅本 job 有效）
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | ssh "$PROD_SSH" docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Deploy
+        run: |
+          if [ "${{ inputs.rollback }}" = "true" ]; then
+            ssh "$PROD_SSH" /opt/qubar/bin/deploy-app.sh --rollback
+          else
+            # shellcheck disable=SC2029  # 镜像名有意在 runner 侧展开
+            ssh "$PROD_SSH" /opt/qubar/bin/deploy-app.sh "$IMAGE:${{ github.sha }}"
+          fi
+
+      - name: CDC connectors（幂等）
+        run: ssh "$PROD_SSH" /opt/qubar/bin/register-connectors.sh
+
+      - name: GHCR logout
+        if: always()
+        run: ssh "$PROD_SSH" docker logout ghcr.io || true
+
+      - name: Smoke（经 Cloudflare 外网）
+        run: |
+          for _ in $(seq 1 12); do
+            curl -fsS --max-time 10 "$SMOKE_URL" && exit 0
+            sleep 5
+          done
+          echo "smoke failed: $SMOKE_URL"; exit 1
