@@ -2,30 +2,29 @@ terraform {
   required_version = ">= 1.10"
 
   required_providers {
-    alicloud = {
-      source  = "aliyun/alicloud"
-      version = "~> 1.294"
-    }
     cloudflare = {
       source  = "cloudflare/cloudflare"
       version = "~> 5.27"
     }
   }
 
-  # state 存 OSS（bucket 由 ../bootstrap 创建，开了版本控制）。
-  # 未配 TableStore 锁：并发由 GitHub Actions concurrency group 串行化，本机勿与 CI 同时 apply。
-  # 凭证读 ALICLOUD_ACCESS_KEY / ALICLOUD_SECRET_KEY 环境变量。
-  backend "oss" {
-    bucket  = "qubar-tfstate-l0sgai"
-    prefix  = "prod"
-    key     = "terraform.tfstate"
-    region  = "ap-southeast-8"
-    encrypt = true
+  # state 存 Cloudflare R2（S3 兼容；桶由 ../bootstrap 创建）。use_lockfile = S3 条件写原生锁。
+  # 凭证：AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY = R2 API token 的 Access Key ID / Secret。
+  backend "s3" {
+    bucket = "qubar-tfstate"
+    key    = "prod/terraform.tfstate"
+    region = "auto"
+    endpoints = {
+      s3 = "https://2328bffc01bc4969ab19339d6dcbf5d9.r2.cloudflarestorage.com"
+    }
+    use_path_style              = true
+    use_lockfile                = true
+    skip_credentials_validation = true
+    skip_region_validation      = true
+    skip_requesting_account_id  = true
+    skip_metadata_api_check     = true
+    skip_s3_checksum            = true
   }
-}
-
-provider "alicloud" {
-  region = var.region # 凭证：ALICLOUD_ACCESS_KEY / ALICLOUD_SECRET_KEY
 }
 
 provider "cloudflare" {

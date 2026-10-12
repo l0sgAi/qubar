@@ -13,7 +13,7 @@ CI / 运维 ─► Cloudflare Access(ssh.qubar.site) ───────┘ 12
 
 | 层 | 工具 | 目录 | 管什么 |
 |---|---|---|---|
-| 云资源 | Terraform | `terraform/prod` | CF tunnel / DNS / Access；阿里云安全组（应急 22）、系统盘自动快照、OSS 备份桶、ECS RAM 角色 |
+| 云资源 | Terraform | `terraform/bootstrap`、`terraform/prod` | bootstrap：R2 桶（state + PG 备份，含过期规则）；prod：CF tunnel / DNS / Zero Trust Access。**阿里云侧不归 Terraform 管**（无 RAM 权限），见「阿里云控制台手工项」 |
 | 主机 + 中间件 | Ansible | `ansible/` | 内核参数 / swap / sshd / docker / deploy 用户；中间件 compose、PG 角色与 publication、topic、备份 timer |
 | 运行时 | Docker Compose | `compose/` | `middleware/`（中间件）、`app/`（qubar） |
 | 自建镜像 | Dockerfile | `images/` | ES+IK、Kafka Connect+Debezium（服务器本地构建，tag 含 Dockerfile 哈希） |
@@ -34,7 +34,7 @@ develop → main 合并（PR merge）→ `release.yml`：
 
 | Secret | 来源 |
 |---|---|
-| `ALICLOUD_ACCESS_KEY` / `ALICLOUD_SECRET_KEY` | RAM 子用户（见下方最小权限） |
+| `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | R2 API token（Terraform state backend + 服务器 PG 备份上传共用） |
 | `CLOUDFLARE_API_TOKEN` | CF API Token（见下方权限） |
 | `DEPLOY_SSH_PRIVATE_KEY` | CI 登录 deploy 用户的私钥（公钥在 `ansible/group_vars/all.yml`） |
 | `PG_SUPERUSER_PASSWORD` / `PG_OWNER_PASSWORD` / `PG_APP_PASSWORD` / `PG_DEBEZIUM_PASSWORD` / `REDIS_PASSWORD` | 随机生成，本机副本见 `~/deployements/aliyun-deployment/secrets.local.yml` |
@@ -43,21 +43,21 @@ develop → main 合并（PR merge）→ `release.yml`：
 `QUBAR_CONFIG_YAML` 注意：`oauth.proxy_url` 留空（服务器在海外，直连 Google）；OAuth `redirect_url` / CORS 用 `https://api.qubar.site` / `https://qubar.site`；
 `security.data_key` 必须与旧环境一致，否则已加密入库的 AI 机器人 api_key 无法解密。
 
-**阿里云 RAM 子用户权限**（Terraform 用）：自定义策略 [`terraform/ram-policy-terraform.json`](terraform/ram-policy-terraform.json)（最小权限：两个 qubar 桶、ECS 只读 + 快照策略 / 安全组规则 / 绑实例角色、只能管 `qubar-ecs` 角色与 `qubar-backup-write` 策略）。
-apply 报 `Forbidden` / `NoPermission` 时按报错里的 Action 补进该策略。
-**Cloudflare API Token 权限**：Account → Cloudflare Tunnel: Edit、Access: Apps and Policies: Edit、Access: Service Tokens: Edit；Zone(qubar.site) → DNS: Edit。
+**Cloudflare API Token 权限**：Account → Cloudflare Tunnel: Edit、Access: Apps and Policies: Edit、Access: Service Tokens: Edit、Workers R2 Storage: Edit；Zone(qubar.site) → DNS: Edit。
+**R2 API token**（bootstrap 建桶之后再建）：R2 → Manage API Tokens → Create → Object Read & Write，限定桶 `qubar-tfstate`、`qubar-backup`；拿 S3 兼容的 Access Key ID / Secret。
 Cloudflare 控制台需先开通 Zero Trust（免费版），登录方式保留 One-time PIN。
 
 ## 首次引导（只做一次，按顺序）
 
 ```bash
 # 0. 凭证（本机 shell）
-export ALICLOUD_ACCESS_KEY=... ALICLOUD_SECRET_KEY=... CLOUDFLARE_API_TOKEN=...
+export CLOUDFLARE_API_TOKEN=...
 
-# 1. state bucket
+# 1. R2 桶（state + 备份）；完成后在 CF 控制台建 R2 API token（限这两个桶）
 terraform -chdir=deploy/terraform/bootstrap init && terraform -chdir=deploy/terraform/bootstrap apply
+export AWS_ACCESS_KEY_ID=<R2 Access Key ID> AWS_SECRET_ACCESS_KEY=<R2 Secret>
 
-# 2. 云资源（tunnel / Access / DNS / 快照 / 备份桶 / RAM 角色）
+# 2. Cloudflare tunnel / Access / DNS
 terraform -chdir=deploy/terraform/prod init && terraform -chdir=deploy/terraform/prod apply
 
 # 3. 主机 + 中间件（tunnel 未通前走公网 IP；带上 tunnel token 让 cloudflared 起来）
@@ -66,7 +66,8 @@ ansible-playbook site.yml -e ansible_host=43.107.44.74 -e ansible_user=deploy \
   --private-key ~/deployements/aliyun-deployment/ALIYUN.pem \
   -e @~/deployements/aliyun-deployment/secrets.local.yml \
   -e tunnel_token="$(terraform -chdir=../terraform/prod output -raw tunnel_token)" \
-  -e qubar_config_yaml="$(cat ~/deployements/aliyun-deployment/config.prod.yaml)"
+  -e qubar_config_yaml="$(cat ~/deployements/aliyun-deployment/config.prod.yaml)" \
+  -e r2_access_key_id="$AWS_ACCESS_KEY_ID" -e r2_secret_access_key="$AWS_SECRET_ACCESS_KEY"
 
 # 4. 数据迁移（本机 PG → 生产；必须在注册 connectors 之前）
 SSH_TARGET=deploy@43.107.44.74 SSH_OPTS="-i ~/deployements/aliyun-deployment/ALIYUN.pem" deploy/scripts/migrate-pg.sh
@@ -83,8 +84,13 @@ SSH_TARGET=deploy@43.107.44.74 SSH_OPTS="-i ~/deployements/aliyun-deployment/ALI
 
 ### 收尾加固
 
-- CF SSH 验证通过后：阿里云控制台删掉手工建的 22 入站规则；`group_vars/all.yml` 设 `ssh_permit_root_login: "no"`。
-- 应急直连：`terraform.tfvars` 加 `ssh_allowed_cidrs = ["<你的IP>/32"]` apply，用完删掉。
+- `group_vars/all.yml` 设 `ssh_permit_root_login: "no"`、`ssh_listen_local_only: true` → sshd 只监听 127.0.0.1，公网 22 彻底关闭。
+  前提：CF Access SSH 已验证可用。cloudflared 故障时用阿里云控制台「远程连接 → VNC」救援（把 `/etc/ssh/sshd_config.d/10-qubar.conf` 的 ListenAddress 删掉再 `systemctl restart sshd`）。
+
+### 阿里云控制台手工项（Terraform 不管）
+
+- **安全组**：入方向只需保留 MCSManager 用的端口；22 规则在 `ssh_listen_local_only` 打开后删除（或先限制为你的 IP/32）。80/443 不需要。
+- **自动快照**（可选，整机兜底）：云服务器 ECS → 存储与快照 → 自动快照策略 → 创建（每日 04:00、保留 14 天）→ 关联系统盘。按快照容量计费。
 
 ## 运维速查
 
@@ -112,7 +118,7 @@ DDL 变更：仍由 DB-owner 按 `docs/pgsql-ddl/` 手工执行（用 `qubar_own
 
 ## 备份与恢复
 
-- PG：每日 03:30 `pg_dump -Fc` → OSS `qubar-backup-l0sgai/pg/YYYY/MM/`（30 天过期），本地留 3 天 `/var/backups/qubar`。
-- 整机：系统盘每日 04:00 自动快照，保留 14 天。
+- PG：每日 03:30 `pg_dump -Fc` → R2 `qubar-backup/pg/YYYY/MM/`（30 天过期），本地留 3 天 `/var/backups/qubar`。
+- 整机：阿里云自动快照（控制台手工配置，见上）。
 - ES：不备份，可重建 —— 删 `pg.domains.*` 索引 + 删 `pg-source` connector 与 slot 后重跑 `register-connectors.sh`（Debezium 重新全量快照）。
 - 恢复 PG：`docker exec -i qubar-postgres pg_restore -U postgres -d qubar --role=qubar_owner --no-owner --no-privileges --clean --if-exists < dump`，再重跑 `/opt/qubar/middleware/pg/bootstrap.sql`。

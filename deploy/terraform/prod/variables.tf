@@ -1,38 +1,5 @@
 # 非密钥参数，值在 terraform.tfvars（入库）。密钥只走环境变量。
-
-variable "region" {
-  type = string
-}
-
-variable "instance_id" {
-  description = "已手工购买的 ECS 实例 ID（不由 Terraform 创建/销毁，只读引用）"
-  type        = string
-}
-
-variable "ssh_allowed_cidrs" {
-  description = <<-EOT
-    额外放行公网 22 的 CIDR（应急直连用）。默认空 = Terraform 不开 22；
-    日常 SSH / CI 走 Cloudflare Access（ssh.<domain>）。
-    注意：控制台手工建的 22 入站规则不归 Terraform 管，CF SSH 验证通过后到控制台删除。
-  EOT
-  type        = list(string)
-  default     = []
-}
-
-variable "backup_bucket" {
-  description = "PG 备份 OSS bucket（全局唯一）"
-  type        = string
-}
-
-variable "backup_retention_days" {
-  type    = number
-  default = 30
-}
-
-variable "snapshot_retention_days" {
-  type    = number
-  default = 14
-}
+# 阿里云侧不归 Terraform 管（无 RAM 权限）：安全组 / 快照在控制台手工维护，见 deploy/README.md。
 
 variable "cloudflare_account_id" {
   type = string

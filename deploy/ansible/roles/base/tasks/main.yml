@@ -118,5 +118,9 @@
       MaxAuthTries 4
       ClientAliveInterval 60
       ClientAliveCountMax 3
+      {% if ssh_listen_local_only %}
+      ListenAddress 127.0.0.1
+      ListenAddress ::1
+      {% endif %}
     validate: /usr/sbin/sshd -t -f %s
   notify: Reload sshd

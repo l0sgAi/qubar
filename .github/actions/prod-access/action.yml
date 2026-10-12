@@ -1,15 +1,16 @@
 name: prod-access
 description: >-
-  Terraform init（OSS backend）→ 可选 apply → 读取输出到 $RUNNER_TEMP/tf-outputs.json（0600，敏感值已 mask）
+  Terraform init（R2 backend）→ 可选 apply → 读取输出到 $RUNNER_TEMP/tf-outputs.json（0600，敏感值已 mask）
   → 安装 cloudflared → 配置经 Cloudflare Access 的 SSH（Host ssh.qubar.site，用户 deploy）。
 
 inputs:
   apply:
     description: "true 时执行 terraform apply"
     default: "false"
-  alicloud-access-key:
+  r2-access-key-id:
+    description: R2 API token Access Key ID（Terraform state backend）
     required: true
-  alicloud-secret-key:
+  r2-secret-access-key:
     required: true
   cloudflare-api-token:
     description: apply 时必需；只读输出时可留空
@@ -29,8 +30,8 @@ runs:
       shell: bash
       working-directory: deploy/terraform/prod
       env:
-        ALICLOUD_ACCESS_KEY: ${{ inputs.alicloud-access-key }}
-        ALICLOUD_SECRET_KEY: ${{ inputs.alicloud-secret-key }}
+        AWS_ACCESS_KEY_ID: ${{ inputs.r2-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.r2-secret-access-key }}
         CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
         TF_IN_AUTOMATION: "1"
         TF_INPUT: "0"

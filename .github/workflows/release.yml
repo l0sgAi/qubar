@@ -114,8 +114,8 @@ jobs:
       - uses: ./.github/actions/prod-access
         with:
           apply: "true"
-          alicloud-access-key: ${{ secrets.ALICLOUD_ACCESS_KEY }}
-          alicloud-secret-key: ${{ secrets.ALICLOUD_SECRET_KEY }}
+          r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           deploy-ssh-key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
 
@@ -132,6 +132,8 @@ jobs:
           PG_DEBEZIUM_PASSWORD: ${{ secrets.PG_DEBEZIUM_PASSWORD }}
           REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
           QUBAR_CONFIG_YAML: ${{ secrets.QUBAR_CONFIG_YAML }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
           umask 077
           jq -n --slurpfile tf "$RUNNER_TEMP/tf-outputs.json" '{
@@ -141,9 +143,9 @@ jobs:
             pg_debezium_password:  env.PG_DEBEZIUM_PASSWORD,
             redis_password:        env.REDIS_PASSWORD,
             qubar_config_yaml:     env.QUBAR_CONFIG_YAML,
+            r2_access_key_id:      env.R2_ACCESS_KEY_ID,
+            r2_secret_access_key:  env.R2_SECRET_ACCESS_KEY,
             tunnel_token:          $tf[0].tunnel_token.value,
-            backup_bucket:         $tf[0].backup_bucket.value,
-            ecs_ram_role:          $tf[0].ecs_ram_role.value,
             ansible_host:          $tf[0].ssh_hostname.value
           }' > "$RUNNER_TEMP/ansible-vars.json"
 
@@ -170,8 +172,8 @@ jobs:
 
       - uses: ./.github/actions/prod-access
         with:
-          alicloud-access-key: ${{ secrets.ALICLOUD_ACCESS_KEY }}
-          alicloud-secret-key: ${{ secrets.ALICLOUD_SECRET_KEY }}
+          r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           deploy-ssh-key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
 
       - name: GHCR login on host（GITHUB_TOKEN 仅本 job 有效）

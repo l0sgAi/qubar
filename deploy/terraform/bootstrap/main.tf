@@ -1,66 +1,78 @@
-# 一次性引导：创建存放 prod Terraform state 的 OSS bucket。
+# 一次性引导：创建 Cloudflare R2 桶 —— Terraform state 桶 + PG 备份桶（含过期规则）。
 #
-# 先有 bucket 才能用 OSS backend（鸡生蛋），故本目录用本地 state，只在本机跑一次：
-#   export ALICLOUD_ACCESS_KEY=... ALICLOUD_SECRET_KEY=...
+# 先有桶才能用 R2 做 state backend、才能签发限定这两个桶的 R2 API token（鸡生蛋），
+# 故本目录用本地 state，只在本机跑一次：
+#   export CLOUDFLARE_API_TOKEN=...
 #   terraform -chdir=deploy/terraform/bootstrap init
 #   terraform -chdir=deploy/terraform/bootstrap apply
-# 本地 terraform.tfstate 已 git-ignore；丢了也无妨（bucket 可 `terraform import` 回来）。
+# 本地 terraform.tfstate 已 git-ignore；丢了也无妨（桶可 `terraform import` 回来）。
 
 terraform {
   required_version = ">= 1.10"
   required_providers {
-    alicloud = {
-      source  = "aliyun/alicloud"
-      version = "~> 1.294"
+    cloudflare = {
+      source  = "cloudflare/cloudflare"
+      version = "~> 5.27"
     }
   }
 }
 
-variable "region" {
+variable "cloudflare_account_id" {
   type    = string
-  default = "ap-southeast-8"
+  default = "2328bffc01bc4969ab19339d6dcbf5d9"
 }
 
-variable "state_bucket" {
-  type    = string
-  default = "qubar-tfstate-l0sgai" # 全局唯一；改名需同步 ../prod/versions.tf backend
+variable "backup_retention_days" {
+  type    = number
+  default = 30
 }
 
-provider "alicloud" {
-  region = var.region
+provider "cloudflare" {
+  # 凭证：CLOUDFLARE_API_TOKEN
 }
 
-resource "alicloud_oss_bucket" "state" {
-  bucket        = var.state_bucket
-  storage_class = "Standard"
-
-  versioning {
-    status = "Enabled" # state 误写可回滚
-  }
-
-  server_side_encryption_rule {
-    sse_algorithm = "AES256"
-  }
-
-  lifecycle_rule {
-    id      = "expire-noncurrent"
-    enabled = true
-    prefix  = ""
-    noncurrent_version_expiration {
-      days = 90
-    }
-  }
+resource "cloudflare_r2_bucket" "state" {
+  account_id = var.cloudflare_account_id
+  name       = "qubar-tfstate" # 改名需同步 ../prod/versions.tf backend
+  location   = "apac"
 
   lifecycle {
     prevent_destroy = true
   }
 }
 
-resource "alicloud_oss_bucket_public_access_block" "state" {
-  bucket              = alicloud_oss_bucket.state.bucket
-  block_public_access = true
+resource "cloudflare_r2_bucket" "backup" {
+  account_id = var.cloudflare_account_id
+  name       = "qubar-backup" # 改名需同步 ../../ansible/group_vars/all.yml backup_bucket
+  location   = "apac"
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
-output "state_bucket" {
-  value = alicloud_oss_bucket.state.bucket
+resource "cloudflare_r2_bucket_lifecycle" "backup" {
+  account_id  = var.cloudflare_account_id
+  bucket_name = cloudflare_r2_bucket.backup.name
+  rules = [{
+    id      = "expire-pg-dumps"
+    enabled = true
+    conditions = {
+      prefix = "pg/"
+    }
+    delete_objects_transition = {
+      condition = {
+        type    = "Age"
+        max_age = var.backup_retention_days * 86400
+      }
+    }
+  }]
+}
+
+output "r2_endpoint" {
+  value = "https://${var.cloudflare_account_id}.r2.cloudflarestorage.com"
+}
+
+output "buckets" {
+  value = [cloudflare_r2_bucket.state.name, cloudflare_r2_bucket.backup.name]
 }
