@@ -122,7 +122,7 @@ jobs:
       - name: Install Ansible
         run: |
           pipx install --include-deps ansible-core
-          ansible-galaxy collection install ansible.posix community.general
+          ansible-galaxy collection install -r deploy/ansible/requirements.yml
 
       - name: Ansible vars (0600, 不进命令行)
         env:
