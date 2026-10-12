@@ -1,0 +1,5 @@
+# 角色是项目内私有的，不需要 role 前缀；任务名含中文说明。
+skip_list:
+  - var-naming[no-role-prefix]
+  - name[casing]
+  - yaml[line-length]

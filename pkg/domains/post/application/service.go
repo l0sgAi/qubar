@@ -259,6 +259,13 @@ type PostService interface {
 	// RestoreStats 恢复帖子统计缓存（如果不存在）。
 	// 供 like 领域点赞前确保 Redis stats Hash 存在。
 	RestoreStats(ctx context.Context, postID uuid.UUID) error
+	// IsLikedByUser 用户是否已赞该帖（缓存优先，miss 回源 DB，DB 已赞则回填缓存）。
+	// 供 like 领域点赞前解析真实状态；DB 错误原样返回（调用方不得猜测）。
+	IsLikedByUser(ctx context.Context, userID, postID uuid.UUID) (bool, error)
+	// BatchCheckInteractions 批量查当前用户对帖子的 is_liked / is_collected（缓存优先，miss 批量回源 DB 并回填）。
+	// 供 recommend / trending / discover 信息流回显；best-effort：单侧失败只记日志，返回已知结果。
+	// 访客（userID==uuid.Nil）返回空 map。
+	BatchCheckInteractions(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (liked, collected map[uuid.UUID]bool, err error)
 
 	// SetUserFacade 注入 user Facade（组装作者信息用）。
 	SetUserFacade(f UserFacade)
@@ -678,31 +685,108 @@ func (s *postServiceImpl) assembleMentions(ctx context.Context, postID uuid.UUID
 	return mentions
 }
 
-// checkLiked 检查点赞状态（缓存优先，miss 回源 DB + 回填）。
+// checkLiked 检查点赞状态（详情回显用，best-effort：出错视为未赞）。
 func (s *postServiceImpl) checkLiked(ctx context.Context, userID, postID uuid.UUID) bool {
-	likedMap, missed, err := s.likeCache.BatchCheck(ctx, userID, []uuid.UUID{postID})
-	if err == nil {
-		if likedMap[postID] {
-			return true
-		}
-		if len(missed) > 0 {
-			isLiked, dbErr := s.repo.IsLiked(ctx, userID, postID)
-			if dbErr != nil {
-				return false
-			}
-			if isLiked {
-				_ = s.likeCache.Backfill(ctx, userID, []uuid.UUID{postID})
-			}
-			return isLiked
-		}
+	liked, err := s.IsLikedByUser(ctx, userID, postID)
+	if err != nil {
+		logger.Log.Error("Failed to check post liked: " + err.Error())
 		return false
 	}
-	// 缓存故障：直接回源 DB
-	isLiked, dbErr := s.repo.IsLiked(ctx, userID, postID)
-	if dbErr != nil {
-		return false
+	return liked
+}
+
+// IsLikedByUser 用户是否已赞该帖（缓存优先，miss 回源 DB，DB 已赞则回填缓存）。
+//
+// 用户点赞 ZSET 有 TTL 与容量上限，miss 既可能是"未赞"也可能是"缓存已丢"，必须回源 DB 区分。
+// 缓存故障直接回源 DB；DB 错误原样返回。
+func (s *postServiceImpl) IsLikedByUser(ctx context.Context, userID, postID uuid.UUID) (bool, error) {
+	likedMap, _, err := s.likeCache.BatchCheck(ctx, userID, []uuid.UUID{postID})
+	if err == nil && likedMap[postID] {
+		return true, nil
 	}
-	return isLiked
+	if err != nil {
+		logger.Log.Error("Failed to check post liked from cache, falling back to DB: " + err.Error())
+	}
+
+	liked, err := s.repo.IsLiked(ctx, userID, postID)
+	if err != nil {
+		return false, err
+	}
+	if liked {
+		if bfErr := s.likeCache.Backfill(ctx, userID, []uuid.UUID{postID}); bfErr != nil {
+			logger.Log.Error("Failed to backfill post like cache: " + bfErr.Error())
+		}
+	}
+	return liked, nil
+}
+
+// BatchCheckInteractions 批量查当前用户对帖子的 is_liked / is_collected。
+//
+// 用户 like/collect ZSET 有 TTL 与容量上限，miss 不等于"未赞/未藏"，必须回源 DB 区分；
+// 否则信息流把已赞帖显示为未赞，诱发重复点赞（#46）。best-effort：出错只记日志。
+func (s *postServiceImpl) BatchCheckInteractions(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (liked, collected map[uuid.UUID]bool, err error) {
+	if userID == uuid.Nil || len(postIDs) == 0 {
+		return make(map[uuid.UUID]bool), make(map[uuid.UUID]bool), nil
+	}
+	liked = resolveInteraction(ctx, "like", userID, postIDs, s.likeCache, s.repo.BatchIsLiked)
+	var collectCache interactionCache
+	if s.collectCache != nil {
+		collectCache = s.collectCache
+	}
+	collected = resolveInteraction(ctx, "collect", userID, postIDs, collectCache, s.repo.BatchIsCollected)
+	return liked, collected, nil
+}
+
+// interactionCache PostLikeCache / PostCollectCache 的共同形状（ZSET 批查 + 回填）。
+type interactionCache interface {
+	BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (map[uuid.UUID]bool, []uuid.UUID, error)
+	Backfill(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) error
+}
+
+// resolveInteraction 缓存批查 → miss 批量回源 DB → 回填 DB 确认的记录。cache 为 nil 时全部走 DB。
+func resolveInteraction(
+	ctx context.Context,
+	kind string,
+	userID uuid.UUID,
+	postIDs []uuid.UUID,
+	cache interactionCache,
+	dbCheck func(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (map[uuid.UUID]bool, error),
+) map[uuid.UUID]bool {
+	result := make(map[uuid.UUID]bool, len(postIDs))
+	missed := postIDs
+	if cache != nil {
+		hits, cacheMissed, err := cache.BatchCheck(ctx, userID, postIDs)
+		if err != nil {
+			logger.Log.Error(fmt.Sprintf("Failed to batch check post %s from cache, falling back to DB: %s", kind, err.Error()))
+		} else {
+			for id, v := range hits {
+				result[id] = v
+			}
+			missed = cacheMissed
+		}
+	}
+	if len(missed) == 0 {
+		return result
+	}
+
+	dbHits, err := dbCheck(ctx, userID, missed)
+	if err != nil {
+		logger.Log.Error(fmt.Sprintf("Failed to batch check post %s from DB: %s", kind, err.Error()))
+		return result
+	}
+	backfill := make([]uuid.UUID, 0, len(dbHits))
+	for _, id := range missed {
+		if dbHits[id] {
+			result[id] = true
+			backfill = append(backfill, id)
+		}
+	}
+	if cache != nil && len(backfill) > 0 {
+		if err := cache.Backfill(ctx, userID, backfill); err != nil {
+			logger.Log.Error(fmt.Sprintf("Failed to backfill post %s cache: %s", kind, err.Error()))
+		}
+	}
+	return result
 }
 
 // checkCollected 检查收藏状态（缓存优先，miss 回源 DB + 回填）。

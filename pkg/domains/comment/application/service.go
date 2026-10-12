@@ -184,6 +184,9 @@ type CommentService interface {
 	// RestoreCommentStats 恢复评论统计缓存（如果不存在）。
 	// 供 like 领域点赞前确保 Redis stats Hash 存在。
 	RestoreCommentStats(ctx context.Context, commentID uuid.UUID) error
+	// IsLikedByUser 用户是否已赞该评论（缓存优先，miss 回源 DB，DB 已赞则回填缓存）。
+	// 供 like 领域点赞前解析真实状态；DB 错误原样返回（调用方不得猜测）。
+	IsLikedByUser(ctx context.Context, userID, commentID uuid.UUID) (bool, error)
 
 	// SetUserFacade 注入 user Facade（组装评论者/被回复人信息用）。
 	SetUserFacade(f UserFacade)
@@ -710,38 +713,42 @@ func (s *commentServiceImpl) batchLikedStatus(ctx context.Context, userID uuid.U
 	return likedMap
 }
 
-// checkLiked 检查单条评论的点赞状态（缓存优先，miss 回源 DB + 回填）。
-//
-// 与旧 controller.GetCommentDetail 中的点赞状态查询逻辑一致。
+// checkLiked 检查单条评论的点赞状态（详情回显用，best-effort：出错视为未赞）。
 func (s *commentServiceImpl) checkLiked(ctx context.Context, userID, commentID uuid.UUID) bool {
 	if userID == uuid.Nil {
 		return false
 	}
-	likedMap, err := s.likeCache.BatchCheck(ctx, userID, []uuid.UUID{commentID})
+	liked, err := s.IsLikedByUser(ctx, userID, commentID)
 	if err != nil {
-		// 缓存故障：直接回源 DB
-		isLiked, dbErr := s.repo.IsLiked(ctx, userID, commentID)
-		if dbErr != nil {
-			return false
-		}
-		return isLiked
+		logger.Log.Error("Failed to check comment liked: " + err.Error())
+		return false
+	}
+	return liked
+}
+
+// IsLikedByUser 用户是否已赞该评论（缓存优先，miss 回源 DB，DB 已赞则回填缓存）。
+//
+// 用户评论点赞 ZSET 有 TTL 与容量上限，miss 不等于未赞，必须回源 DB 区分。
+// 缓存故障直接回源 DB；DB 错误原样返回。
+func (s *commentServiceImpl) IsLikedByUser(ctx context.Context, userID, commentID uuid.UUID) (bool, error) {
+	likedMap, err := s.likeCache.BatchCheck(ctx, userID, []uuid.UUID{commentID})
+	if err == nil && likedMap[commentID] {
+		return true, nil
+	}
+	if err != nil {
+		logger.Log.Error("Failed to check comment liked from cache, falling back to DB: " + err.Error())
 	}
 
-	if likedMap[commentID] {
-		return true
+	liked, err := s.repo.IsLiked(ctx, userID, commentID)
+	if err != nil {
+		return false, err
 	}
-	if !likedMap[commentID] {
-		// 缓存明确表示未命中（score==0），回源 DB
-		isLiked, dbErr := s.repo.IsLiked(ctx, userID, commentID)
-		if dbErr != nil {
-			return false
+	if liked {
+		if bfErr := s.likeCache.Backfill(ctx, userID, []uuid.UUID{commentID}); bfErr != nil {
+			logger.Log.Error("Failed to backfill comment like cache: " + bfErr.Error())
 		}
-		if isLiked {
-			_ = s.likeCache.Backfill(ctx, userID, []uuid.UUID{commentID})
-		}
-		return isLiked
 	}
-	return false
+	return liked, nil
 }
 
 // ===== 消息中心通知辅助 =====

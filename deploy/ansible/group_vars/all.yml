@@ -1,0 +1,51 @@
+# 非密钥变量（入库）。密钥变量见 deploy/README.md「密钥清单」，由 CI 以 -e @secrets.json 注入，
+# 本机运行用 deploy/ansible/secrets.local.yml（git-ignored）。
+
+qubar_root: /opt/qubar
+deploy_user: deploy
+
+# 登录 deploy 用户的公钥（公钥可公开）
+deploy_ssh_public_keys:
+  - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBZcwSKQLCbDI08Am/m2WdOIK3Ryie1Y+/fb7uXzCk45 qubar-github-actions-deploy
+  - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCuvADuw/1+N61ErDUPbz4bKCXHFeJRYQ4Vz1mDh/UPFj+6RnoJg4d9mNEU16p2eZOjm8+0OxQ0hGtFPaKKZ4wp8XVofEsbNy6uq6THEg74fCKp2l8DT97WJvC+Ez4W4hOjgUD6h0PMyOHreeuZ43C8aIA4CV4R0z401Rt+2RznGde11EfRigbESN0WrsgVRzsgP30ZOC4SRD9JELDwhlD2aIr3L9JgcQtjymRZD4SNPx0rf07gRlmTAoNoQMi9/UhDc6RIountu2bhKejMocVhz72RvJUv/CwYlgGAYv2eDD3BcIlDbFxIWuB7orTmcW/GuWUwZMC09yjyEFnjb3xj losgai-aliyun-pem
+
+# root 直登：CF Access SSH 验证通过后改为 "no"
+ssh_permit_root_login: prohibit-password
+# sshd 只监听 127.0.0.1（只能经 cloudflared 进入，公网 22 彻底关闭）。
+# ⚠️ 打开前先确认 CF Access SSH 可用；cloudflared 故障时只能走阿里云控制台 VNC（Workbench）救援。
+ssh_listen_local_only: false
+
+swap_size_mb: 4096
+
+# 中间件自建镜像（服务器上构建，tag = 版本 + Dockerfile 内容哈希）
+es_version: "8.15.3"
+connect_version: "7.7.1"
+
+# CDC：Debezium source 表清单（= dbz_pub publication 表清单）与 ES sink 字段白名单
+cdc_tables: [users, category, circle, circle_member, post, comment, comment_like, post_like]
+es_sinks:
+  circle: id,name,slug,avatar_url,cover_url,description,creator_id,category_id,hot,member_count,post_count,join_type,status,deleted,create_time,update_time
+  post: id,circle_id,user_id,type,title,summary,media_extra,view_count,comment_count,like_count,collect_count,hot,is_pinned,is_essence,is_lock,status,deleted,create_time,update_time,last_reply_time
+  users: id,username,email,phone,motto,google_id,x_id,github_id,microsoft_id,avatar_url,gender,birthdate,status,role,agent_circle_id,deleted,create_time,update_time
+
+# 应用 topic（与 config.yaml redpanda.* 一致）；Redpanda 也开着 auto-create，这里显式建好便于观测
+redpanda_topics:
+  - circle_statistics
+  - post_statistics
+  - like_events
+  - collect_events
+  - post_view_history
+  - post_hot
+  - post_interaction
+  - notification_events
+
+# 备份 → Cloudflare R2（桶由 deploy/terraform/bootstrap 创建）
+cloudflare_account_id: 2328bffc01bc4969ab19339d6dcbf5d9
+backup_bucket: qubar-backup
+rclone_version: "1.75.2"
+
+# 由 CI 注入的可选变量（未提供则跳过对应步骤）
+tunnel_token: ""        # 空 = 不启动 cloudflared（首次引导时）
+qubar_config_yaml: ""   # 生产 config.yaml 全文；空 = 不下发（应用无法启动）
+r2_access_key_id: ""    # R2 API token（Object Read & Write，限 qubar-tfstate / qubar-backup）；空 = 只做本地备份
+r2_secret_access_key: ""

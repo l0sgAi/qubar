@@ -139,6 +139,7 @@ func buildClient(b *bootstrapConfig, namespaceID string) (config_client.IConfigC
 func feedViper(content string) error {
 	v := viper.New()
 	v.SetConfigType("yaml")
+	bindEnv(v) // 环境变量优先于 Nacos 内容（#51）
 	if err := v.ReadConfig(bytes.NewReader([]byte(content))); err != nil {
 		return fmt.Errorf("parse nacos config content: %w", err)
 	}

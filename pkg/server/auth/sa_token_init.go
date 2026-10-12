@@ -16,28 +16,16 @@ import (
 // stputil API（IsLogin/GetLoginID/Login/Logout/GetSession）在 v0.2.x 无 breaking change，
 // composition.RequireLogin 鉴权逻辑零改动。
 func InitSaToken() error {
-	// 创建 Redis 存储 (使用完整的 Redis URL)
-	var redisURL string
-
-	// 格式: redis://[password@]host:port/db
-	if conf.Config.Redis.Password != "" {
-		// 有密码的情况: redis://password@host:port/db
-		redisURL = fmt.Sprintf("redis://%s@%s:%d/%d",
-			conf.Config.Redis.Password,
-			conf.Config.Redis.Host,
-			conf.Config.Redis.Port,
-			conf.Config.Redis.D,
-		)
-	} else {
-		// 无密码的情况: redis://host:port/db
-		redisURL = fmt.Sprintf("redis://%s:%d/%d",
-			conf.Config.Redis.Host,
-			conf.Config.Redis.Port,
-			conf.Config.Redis.D,
-		)
-	}
-
-	storage, err := redis.NewStorage(redisURL)
+	// 创建 Redis 存储：用结构化配置而非 URL。
+	// 旧实现拼 "redis://<password>@host" 会被 go-redis ParseURL 解析成「用户名=密码、密码为空」，
+	// 设了 requirepass 的 Redis 上不发 AUTH → Ping 报 NOAUTH；密码含 @ / : 等字符还会解析失败。
+	storage, err := redis.NewStorageFromConfig(&redis.Config{
+		Host:     conf.Config.Redis.Host,
+		Port:     conf.Config.Redis.Port,
+		Password: conf.Config.Redis.Password,
+		Database: conf.Config.Redis.D,
+		PoolSize: conf.Config.Redis.PoolSize,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to create redis storage: %w", err)
 	}

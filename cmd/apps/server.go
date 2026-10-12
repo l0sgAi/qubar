@@ -34,6 +34,9 @@ func Run(configPath, bootstrapPath string) {
 
 	// 2. Init Logger
 	logger.InitLogger()
+	for _, w := range conf.Config.SecurityWarnings() {
+		logger.Log.Warn("[config] " + w)
+	}
 
 	// 3. Init DB
 	pgsql.InitDB()
@@ -208,6 +211,11 @@ func Run(configPath, bootstrapPath string) {
 	// 先停通知消费者：排干 flush 窗口内缓冲事件（落库 + 未读计数依赖 DB/Redis，
 	// 必须先于 CloseRedis 执行）。
 	redpanda.StopNotificationEventConsumerGlobal()
+	// 停点赞消费者：排干缓冲末态落库并提交 offset（仅依赖 PG）。
+	redpanda.StopLikeEventConsumerGlobal()
+	// 停统计类批量消费者（圈子/帖子统计、收藏、浏览历史、热度、互动）：排干缓冲并提交 offset。
+	// 须早于 CloseRedis（帖子热度 fan-out 写 Redis）。
+	redpanda.StopBatchConsumersGlobal()
 	// 停 SSE 推流 hub 的 sweeper（存量连接由 hertz 关停随连接关闭回收）。
 	composition.StopNoticeStreamHub()
 	redis.CloseRedis()

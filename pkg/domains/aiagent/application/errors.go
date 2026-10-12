@@ -11,6 +11,8 @@ var (
 	errAgentNameExists  = errors.New("agent name already exists")
 	errInvalidName      = errors.New("agent name must be 1-50 chars")
 	errInvalidProtocol  = errors.New("api_protocol must be openai/anthropic")
+	errInvalidBaseURL   = errors.New("base_url must be a public https URL")
+	errBaseURLNoDNS     = errors.New("base_url host could not be resolved right now, please retry")
 	errInvalidModel     = errors.New("model must be 1-100 chars")
 	errInvalidTrigger   = errors.New("trigger_mode must be 1/2/3; mode 2 requires keywords")
 	errInvalidLLMParams = errors.New("llm_params has invalid key/value")
@@ -48,6 +50,8 @@ func IsAgentNotFoundErr(err error) bool    { return errors.Is(err, errAgentNotFo
 func IsAgentNameExistsErr(err error) bool  { return errors.Is(err, errAgentNameExists) }
 func IsInvalidNameErr(err error) bool      { return errors.Is(err, errInvalidName) }
 func IsInvalidProtocolErr(err error) bool  { return errors.Is(err, errInvalidProtocol) }
+func IsInvalidBaseURLErr(err error) bool   { return errors.Is(err, errInvalidBaseURL) }
+func IsBaseURLNoDNSErr(err error) bool     { return errors.Is(err, errBaseURLNoDNS) }
 func IsInvalidModelErr(err error) bool     { return errors.Is(err, errInvalidModel) }
 func IsInvalidTriggerErr(err error) bool   { return errors.Is(err, errInvalidTrigger) }
 func IsInvalidLLMParamsErr(err error) bool { return errors.Is(err, errInvalidLLMParams) }

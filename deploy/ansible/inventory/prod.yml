@@ -1,0 +1,10 @@
+# 默认经 Cloudflare Access 登录（ssh.qubar.site，ProxyCommand 见 deploy/README.md / CI action）。
+# 首次引导（tunnel 尚未起来）用公网 IP + root：
+#   ansible-playbook site.yml -e ansible_host=43.107.44.74 -e ansible_user=root \
+#     --private-key ~/deployements/aliyun-deployment/ALIYUN.pem -e @secrets.local.yml
+all:
+  hosts:
+    qubar-prod:
+      ansible_host: ssh.qubar.site
+      ansible_user: deploy
+      ansible_become: true

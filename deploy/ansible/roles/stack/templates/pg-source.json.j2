@@ -1,0 +1,24 @@
+{
+  "name": "pg-source",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "tasks.max": "1",
+    "database.hostname": "postgres",
+    "database.port": "5432",
+    "database.user": "debezium",
+    "database.password": {{ pg_debezium_password | to_json }},
+    "database.dbname": "qubar",
+    "topic.prefix": "pg",
+    "schema.include.list": "domains",
+    "table.include.list": {{ cdc_tables | map('regex_replace', '^', 'domains.') | join(',') | to_json }},
+    "plugin.name": "pgoutput",
+    "slot.name": "dbz_slot",
+    "publication.name": "dbz_pub",
+    "publication.autocreate.mode": "disabled",
+    "snapshot.mode": "initial",
+    "tombstones.on.delete": "true",
+    "heartbeat.interval.ms": "60000",
+    "query.timeout.ms": "0",
+    "statement.timeout.ms": "0"
+  }
+}

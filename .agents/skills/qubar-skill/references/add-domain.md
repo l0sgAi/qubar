@@ -232,7 +232,7 @@ func (f *fooPostFetcher) GetMediaByPostIDs(ctx context.Context, ids []uuid.UUID)
 ## 7. 配置（若需新配置项）
 
 三处同步（仿 `Hot`/`Recommend` 节）：
-1. `configs/config.yaml` 加 `foo:` 节 + 默认值。
+1. `configs/config.example.yaml` 加 `foo:` 节 + 默认值（模板入库；本地 `config.yaml` 不入库）。
 2. `pkg/conf/conf.go` 加 `Foo` 结构体（mapstructure/json/yaml tag）+ `AppConfig` 加字段（`:14`）。
 3. 消费处读 `conf.Config.Foo.Xxx`，`<=0` 提供常量兜底。
 

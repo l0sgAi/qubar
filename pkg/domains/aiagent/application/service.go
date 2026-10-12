@@ -8,6 +8,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"interestBar/pkg/server/utils"
 	sharedomain "interestBar/pkg/shared/domain"
 	"interestBar/pkg/util/crypto"
+	"interestBar/pkg/util/netguard"
 
 	"github.com/google/uuid"
 )
@@ -202,7 +204,7 @@ func (s *agentServiceImpl) CreateAgent(ctx context.Context, adminID uuid.UUID, i
 		return nil, err
 	}
 
-	agent, err := validateAndBuildAgent(input)
+	agent, err := validateAndBuildAgent(ctx, input)
 	if err != nil {
 		return nil, err
 	}
@@ -476,12 +478,16 @@ func botEmailForID(agentID uuid.UUID) string {
 // validateAndBuildAgent 校验创建入参并构建实体公共部分（全局/圈内创建共用）。
 // 全量过 validateXxx 函数组 + api_key 加密 + 默认值补齐；ID/LinkedUserID/CircleID/
 // CreatorID 等归属字段由调用方按各自链路补齐。
-func validateAndBuildAgent(input CreateAgentInput) (*domain.AiAgent, error) {
+func validateAndBuildAgent(ctx context.Context, input CreateAgentInput) (*domain.AiAgent, error) {
 	name := utils.SanitizeForPg(strings.TrimSpace(input.Name))
 	if err := validateName(name); err != nil {
 		return nil, err
 	}
 	if err := validateProtocol(input.APIProtocol); err != nil {
+		return nil, err
+	}
+	baseURL := utils.SanitizeForPg(strings.TrimSpace(input.BaseURL))
+	if err := validateBaseURL(ctx, baseURL); err != nil {
 		return nil, err
 	}
 	model := utils.SanitizeForPg(strings.TrimSpace(input.Model))
@@ -524,7 +530,7 @@ func validateAndBuildAgent(input CreateAgentInput) (*domain.AiAgent, error) {
 		Name:              name,
 		AvatarURL:         utils.SanitizeForPg(input.AvatarURL),
 		APIProtocol:       input.APIProtocol,
-		BaseURL:           utils.SanitizeForPg(strings.TrimSpace(input.BaseURL)),
+		BaseURL:           baseURL,
 		APIKeyEnc:         apiKeyEnc,
 		Model:             model,
 		LLMParams:         toLLMParams(input.LLMParams),
@@ -581,7 +587,11 @@ func buildAgentUpdateFields(ctx context.Context, repo domain.AgentRepository, ag
 		fields["api_protocol"] = *input.APIProtocol
 	}
 	if input.BaseURL != nil {
-		fields["base_url"] = utils.SanitizeForPg(strings.TrimSpace(*input.BaseURL))
+		baseURL := utils.SanitizeForPg(strings.TrimSpace(*input.BaseURL))
+		if err := validateBaseURL(ctx, baseURL); err != nil {
+			return nil, err
+		}
+		fields["base_url"] = baseURL
 	}
 	if input.APIKey != nil {
 		if *input.APIKey == "" {
@@ -672,6 +682,42 @@ func validateProtocol(p string) error {
 		return nil
 	}
 	return errInvalidProtocol
+}
+
+// baseURLResolver 保存时校验 base_url 用的 DNS 解析器（nil = net.DefaultResolver；测试可替换）。
+var baseURLResolver netguard.Resolver
+
+// baseURLResolveTimeout 保存时 DNS 校验超时。
+const baseURLResolveTimeout = 3 * time.Second
+
+// validateBaseURL 校验 base_url（#48 防 SSRF）。空串 = 用协议官方默认地址，放行。
+// 保存时：https、无 userinfo、非内网字面量 IP、域名解析结果全部为公网地址。
+// 这只是提前反馈；真正的强制点在 LLM 调用的拨号阶段（infrastructure.llmEino → netguard.NewHTTPClient）。
+// aiagent.allow_private_base_url=true 时放行 http 与内网地址（本地开发 / 内网自建网关）。
+func validateBaseURL(ctx context.Context, raw string) error {
+	if raw == "" {
+		return nil
+	}
+	if len(raw) > 500 {
+		return errInvalidBaseURL
+	}
+	allowPrivate := conf.Config.AiAgent.AllowPrivateBaseURL
+	u, err := netguard.CheckURL(raw, allowPrivate)
+	if err != nil {
+		return errInvalidBaseURL
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, baseURLResolveTimeout)
+	defer cancel()
+	if err := netguard.CheckHostResolves(lookupCtx, baseURLResolver, u.Hostname(), allowPrivate); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr // 请求已取消（客户端断开），不是 base_url 的问题
+		}
+		if errors.Is(err, netguard.ErrUnresolvable) {
+			return errBaseURLNoDNS
+		}
+		return errInvalidBaseURL
+	}
+	return nil
 }
 
 // validateTrigger 校验触发模式；mode=2 时 keywords 必须非空。
