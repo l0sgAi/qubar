@@ -75,12 +75,11 @@ SSH_TARGET=deploy@43.107.44.74 SSH_OPTS="-i ~/deployements/aliyun-deployment/ALI
 # 5. 首次发布：合并 develop → main，或 Actions 手动 release(force_deploy)
 ```
 
-### 切流 api.qubar.site（冒烟通过后）
+### 切流 api.qubar.site（2026-10-12 已完成）
 
-1. Cloudflare 控制台删除 `api` 的 CNAME（当前指向本机 `dev-debug` tunnel）。
-2. `terraform.tfvars` 设 `api_cutover = true`，合并到 main（或本机 apply）。
-3. 本机开发 tunnel 改用 `api-dev.qubar.site`：`cloudflared tunnel route dns dev-debug api-dev.qubar.site`，并改 `~/.cloudflared/config.yml` 的 hostname。
-4. 冒烟 URL（`release.yml` 的 `SMOKE_URL`）可改回 `https://api.qubar.site/healthz`。
+做法：把原 `api` CNAME（指向本机 `dev-debug` tunnel）`terraform import` 进 `cloudflare_dns_record.tunnel["api"]`，
+`api_cutover = true` 后 apply 原地改 content → 零中断。本机开发 tunnel 已改用 `api-dev.qubar.site`。
+回切（应急）：`api_cutover = false` 会**删除** api 记录——应急时直接在 CF 控制台把 content 改回 `b13234a3-….cfargotunnel.com`。
 
 ### 收尾加固
 
