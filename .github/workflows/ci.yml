@@ -58,10 +58,11 @@ jobs:
 
       - name: Ansible lint
         working-directory: deploy/ansible
-        env:
-          ANSIBLE_COLLECTIONS_PATH: ${{ github.workspace }}/.ansible-collections
+        # 独立 venv：runner 预装的 pipx ansible-core 在 PATH 里会与 ansible-lint 自带版本冲突
         run: |
-          pipx install --include-deps ansible-lint   # 依赖带 ansible-core（含 ansible-playbook）
+          python3 -m venv "$RUNNER_TEMP/ansible"
+          "$RUNNER_TEMP/ansible/bin/pip" install -q ansible-lint
+          export PATH="$RUNNER_TEMP/ansible/bin:$PATH" ANSIBLE_COLLECTIONS_PATH="$RUNNER_TEMP/collections"
           ansible-galaxy collection install -r requirements.yml -p "$ANSIBLE_COLLECTIONS_PATH"
           ansible-playbook site.yml --syntax-check
           ansible-lint --offline site.yml

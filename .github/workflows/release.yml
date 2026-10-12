@@ -119,10 +119,12 @@ jobs:
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           deploy-ssh-key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
 
-      - name: Install Ansible
+      - name: Install Ansible（独立 venv，避开 runner 预装的 pipx ansible-core）
         run: |
-          pipx install --include-deps ansible-core
-          ansible-galaxy collection install -r deploy/ansible/requirements.yml
+          python3 -m venv "$RUNNER_TEMP/ansible"
+          "$RUNNER_TEMP/ansible/bin/pip" install -q "ansible-core>=2.19,<2.22"
+          echo "$RUNNER_TEMP/ansible/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/ansible/bin/ansible-galaxy" collection install -r deploy/ansible/requirements.yml
 
       - name: Ansible vars (0600, 不进命令行)
         env:
