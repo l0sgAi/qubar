@@ -1,0 +1,17 @@
+# Qubar 生产主机全量收敛（幂等，可反复执行）。
+#   CI：.github/workflows/release.yml（infra job）
+#   本机：见 deploy/README.md
+- name: Qubar prod host
+  hosts: qubar-prod
+  become: true
+  pre_tasks:
+    - name: /etc/qubar
+      ansible.builtin.file:
+        path: /etc/qubar
+        state: directory
+        mode: "0755"
+  roles:
+    - { role: base, tags: [base] }
+    - { role: docker, tags: [docker] }
+    - { role: stack, tags: [stack] }
+    - { role: backup, tags: [backup] }

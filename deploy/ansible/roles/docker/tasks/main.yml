@@ -1,0 +1,40 @@
+# Docker CE（官方 RHEL9 源；Alinux4 自带 docker 24 / compose 2.26 偏旧）。
+
+- name: Docker CE repo
+  ansible.builtin.yum_repository:
+    name: docker-ce-stable
+    description: Docker CE Stable (RHEL 9)
+    baseurl: https://download.docker.com/linux/rhel/9/$basearch/stable
+    gpgcheck: true
+    gpgkey: https://download.docker.com/linux/rhel/gpg
+
+- name: Docker packages
+  ansible.builtin.dnf:
+    name: [docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin, docker-compose-plugin]
+    state: present
+
+- name: Docker daemon config
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    mode: "0644"
+    content: "{{ daemon | to_nice_json }}\n"
+  vars:
+    daemon:
+      log-driver: json-file
+      log-opts: { max-size: "20m", max-file: "5" }
+      live-restore: true # dockerd 升级/重启不杀容器
+      default-ulimits:
+        nofile: { Name: nofile, Soft: 65536, Hard: 65536 }
+  notify: Restart docker
+
+- name: Enable docker
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Deploy user in docker group
+  ansible.builtin.user:
+    name: "{{ deploy_user }}"
+    groups: docker
+    append: true

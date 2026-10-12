@@ -1,0 +1,97 @@
+# PG 每日逻辑备份 → Cloudflare R2（rclone，S3 兼容）。桶由 deploy/terraform/bootstrap 创建。
+# 未提供 R2 凭证时只做本地备份（/var/backups/qubar，留 3 天）。
+
+- name: Remove legacy OSS backup bits（已改用 R2）
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: [/usr/local/bin/ossutil, /etc/qubar/ossutil.ini]
+
+- name: Check rclone
+  ansible.builtin.command: rclone version
+  register: rclone_ver
+  changed_when: false
+  failed_when: false
+
+- name: Install rclone
+  when: rclone_ver.rc != 0 or ('v' + rclone_version) not in rclone_ver.stdout
+  block:
+    - name: Download rclone（校验官方 SHA256SUMS）
+      ansible.builtin.get_url:
+        url: "https://downloads.rclone.org/v{{ rclone_version }}/rclone-v{{ rclone_version }}-linux-amd64.zip"
+        dest: "/tmp/rclone-v{{ rclone_version }}.zip"
+        checksum: "sha256:https://downloads.rclone.org/v{{ rclone_version }}/SHA256SUMS"
+        mode: "0644"
+
+    - name: Unpack rclone
+      ansible.builtin.unarchive:
+        src: "/tmp/rclone-v{{ rclone_version }}.zip"
+        dest: /tmp
+        remote_src: true
+
+    - name: Install rclone binary
+      ansible.builtin.copy:
+        src: "/tmp/rclone-v{{ rclone_version }}-linux-amd64/rclone"
+        dest: /usr/local/bin/rclone
+        remote_src: true
+        mode: "0755"
+
+- name: Backup env
+  ansible.builtin.copy:
+    dest: /etc/qubar/backup.env
+    mode: "0644"
+    content: |
+      BACKUP_BUCKET={{ backup_bucket }}
+
+- name: rclone config（R2 凭证，0600）
+  ansible.builtin.copy:
+    dest: /etc/qubar/rclone.conf
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      [r2]
+      type = s3
+      provider = Cloudflare
+      access_key_id = {{ r2_access_key_id }}
+      secret_access_key = {{ r2_secret_access_key }}
+      endpoint = https://{{ cloudflare_account_id }}.r2.cloudflarestorage.com
+      acl = private
+      no_check_bucket = true
+  no_log: true
+  when: r2_access_key_id | length > 0 and r2_secret_access_key | length > 0
+
+- name: Backup systemd units
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item.name }}"
+    mode: "0644"
+    content: "{{ item.content }}"
+  loop:
+    - name: qubar-pg-backup.service
+      content: |
+        [Unit]
+        Description=Qubar PostgreSQL logical backup to Cloudflare R2
+        Requires=docker.service
+        After=docker.service
+        [Service]
+        Type=oneshot
+        Environment=PATH=/usr/local/bin:/usr/bin:/bin
+        ExecStart={{ qubar_root }}/bin/pg-backup.sh
+    - name: qubar-pg-backup.timer
+      content: |
+        [Unit]
+        Description=Daily Qubar PG backup
+        [Timer]
+        OnCalendar=*-*-* 03:30:00
+        RandomizedDelaySec=5m
+        Persistent=true
+        [Install]
+        WantedBy=timers.target
+  register: backup_units
+
+- name: Enable backup timer
+  ansible.builtin.systemd:
+    name: qubar-pg-backup.timer
+    enabled: true
+    state: started
+    daemon_reload: "{{ backup_units.changed }}"

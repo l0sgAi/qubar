@@ -1,0 +1,25 @@
+{
+  "name": "es-sink-{{ item.key }}",
+  "config": {
+    "connector.class": "io.confluent.connect.elasticsearch.ElasticsearchSinkConnector",
+    "tasks.max": "1",
+    "connection.url": "http://elasticsearch:9200",
+    "topics": "pg.domains.{{ item.key }}",
+    "key.ignore": "false",
+    "schema.ignore": "true",
+    "write.method": "upsert",
+    "behavior.on.null.values": "delete",
+    "behavior.on.malformed.documents": "warn",
+    "max.buffered.records": "2000",
+    "batch.size": "500",
+    "linger.ms": "100",
+    "max.in.flight.requests": "1",
+    "transforms": "after,extractKey,whitelist",
+    "transforms.after.type": "org.apache.kafka.connect.transforms.ExtractField$Value",
+    "transforms.after.field": "after",
+    "transforms.extractKey.type": "org.apache.kafka.connect.transforms.ExtractField$Key",
+    "transforms.extractKey.field": "id",
+    "transforms.whitelist.type": "org.apache.kafka.connect.transforms.ReplaceField$Value",
+    "transforms.whitelist.whitelist": "{{ item.value }}"
+  }
+}

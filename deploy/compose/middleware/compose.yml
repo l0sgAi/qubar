@@ -1,0 +1,268 @@
+# Qubar 生产中间件栈（单机 ECS 4C/30G）。由 Ansible 下发到 /opt/qubar/middleware/，.env 由 Ansible 渲染（0600）。
+#
+# 网络约定：所有端口只绑 127.0.0.1；公网入站零端口，外部访问一律走 cloudflared（host 网络）。
+#   本机排障：ssh -L 5432:127.0.0.1:5432 deploy@ssh.qubar.site（经 Cloudflare Access）
+# 内存预算（mem_limit 合计 ≈ 17G，余量给页缓存 / MCSManager）。
+name: qubar-middleware
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "20m", max-file: "5" }
+
+services:
+  postgres:
+    image: postgres:18.4
+    container_name: qubar-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${PG_SUPERUSER_PASSWORD:?}
+      POSTGRES_DB: qubar
+      TZ: Asia/Shanghai
+    command:
+      - postgres
+      - -c
+      - wal_level=logical # Debezium CDC
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+      - -c
+      - max_slot_wal_keep_size=4GB # Debezium 挂了 WAL 也不会撑爆磁盘（代价：超限 slot 失效需重新快照）
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=2GB
+      - -c
+      - effective_cache_size=6GB
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=256MB
+      - -c
+      - timezone=Asia/Shanghai
+      - -c
+      - log_min_duration_statement=500
+    shm_size: 512m
+    mem_limit: 4g
+    volumes:
+      - pg_data:/var/lib/postgresql # PG18 镜像 PGDATA=/var/lib/postgresql/18/docker
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d qubar"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [qubar]
+    logging: *logging
+
+  redis:
+    image: redis:8.2.7
+    container_name: qubar-redis
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?}
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?}
+    # requirepass 走环境变量，避免写进挂载的配置文件
+    command: ["sh", "-c", 'exec redis-server /usr/local/etc/redis/redis.conf --requirepass "$$REDIS_PASSWORD"']
+    mem_limit: 1536m
+    volumes:
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [qubar]
+    logging: *logging
+
+  elasticsearch:
+    image: ${ES_IMAGE:?}
+    container_name: qubar-elasticsearch
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false" # Go 客户端暂不支持鉴权；仅 qubar 内网 + 127.0.0.1 可达
+      ES_JAVA_OPTS: -Xms2g -Xmx2g
+      bootstrap.memory_lock: "true"
+      ingest.geoip.downloader.enabled: "false"
+      action.destructive_requires_name: "true"
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    mem_limit: 4g
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    ports:
+      - "127.0.0.1:9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s' || exit 1"]
+      interval: 10s
+      timeout: 10s
+      start_period: 3m
+      retries: 12
+    networks: [qubar]
+    logging: *logging
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.15.3
+    container_name: qubar-kibana
+    restart: unless-stopped
+    depends_on:
+      elasticsearch: { condition: service_healthy }
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+      XPACK_SECURITY_ENABLED: "false"
+      SERVER_PUBLICBASEURL: https://kibana.qubar.site # 经 Cloudflare Access
+      I18N_LOCALE: zh-CN
+      NODE_OPTIONS: --max-old-space-size=512
+      TELEMETRY_OPTIN: "false"
+    mem_limit: 1g
+    ports:
+      - "127.0.0.1:5601:5601"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:5601/api/status || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 2m
+      retries: 20
+    networks: [qubar]
+    logging: *logging
+
+  redpanda:
+    image: redpandadata/redpanda:v26.1.10
+    container_name: qubar-redpanda
+    restart: unless-stopped
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp
+      - "1"
+      - --memory
+      - 2G
+      - --reserve-memory
+      - 0M
+      - --node-id
+      - "0"
+      - --check=false
+      # INTERNAL 给容器（qubar / connect），EXTERNAL 给宿主机排障（rpk / 本机工具经 ssh -L）
+      - --kafka-addr
+      - INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:19092
+      - --advertise-kafka-addr
+      - INTERNAL://redpanda:9092,EXTERNAL://127.0.0.1:19092
+      - --schema-registry-addr
+      - 0.0.0.0:8081
+      - --rpc-addr
+      - 0.0.0.0:33145
+      - --advertise-rpc-addr
+      - redpanda:33145
+    mem_limit: 2560m
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    ports:
+      - "127.0.0.1:19092:19092"
+      - "127.0.0.1:9644:9644"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -qE 'Healthy:.+true'"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 12
+    networks: [qubar]
+    logging: *logging
+
+  redpanda-console:
+    image: redpandadata/console:v3.12.0
+    container_name: qubar-redpanda-console
+    restart: unless-stopped
+    depends_on:
+      redpanda: { condition: service_healthy }
+    environment:
+      CONFIG_FILEPATH: /etc/console/config.yml
+    configs:
+      - source: console
+        target: /etc/console/config.yml
+    mem_limit: 512m
+    ports:
+      - "127.0.0.1:8090:8080"
+    networks: [qubar]
+    logging: *logging
+
+  connect:
+    image: ${CONNECT_IMAGE:?}
+    container_name: qubar-connect
+    restart: unless-stopped
+    depends_on:
+      redpanda: { condition: service_healthy }
+      elasticsearch: { condition: service_healthy }
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: redpanda:9092
+      CONNECT_REST_PORT: "8083"
+      CONNECT_REST_ADVERTISED_HOST_NAME: connect
+      CONNECT_GROUP_ID: connect-cluster
+      CONNECT_CONFIG_STORAGE_TOPIC: connect_configs
+      CONNECT_OFFSET_STORAGE_TOPIC: connect_offsets
+      CONNECT_STATUS_STORAGE_TOPIC: connect_statuses
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      KAFKA_HEAP_OPTS: -Xms512m -Xmx1g
+    mem_limit: 2g
+    ports:
+      - "127.0.0.1:8083:8083"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8083/connectors || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 1m
+      retries: 12
+    networks: [qubar]
+    logging: *logging
+
+  # Cloudflare Tunnel（远程托管配置，ingress 见 deploy/terraform/prod/cloudflare.tf）。
+  # host 网络：直接转发到宿主机 127.0.0.1 上的各端口（含 sshd:22）。
+  # 仅当 Ansible 拿到 tunnel token 时启用（COMPOSE_PROFILES=edge）。
+  cloudflared:
+    image: cloudflare/cloudflared:2026.10.0
+    container_name: qubar-cloudflared
+    profiles: [edge]
+    restart: unless-stopped
+    network_mode: host
+    command: ["tunnel", "--no-autoupdate", "--metrics", "127.0.0.1:20241", "run"]
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    mem_limit: 256m
+    logging: *logging
+
+configs:
+  console:
+    content: |
+      kafka:
+        brokers: ["redpanda:9092"]
+      schemaRegistry:
+        enabled: true
+        urls: ["http://redpanda:8081"]
+      kafkaConnect:
+        enabled: true
+        clusters:
+          - name: connect
+            url: http://connect:8083
+
+networks:
+  qubar:
+    name: qubar-net
+
+volumes:
+  pg_data:
+  redis_data:
+  es_data:
+  redpanda_data:
