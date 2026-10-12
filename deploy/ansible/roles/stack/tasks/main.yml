@@ -165,7 +165,8 @@
 
 - name: App config.yaml（容器 nonroot uid/gid 65532 经组权限只读）
   ansible.builtin.copy:
-    content: "{{ qubar_config_yaml }}"
+    # 归一化结尾换行：GitHub Secret 会去掉末尾换行，否则本机 / CI 交替运行时内容反复变化触发重启
+    content: "{{ qubar_config_yaml | trim }}\n"
     dest: "{{ qubar_root }}/app/config.yaml"
     owner: root
     group: "65532"
