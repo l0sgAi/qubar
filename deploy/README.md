@@ -1,12 +1,14 @@
 # Qubar 生产部署（阿里云 ECS + Cloudflare Tunnel）
 
-单机 ECS（ap-southeast-8，4C / 30G，Alibaba Cloud Linux 4）跑全部中间件 + API，公网**零入站端口**，
-流量经 Cloudflare Tunnel 进入。机器上另有 MCSManager（23333 / 24444），本套 IaC 不触碰。
+单机 ECS（ap-southeast-8，4C / 30G，Alibaba Cloud Linux 4）跑全部中间件 + API，业务与管理界面**无公网入站端口**，
+流量经 Cloudflare Tunnel 进入。公网只开放 22（服务器拥有者 root 密钥登录，白名单由拥有者在安全组管理）。
+机器上另有 MCSManager（23333 / 24444），本套 IaC 不触碰。
 
 ```
 用户 ─HTTPS─► Cloudflare ─tunnel(出站)─► cloudflared(host 网络) ─► 127.0.0.1:8888 qubar
                                                       │                    │ docker 网络 qubar-net
-CI / 运维 ─► Cloudflare Access(ssh.qubar.site) ───────┘ 127.0.0.1:22       ▼
+CI / 运维 ─► Cloudflare Access(ssh.qubar.site) ───────┘ sshd:22            ▼
+拥有者 ─► 公网 22（安全组 IP 白名单，root + 密钥）──────► sshd:22
                                           postgres:18.4 · redis:8.2.7 · elasticsearch+IK:8.15.3 · kibana
                                           redpanda:v26.1.10 · console · kafka-connect(Debezium PG→ES)
 ```
@@ -81,17 +83,24 @@ SSH_TARGET=deploy@43.107.44.74 SSH_OPTS="-i ~/deployements/aliyun-deployment/ALI
 `api_cutover = true` 后 apply 原地改 content → 零中断。本机开发 tunnel 已改用 `api-dev.qubar.site`。
 回切（应急）：`api_cutover = false` 会**删除** api 记录——应急时直接在 CF 控制台把 content 改回 `b13234a3-….cfargotunnel.com`。
 
-### 收尾加固（2026-10-12 已完成）
+### SSH 访问约定（2026-10-13 起）
 
-`ssh_permit_root_login: "no"`、`ssh_listen_local_only: true`：sshd 只监听 127.0.0.1 / ::1，公网 22 已不通，唯一入口是 CF Access（`ssh.qubar.site`）。
+两条通道并存，**都必须保留**：
 
-**救援（cloudflared 故障 / Access 配置出错时）**：阿里云控制台 → 实例 → 远程连接 → **Workbench「免密登录 / 会话管理」**（走云助手 aliyun.service，不需要 22 端口和密码）。
-登录后删掉 `/etc/ssh/sshd_config.d/10-qubar.conf` 里的两行 `ListenAddress`，`systemctl restart sshd`，必要时安全组临时放行你的 IP。
+| 通道 | 谁用 | 身份 | 访问控制 |
+|---|---|---|---|
+| 公网 22 | 服务器拥有者 | `root` + 阿里云密钥对 `skp-v1sdthv1b4fzapd60uvl` | 阿里云安全组 IP 白名单，**由拥有者自行管理**（IaC 不管安全组） |
+| Cloudflare Access（`ssh.qubar.site`） | CI、运维 | `deploy` + 服务令牌 / 邮箱 OTP | Zero Trust Access 策略（Terraform 管） |
+
+对应 `ansible/group_vars/all.yml`：`ssh_permit_root_login: prohibit-password`（root 仅密钥，密码登录全局关闭）、`ssh_listen_local_only: false`（sshd 监听 0.0.0.0 / [::]）。
+**不要**改成 `"no"` / `true`：2026-10-12 的 #60 曾这样做，把拥有者锁在了外面。
+
+**救援（两条通道都不可用时）**：阿里云控制台 → 实例 → 远程连接 → **Workbench「免密登录 / 会话管理」**（走云助手 aliyun.service，不需要 22 端口和密码）。
 VNC 也可用，但需要实例登录密码（密钥实例默认没有，重置密码要重启）。
 
 ### 阿里云控制台手工项（Terraform 不管）
 
-- **安全组**：入方向只需保留 MCSManager 用的端口；22 规则已无用（sshd 不监听公网），可删除。80/443 不需要。
+- **安全组**（拥有者管理）：入方向保留 22（**只放行白名单 IP**，不要 0.0.0.0/0）与 MCSManager 用的端口；80/443 不需要。
 - **自动快照**（可选，整机兜底）：云服务器 ECS → 存储与快照 → 自动快照策略 → 创建（每日 04:00、保留 14 天）→ 关联系统盘。按快照容量计费。
 
 ## 运维速查
