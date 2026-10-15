@@ -83,8 +83,8 @@ migrate-test:
 	echo "migrate-test ok"
 
 # ---------- 验证（与 .github/workflows/ci.yml 一致）----------
-# lint 只看相对 LINT_BASE 的新增改动（存量告警清理前，见 .golangci.yml）；全量：make lint LINT_BASE=
-LINT_BASE ?= origin/develop
+# lint 默认全量检查；可选 make lint LINT_BASE=origin/develop 只看相对该分支 merge-base 的新增改动（本地提速用）
+LINT_BASE ?=
 
 .PHONY: verify fmt-check vet lint test
 

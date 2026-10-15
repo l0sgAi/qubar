@@ -14,7 +14,7 @@ make dev-psql q="select ..."   # 查开发库；make dev-reset 清空数据卷�
 ```
 
 - `make verify` 失败就修到通过，不要跳过、不要改 lint / CI 配置去绕过。格式问题：`gofmt -w cmd pkg`。
-- lint 目前只检查相对 `origin/develop` 的改动（存量告警待清理，见 `.golangci.yml`），新代码必须零告警。
+- lint 对全仓库生效，必须零告警（`make lint`）。
 - 开发栈端口：PG 25432 / Redis 26379 / ES 29200 / Redpanda 29092。**不要连 15432**（那是 ssh 隧道到生产库的本地端口）。
 - 开发栈没有 CDC：ES 里的业务索引不会随 PG 自动同步；S3 / OAuth / 邮件是占位配置。依赖这些的改动在 PR 里写明未验证的部分。
 
