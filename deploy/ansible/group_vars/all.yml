@@ -21,6 +21,9 @@ swap_size_mb: 4096
 es_version: "8.15.3"
 connect_version: "7.7.1"
 
+# schema 迁移工具镜像（db-migrate.sh 使用；与 .github/workflows/ci.yml db job 的 MIGRATE_IMAGE 保持一致）
+migrate_image: migrate/migrate:v4.20.1
+
 # CDC：Debezium source 表清单（= dbz_pub publication 表清单）与 ES sink 字段白名单
 cdc_tables: [users, category, circle, circle_member, post, comment, comment_like, post_like]
 es_sinks:
