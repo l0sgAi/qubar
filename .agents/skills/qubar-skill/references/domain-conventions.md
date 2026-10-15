@@ -16,7 +16,7 @@ func (b *BaseModel) BeforeCreate(tx *gorm.DB) error {                        // 
 }
 ```
 **为什么 UUIDv7**：前 48 位是毫秒时间戳 → **字典序 == 时间序** → 免额外排序列即可"最新在前" +
-keyset 翻页（`(sort_col, id)` 复合游标）。注释见 `base.go:24-34`、`docs/pgsql-ddl/README.md:4`。
+keyset 翻页（`(sort_col, id)` 复合游标）。注释见 `base.go:24-34`、`docs/pgsql-ddl/README.md:8`。
 
 **关键坑**：实体大多**内联** `ID/CreateTime/UpdateTime`（不嵌入 `BaseModel`），内联字段**不触发 `BeforeCreate` 钩子**，
 所以每个 repo 在 insert 前**必须显式调 `sharedomain.NewID()`**（`circle_repo_pg.go:87`、`post_repo_pg.go:38`、

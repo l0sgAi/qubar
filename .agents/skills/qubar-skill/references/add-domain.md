@@ -65,7 +65,7 @@ var ErrFooNotFound = errors.New("foo not found")   // 哨兵
 只有端口接口 + DTO（`FeedPostItem`/`FeedPage` 风格），无实体。
 
 ### 2.4 schema 改动
-**改表先改 `docs/pgsql-ddl/` 对应领域文档**（DDL 权威来源，DB-owner 执行）。运行时角色无 ALTER 权限，**禁止 AutoMigrate**。
+**改表 = 新增迁移文件**：`make migrate-new name=xxx` → 在 `migrations/<ts>_xxx.up.sql` 写 DDL（`domains.<table>`、遵守 pgsql-ddl 规范、兼容旧版本应用），并同步 `docs/pgsql-ddl/` 对应领域的字段说明。新建表要么登记 `deploy/ansible/group_vars/all.yml` 的 `cdc_tables`，要么在迁移里写 `-- cdc: none`（CI 检查）。迁移随发布由 DB-owner 角色自动执行；运行时角色无 ALTER 权限，**禁止 AutoMigrate**。规范见 `migrations/README.md`。
 
 ## 3. application 层
 
@@ -256,7 +256,7 @@ func (f *fooPostFetcher) GetMediaByPostIDs(ctx context.Context, ids []uuid.UUID)
 - [ ] 软删除 `deleted = 0` 手动过滤（无 gorm.DeletedAt）
 - [ ] 用户文本过 `utils.SanitizeForPg`
 - [ ] Redis key 加到 `constants.go`（前缀 const + helper + 注释）
-- [ ] 改表先改 `docs/pgsql-ddl/` 对应领域文档（无 AutoMigrate）
+- [ ] 改表：新增 `migrations/` 迁移 + 同步 `docs/pgsql-ddl/` 说明，`make migrate-check` 通过（无 AutoMigrate）
 - [ ] 新配置项三处同步 + 兜底默认值
 - [ ] `go build ./...` + `go vet ./...` 通过
 - [ ] 纯函数补单测（游标/解析/规整）

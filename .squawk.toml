@@ -1,0 +1,17 @@
+# Squawk（迁移静态检查）配置，见 migrations/README.md。CI：ci.yml db job；本机：make migrate-check。
+pg_version = "18.0"
+
+# golang-migrate 把一个文件作为一条多语句 simple query 发送，PG 隐式包成一个事务。
+# CONCURRENTLY 文件必须只有那一条语句，并在首行加 `-- squawk-disable-assume-in-transaction`。
+assume_in_transaction = true
+
+excluded_rules = [
+  "prefer-text-field",           # 团队规范：VARCHAR 按语义定长（pgsql-ddl skill）
+  "prefer-bigint-over-smallint", # 团队规范：status / deleted 等枚举列用 SMALLINT
+  "prefer-bigint-over-int",      # 计数 / 配置类 INTEGER 足够；主键是 UUIDv7，不存在溢出问题
+  "require-statement-timeout",   # 只强制 lock_timeout：长时间回填等语句需要自行评估，不一刀切
+]
+
+included_rules = [
+  "require-table-schema", # 一律写 domains.<table>，不依赖 search_path
+]
