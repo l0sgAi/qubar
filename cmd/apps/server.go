@@ -218,16 +218,21 @@ func Run(configPath, bootstrapPath string) {
 	redpanda.StopBatchConsumersGlobal()
 	// 停 SSE 推流 hub 的 sweeper（存量连接由 hertz 关停随连接关闭回收）。
 	composition.StopNoticeStreamHub()
-	redis.CloseRedis()
-	auth.CloseSaToken()
-	redpanda.CloseRedpandaProducer()
-	redpanda.ClosePostStatsProducer()
-	redpanda.CloseLikeEventProducer()
-	redpanda.CloseCollectEventProducer()
-	redpanda.CloseHistoryEventProducer()
-	redpanda.ClosePostHotProducer()
-	redpanda.ClosePostInteractionProducer()
-	redpanda.CloseNotificationEventProducer()
+	if err := redis.CloseRedis(); err != nil {
+		logger.Log.Error("Failed to close redis: " + err.Error())
+	}
+	if err := auth.CloseSaToken(); err != nil {
+		logger.Log.Error("Failed to close sa-token storage: " + err.Error())
+	}
+	// 各 Producer 的 Close 内部已记录错误日志，关停阶段无需再处理返回值。
+	_ = redpanda.CloseRedpandaProducer()
+	_ = redpanda.ClosePostStatsProducer()
+	_ = redpanda.CloseLikeEventProducer()
+	_ = redpanda.CloseCollectEventProducer()
+	_ = redpanda.CloseHistoryEventProducer()
+	_ = redpanda.ClosePostHotProducer()
+	_ = redpanda.ClosePostInteractionProducer()
+	_ = redpanda.CloseNotificationEventProducer()
 	redpanda.StopCircleHotSyncer()
 	redpanda.StopItemCFSyncer()
 	redpanda.StopTrendingSyncer()

@@ -92,7 +92,7 @@ func AggregateTrending(ctx context.Context, dimension, window string, size int) 
 	if err != nil {
 		return nil, fmt.Errorf("failed to aggregate trending (%s/%s): %w", dimension, window, err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.IsError() {
 		return nil, fmt.Errorf("elasticsearch trending aggregate error: %s", res.String())

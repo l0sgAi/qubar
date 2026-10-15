@@ -179,7 +179,7 @@ func SearchCircles(ctx context.Context, keyword string, size int, searchAfter []
 	if err != nil {
 		return nil, fmt.Errorf("failed to search: %w", err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.IsError() {
 		return nil, fmt.Errorf("elasticsearch search error: %s", res.String())
@@ -244,7 +244,7 @@ func SearchRandomCircles(ctx context.Context, size int) (*CircleListResponse, er
 	if err != nil {
 		return nil, fmt.Errorf("failed to search random circles: %w", err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.IsError() {
 		return nil, fmt.Errorf("elasticsearch search error: %s", res.String())
@@ -405,7 +405,7 @@ func SearchMyCircles(ctx context.Context, circleIDs []uuid.UUID, keyword string,
 	if err != nil {
 		return nil, fmt.Errorf("failed to search: %w", err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.IsError() {
 		return nil, fmt.Errorf("elasticsearch search error: %s", res.String())
