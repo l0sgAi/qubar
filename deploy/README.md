@@ -16,7 +16,8 @@ CI / 运维 ─► Cloudflare Access(ssh.qubar.site) ───────┘ ss
 | 层 | 工具 | 目录 | 管什么 |
 |---|---|---|---|
 | 云资源 | Terraform | `terraform/bootstrap`、`terraform/prod` | bootstrap：R2 桶（state + PG 备份，含过期规则）；prod：CF tunnel / DNS / Zero Trust Access。**阿里云侧不归 Terraform 管**（无 RAM 权限），见「阿里云控制台手工项」 |
-| 主机 + 中间件 | Ansible | `ansible/` | 内核参数 / swap / sshd / docker / deploy 用户；中间件 compose、PG 角色与 publication、topic、备份 timer |
+| 主机 + 中间件 | Ansible | `ansible/` | 内核参数 / swap / sshd / docker / deploy 用户；中间件 compose、PG 角色与 publication、topic、备份 timer、迁移运行目录 |
+| 表结构 | golang-migrate | `../migrations/` | `domains` schema 版本化迁移（权威来源），发布时由 `db-migrate.sh` 执行，规范见 [migrations/README.md](../migrations/README.md) |
 | 运行时 | Docker Compose | `compose/` | `middleware/`（中间件）、`app/`（qubar） |
 | 自建镜像 | Dockerfile | `images/` | ES+IK、Kafka Connect+Debezium（服务器本地构建，tag 含 Dockerfile 哈希） |
 | 流水线 | GitHub Actions | `.github/workflows/` | `ci.yml`（PR）、`release.yml`（develop → main 合并即发布） |
@@ -27,10 +28,15 @@ develop → main 合并（PR merge）→ `release.yml`：
 
 1. `deploy/**` 有变更 → **infra**：`terraform apply` → `ansible-playbook site.yml`（幂等）
 2. 应用代码有变更 → **test → build**：`ghcr.io/l0sgai/qubar:<sha>`（linux/amd64）
-3. **deploy**：经 CF Access SSH → `deploy-app.sh <image>`（`compose up --wait` 等健康检查，失败自动回滚上一版）
-   → `register-connectors.sh`（幂等）→ 外网冒烟 `https://api-next.qubar.site/healthz`
+3. `migrations/**` 有变更或有新镜像 → **migrate**：同步 `migrations/` 到 `/opt/qubar/migrate/migrations/` →
+   `db-migrate.sh`（以 `qubar_owner` 跑 `migrate up`，再重跑 `grants.sql` 补授权、把新 CDC 表加进 `dbz_pub`）。
+   **失败则不发布应用**，线上旧版本不受影响
+4. **deploy**：经 CF Access SSH → `deploy-app.sh <image>`（`compose up --wait` 等健康检查，失败自动回滚上一版）
+   → `register-connectors.sh`（幂等）→ 外网冒烟 `https://api-next.qubar.site/healthz`。
+   只有 infra / 迁移变更时也会运行（不换镜像），以便重新注册 connector
 
 回滚：Actions → release → Run workflow → 勾 `rollback`；或服务器上 `/opt/qubar/bin/deploy-app.sh --rollback`。
+回滚只换镜像、**不回退 schema**（迁移 forward-only，且必须兼容上一版本应用）。
 
 ## 密钥清单（GitHub → Settings → Environments → `production`，仅允许 main）
 
@@ -73,6 +79,11 @@ ansible-playbook site.yml -e ansible_host=43.107.44.74 -e ansible_user=deploy \
 
 # 4. 数据迁移（本机 PG → 生产；必须在注册 connectors 之前）
 SSH_TARGET=deploy@43.107.44.74 SSH_OPTS="-i ~/deployements/aliyun-deployment/ALIYUN.pem" deploy/scripts/migrate-pg.sh
+
+# 4.1 标记迁移基线（存量库不回放基线；不做这步 db-migrate.sh 会拒绝执行）。全新空库则跳过，由 migrate 从零建表
+ssh -L 15432:127.0.0.1:5432 ssh.qubar.site   # 另开终端保持
+migrate -path migrations -database 'postgres://qubar_owner@127.0.0.1:15432/qubar?sslmode=disable&x-migrations-table="public"."schema_migrations"&x-migrations-table-quoted=1' \
+  force 20261015000000
 
 # 5. 首次发布：合并 develop → main，或 Actions 手动 release(force_deploy)
 ```
@@ -123,13 +134,18 @@ Host ssh.qubar.site
 | CDC 状态 | `curl -s localhost:8083/connectors?expand=status \| jq` |
 | 手动备份 | `sudo systemctl start qubar-pg-backup && journalctl -u qubar-pg-backup -n 20` |
 | 发布历史 | `cat /opt/qubar/app/releases.log` |
+| 迁移版本 / 历史 | `docker exec qubar-postgres psql -U postgres -d qubar -c 'table public.schema_migrations'`；`cat /opt/qubar/migrate/migrations.log` |
+| 手工执行迁移 | `/opt/qubar/bin/db-migrate.sh`（执行 `/opt/qubar/migrate/migrations/` 下已同步的文件） |
 
-DDL 变更：仍由 DB-owner 按 `docs/pgsql-ddl/` 手工执行（用 `qubar_owner`，default privileges 自动给 `qubar_web_app` / `debezium` 授权）；
-新表要进 CDC 时，在 `ansible/group_vars/all.yml` 的 `cdc_tables` 加表名，合并后 Ansible 会更新 publication 与 connector。
+表结构变更：在仓库 `migrations/` 新增迁移文件（`make migrate-new name=xxx`），随 develop → main 发布自动执行，规范与 dirty 修复见
+[migrations/README.md](../migrations/README.md)。执行身份 `qubar_owner`，default privileges 自动给 `qubar_web_app` / `debezium` 授权。
+新表要进 CDC：同一个 PR 里在 `ansible/group_vars/all.yml` 的 `cdc_tables`（需要 ES 的再加 `es_sinks`）登记，发布时 Ansible 更新 connector 配置，
+迁移后 `grants.sql` 把新表加进 `dbz_pub`，deploy 重新注册 connector；不进 CDC 的表在迁移文件里写 `-- cdc: none`（CI 检查）。
+注意不要与 `deploy/scripts/migrate-pg.sh`（首次引导时一次性搬运**数据**）混淆。
 
 ## 备份与恢复
 
 - PG：每日 03:30 `pg_dump -Fc` → R2 `qubar-backup/pg/YYYY/MM/`（30 天过期），本地留 3 天 `/var/backups/qubar`。
 - 整机：阿里云自动快照（控制台手工配置，见上）。
 - ES：不备份，可重建 —— 删 `pg.domains.*` 索引 + 删 `pg-source` connector 与 slot 后重跑 `register-connectors.sh`（Debezium 重新全量快照）。
-- 恢复 PG：`docker exec -i qubar-postgres pg_restore -U postgres -d qubar --role=qubar_owner --no-owner --no-privileges --clean --if-exists < dump`，再重跑 `/opt/qubar/middleware/pg/bootstrap.sql`。
+- 恢复 PG：`docker exec -i qubar-postgres pg_restore -U postgres -d qubar --role=qubar_owner --no-owner --no-privileges --clean --if-exists < dump`，再重跑 `/opt/qubar/middleware/pg/grants.sql`（`docker exec -i qubar-postgres psql -U postgres -d qubar < …/grants.sql`）。整库 dump 含 `public.schema_migrations`，迁移版本随之恢复。

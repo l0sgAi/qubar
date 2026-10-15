@@ -39,6 +39,84 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # 数据库迁移：规范检查 + Squawk + 临时 PG18 从零回放（规则见 migrations/README.md）
+  db:
+    runs-on: ubuntu-latest
+    env:
+      MIGRATE_IMAGE: migrate/migrate:v4.20.1 # 与 deploy/ansible/group_vars/all.yml migrate_image 一致
+      PG_IMAGE: postgres:18.4
+      SQUAWK_VERSION: "2.69.0"
+    services:
+      postgres:
+        image: postgres:18.4
+        env:
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: qubar
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d qubar"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Base ref
+        id: base
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ -n "$BASE_REF" ]; then
+            echo "ref=origin/$BASE_REF" >> "$GITHUB_OUTPUT"
+          elif [ -n "$BEFORE" ] && ! echo "$BEFORE" | grep -qE '^0+$'; then
+            echo "ref=$BEFORE" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Migration rules
+        env:
+          ALLOW_MIGRATION_EDIT: ${{ contains(github.event.pull_request.labels.*.name, 'migration-fix') }}
+        run: scripts/check-migrations.sh ${{ steps.base.outputs.ref }}
+
+      - name: Squawk（变更的迁移，排除基线）
+        env:
+          BASE: ${{ steps.base.outputs.ref }}
+        run: |
+          if [ -n "$BASE" ]; then
+            mapfile -t files < <(git diff --name-only --diff-filter=AM "$BASE" HEAD -- 'migrations/*.up.sql' | grep -v '_baseline\.up\.sql$' || true)
+          else
+            mapfile -t files < <(printf '%s\n' migrations/*.up.sql | grep -v '_baseline\.up\.sql$' || true)
+          fi
+          [ "${#files[@]}" -gt 0 ] || { echo "no migration changes"; exit 0; }
+          curl -fsSL -o "$RUNNER_TEMP/squawk" \
+            "https://github.com/sbdchd/squawk/releases/download/v$SQUAWK_VERSION/squawk-linux-x64"
+          chmod +x "$RUNNER_TEMP/squawk"
+          "$RUNNER_TEMP/squawk" "${files[@]}"
+
+      - name: Replay all migrations on empty PG18
+        run: |
+          psql() { docker run --rm -i --network host -e PGPASSWORD=ci "$PG_IMAGE" psql -h 127.0.0.1 -U postgres -d qubar -v ON_ERROR_STOP=1 "$@"; }
+          migrate() {
+            docker run --rm --network host -e PGPASSWORD=ci -v "$PWD/migrations:/migrations:ro" "$MIGRATE_IMAGE" \
+              -path /migrations \
+              -database 'postgres://qubar_owner@127.0.0.1:5432/qubar?sslmode=disable&x-migrations-table="public"."schema_migrations"&x-migrations-table-quoted=1' "$@"
+          }
+          psql -q < .github/ci/pg-init.sql
+          migrate up
+          out=$(migrate up 2>&1); echo "$out"
+          grep -q 'no change' <<< "$out"   # 二次执行必须是 no-op
+          migrate version
+          psql -tAc "select count(*) || ' tables in domains' from pg_tables where schemaname = 'domains'"
+          # 最终 schema 供 review
+          docker run --rm --network host -e PGPASSWORD=ci "$PG_IMAGE" \
+            pg_dump -h 127.0.0.1 -U postgres -d qubar --schema-only -n domains --no-owner --no-privileges > schema.sql
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: db-schema
+          path: schema.sql
+          retention-days: 14
+
   iac:
     runs-on: ubuntu-latest
     steps:
@@ -75,4 +153,4 @@ jobs:
             docker compose -f deploy/compose/app/compose.yml config -q
 
       - name: shellcheck
-        run: shellcheck deploy/scripts/*.sh
+        run: shellcheck deploy/scripts/*.sh scripts/*.sh

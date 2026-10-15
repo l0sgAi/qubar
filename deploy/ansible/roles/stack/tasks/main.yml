@@ -1,4 +1,5 @@
-# 中间件栈 + 应用运行目录。应用镜像的发布由 deploy-app.sh（CI 调用）负责，本角色只管配置。
+# 中间件栈 + 应用运行目录 + 迁移运行目录。应用镜像的发布由 deploy-app.sh、schema 迁移由 db-migrate.sh
+# （均由 CI 调用）负责，本角色只管配置。
 
 - name: Require secrets
   ansible.builtin.assert:
@@ -22,13 +23,17 @@
     - "{{ qubar_root }}/images"
     - "{{ qubar_root }}/bin"
 
-- name: App directory (deploy 可写：image.env / releases.log)
+- name: Deploy-writable directories（app：image.env / releases.log；migrate：CI 同步的 migrations/ 与执行记录）
   ansible.builtin.file:
-    path: "{{ qubar_root }}/app"
+    path: "{{ item }}"
     state: directory
     owner: "{{ deploy_user }}"
     group: "{{ deploy_user }}"
     mode: "0750"
+  loop:
+    - "{{ qubar_root }}/app"
+    - "{{ qubar_root }}/migrate"
+    - "{{ qubar_root }}/migrate/migrations"
 
 # ---------- 自建中间件镜像：服务器本地构建，tag 含 Dockerfile 哈希 ----------
 - name: Image tags
@@ -106,19 +111,45 @@
   changed_when: "'changed=1' in rp.stdout"
 
 # ---------- PostgreSQL 角色 / 权限 / publication ----------
-- name: PG bootstrap SQL
+# roles.sql 含密码（root 0600）；grants.sql 无密钥（deploy 可读），db-migrate.sh 迁移后会重跑它
+- name: PG roles SQL
   ansible.builtin.template:
-    src: bootstrap.sql.j2
-    dest: "{{ qubar_root }}/middleware/pg/bootstrap.sql"
+    src: roles.sql.j2
+    dest: "{{ qubar_root }}/middleware/pg/roles.sql"
     owner: root
     group: root
     mode: "0600"
 
-- name: Apply PG bootstrap SQL
-  ansible.builtin.shell: >-
-    docker exec -i qubar-postgres psql -U postgres -d qubar -q -v ON_ERROR_STOP=1
-    < {{ qubar_root }}/middleware/pg/bootstrap.sql
+- name: PG grants SQL
+  ansible.builtin.template:
+    src: grants.sql.j2
+    dest: "{{ qubar_root }}/middleware/pg/grants.sql"
+    owner: root
+    group: "{{ deploy_user }}"
+    mode: "0640"
+
+- name: Remove legacy bootstrap.sql（已拆分为 roles.sql + grants.sql）
+  ansible.builtin.file:
+    path: "{{ qubar_root }}/middleware/pg/bootstrap.sql"
+    state: absent
+
+- name: Apply PG roles + grants SQL
+  ansible.builtin.shell: |
+    set -o pipefail
+    cat {{ qubar_root }}/middleware/pg/roles.sql {{ qubar_root }}/middleware/pg/grants.sql \
+      | docker exec -i qubar-postgres psql -U postgres -d qubar -q -v ON_ERROR_STOP=1
+  args:
+    executable: /bin/bash
   changed_when: false
+
+# ---------- schema 迁移（golang-migrate，见 migrations/README.md） ----------
+- name: Migrate .env（qubar_owner 密码，经 PGPASSWORD 传给 migrate 容器，不进命令行）
+  ansible.builtin.template:
+    src: migrate.env.j2
+    dest: "{{ qubar_root }}/migrate/.env"
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_user }}"
+    mode: "0600"
 
 # ---------- CDC connectors（注册由 register-connectors.sh 在应用启动后执行） ----------
 - name: Debezium source connector config
@@ -144,7 +175,7 @@
     src: "{{ playbook_dir }}/../scripts/{{ item }}"
     dest: "{{ qubar_root }}/bin/{{ item }}"
     mode: "0755"
-  loop: [deploy-app.sh, register-connectors.sh, pg-backup.sh]
+  loop: [deploy-app.sh, db-migrate.sh, register-connectors.sh, pg-backup.sh]
 
 # ---------- 应用运行目录 ----------
 - name: App compose

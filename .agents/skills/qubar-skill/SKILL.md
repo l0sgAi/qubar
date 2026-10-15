@@ -55,7 +55,7 @@ qubar（Go module `interestBar`）是一个 DDD 模块化单体的兴趣社区�
 - ❌ **跨域直接 import。** 如 post 要拿 user 信息：在 `post/application/` 重新声明 `UserFacade` 接口，由 `pkg/composition/facade_bridges.go` 写桥接器，setter 注入。
 - ❌ **业务层 import hertz/gin。** handler 用 `appctx.AppContext`；响应用 `httputil.Success/BadRequest/...`，**禁止** `c.JSON(...)`。
 - ❌ **handler 里写查询逻辑 / domain 里写 DB 操作。** handler 只 bind + 调 service + 映射错误；DB/Redis/ES 只在 `infrastructure/`。
-- ❌ **AutoMigrate。** schema 由 `docs/pgsql-ddl/` 的 SQL 脚本管理（DB-owner 角色），运行时角色无 ALTER 权限。改表先改 docs/pgsql-ddl/。
+- ❌ **AutoMigrate / 手工到生产执行 DDL。** schema 由 `migrations/`（golang-migrate，forward-only）管理，发布时以 DB-owner 角色自动执行，运行时角色无 ALTER 权限。改表 = `make migrate-new name=xxx` 新增迁移 + 同步 `docs/pgsql-ddl/` 字段说明；规范见 `migrations/README.md`。
 - ❌ **GORM 软删除插件。** 用 `deleted = 0` 手动过滤（`Deleted int16`），不用 `gorm.DeletedAt`。
 - ❌ **用 `form:` tag 绑 query。** hertz 的 `BindQuery` 只认 `query:` tag（gin 时代用 form，迁移后必须改）。
 - ❌ **用户文本直接入库。** 必须先过 `utils.SanitizeForPg`（防 PG UTF8 错误），在 application 层调用。
@@ -122,5 +122,5 @@ go run ./cmd -c configs/config.yaml -b configs/bootstrap.yaml   # 本地启动�
 - 共享内核：`pkg/shared/domain/base.go`（NewID/BeforeCreate）、`appctx/context.go`、`routing/group.go`、`httputil/response.go`
 - 基础设施全局：`pkg/server/storage/{db/pgsql,redis,elasticsearch,redpanda,s3}`
 - 配置：`pkg/conf/conf.go`（Config 结构体）、`configs/config.example.yaml`（模板；本地 `configs/config.yaml` 已 git-ignore，勿提交密钥）、`configs/bootstrap.yaml`
-- schema：`docs/pgsql-ddl/`（DDL 权威来源，按领域拆分，入口 README.md；docs/db.md 仅作跳转入口）
+- schema：`migrations/`（DDL 权威来源，golang-migrate 版本化迁移，规范见 migrations/README.md）；`docs/pgsql-ddl/` 为按领域拆分的设计 / 字段语义说明（入口 README.md；docs/db.md 仅作跳转入口）
 - 路由抽象适配：`pkg/composition/hertzadapter/group.go`、`pkg/shared/appctx/hertzadapter/adapter.go`
