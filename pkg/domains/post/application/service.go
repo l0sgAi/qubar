@@ -679,7 +679,7 @@ func (s *postServiceImpl) assembleMentions(ctx context.Context, postID uuid.UUID
 	mentions := make([]MentionVO, 0, len(ids))
 	for _, id := range ids {
 		if b, ok := briefs[id.String()]; ok {
-			mentions = append(mentions, MentionVO{ID: b.ID, Username: b.Username, AvatarURL: b.AvatarURL})
+			mentions = append(mentions, MentionVO(b))
 		}
 	}
 	return mentions
