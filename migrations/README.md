@@ -14,6 +14,7 @@ make migrate-new name=add_post_pin_until   # 生成 <yyyymmddhhmmss>_add_post_pi
 # 编辑 SQL；同步更新 docs/pgsql-ddl/ 对应领域文档的字段说明
 make migrate-up                            # 本机执行
 make migrate-check                         # 与 CI 相同的检查
+make migrate-test                          # 一次性 PG18 容器从空库回放全部迁移 + 二次 up 必须 no-op（与 CI 一致，只需 Docker）
 ```
 
 PR → develop：CI（`ci.yml` 的 `db` job）做规范检查、Squawk、在临时 PG18 上从零回放全部迁移。

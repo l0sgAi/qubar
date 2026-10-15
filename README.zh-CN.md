@@ -151,9 +151,11 @@ qubar/
 │   ├── config.example.yaml # 配置模板；复制为 config.yaml（已 git-ignore，Nacos 不可用时兜底）
 │   └── bootstrap.yaml    # Nacos 引导配置（地址、命名空间、分组）
 │
+├── migrations/           # 数据库迁移（golang-migrate，表结构权威来源）
+│
 ├── docs/
-│   ├── pgsql-ddl/        # 数据库表结构（UUIDv7 主键版，按领域拆分）
-│   ├── db.md             # DDL 跳转入口（指向 pgsql-ddl/）
+│   ├── pgsql-ddl/        # 表字段语义说明（按领域拆分；表结构以 migrations/ 为准）
+│   ├── db.md             # DDL 跳转入口（指向 migrations/ 与 pgsql-ddl/）
 │   ├── api/              # API 文档
 │   └── design/           # 设计文档
 │
@@ -197,14 +199,23 @@ go mod download
 
 ### 3. 配置数据库
 
-创建数据库和 schema：
+表结构由 [migrations/](migrations/)（golang-migrate，forward-only）管理，规范见 [migrations/README.md](migrations/README.md)；[docs/pgsql-ddl/](docs/pgsql-ddl/) 只做字段语义说明（种子数据也在那里）。依赖 `brew install golang-migrate squawk`。
 
-```sql
-CREATE DATABASE qubar;
-CREATE SCHEMA IF NOT EXISTS domains;
+**新建本地库**：以超级用户执行 `.github/ci/pg-init.sql`（建 `qubar_owner` / `qubar_web_app` / `debezium` 角色、`domains` schema 与默认权限，密码均为 `ci`，仅限本机），再以 `qubar_owner` 执行全部迁移：
+
+```bash
+createdb qubar
+psql -d qubar -f .github/ci/pg-init.sql
+make migrate-up        # pg_hba 不是 trust 时加 PGPASSWORD=ci
 ```
 
-数据库表结构及种子数据请参考 [docs/pgsql-ddl/](docs/pgsql-ddl/)（按领域拆分，入口 [README.md](docs/pgsql-ddl/README.md)）
+**已有本地库**（之前按 `docs/pgsql-ddl/` 手工建过表）：只标记基线、不执行，且表须归 `qubar_owner` 所有：
+
+```bash
+make migrate-force v=20261015000000
+```
+
+改表：`make migrate-new name=xxx` → 编辑 SQL → `make migrate-up` → `make migrate-check && make migrate-test`（一次性 PG18 容器从空库回放全部迁移，与 CI 一致，只需 Docker）。
 
 ### 4. 配置应用
 

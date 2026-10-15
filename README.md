@@ -151,9 +151,11 @@ qubar/
 │   ├── config.example.yaml # Config template; copy to config.yaml (git-ignored, fallback when Nacos is unavailable)
 │   └── bootstrap.yaml    # Nacos bootstrap config (address, namespace, group)
 │
+├── migrations/           # Database migrations (golang-migrate, source of truth for the schema)
+│
 ├── docs/
-│   ├── pgsql-ddl/        # Database schemas (UUIDv7 PK version, split by domain)
-│   ├── db.md             # DDL entry point (redirects to pgsql-ddl/)
+│   ├── pgsql-ddl/        # Column semantics, split by domain (schema lives in migrations/)
+│   ├── db.md             # DDL entry point (points to migrations/ and pgsql-ddl/)
 │   ├── api/              # API docs
 │   └── design/           # Design docs
 │
@@ -197,14 +199,23 @@ go mod download
 
 ### 3. Set Up the Database
 
-Create the database and schema:
+The schema is managed by [migrations/](migrations/) (golang-migrate, forward-only); see [migrations/README.md](migrations/README.md) for the rules. [docs/pgsql-ddl/](docs/pgsql-ddl/) only documents column semantics (and seed data). Requires `brew install golang-migrate squawk`.
 
-```sql
-CREATE DATABASE qubar;
-CREATE SCHEMA IF NOT EXISTS domains;
+**Fresh local database**: run `.github/ci/pg-init.sql` as a superuser (creates the `qubar_owner` / `qubar_web_app` / `debezium` roles, the `domains` schema and default privileges; all passwords are `ci`, local use only), then apply all migrations as `qubar_owner`:
+
+```bash
+createdb qubar
+psql -d qubar -f .github/ci/pg-init.sql
+make migrate-up        # add PGPASSWORD=ci if pg_hba is not trust
 ```
 
-For table schemas and seed data, see [docs/pgsql-ddl/](docs/pgsql-ddl/) (split by domain; entry point: [README.md](docs/pgsql-ddl/README.md))
+**Existing local database** (tables created by hand from `docs/pgsql-ddl/`): mark the baseline instead of running it; tables must be owned by `qubar_owner`:
+
+```bash
+make migrate-force v=20261015000000
+```
+
+Schema changes: `make migrate-new name=xxx` → edit the SQL → `make migrate-up` → `make migrate-check && make migrate-test` (replays all migrations on a throwaway PG18 container, same as CI; needs only Docker).
 
 ### 4. Configure the App
 
