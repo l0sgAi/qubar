@@ -176,6 +176,18 @@ qubar/
 
 ## 🚀 快速开始
 
+### 最快方式：Docker 开发栈（推荐，agent 同样用这条）
+
+只需要 Go 和 Docker：
+
+```bash
+make dev-up    # 起 PG18 / Redis / ES(IK) / Redpanda（deploy/compose/dev，端口 2xxxx 段）并执行全部迁移
+make dev-run   # 用 configs/config.dev.yaml 启动应用，http://localhost:8888/healthz
+make verify    # 提交前：格式 + vet + lint + 单测 + 迁移检查与空库回放（与 CI 一致）
+```
+
+开发栈不含 CDC（connect / Debezium），ES 业务索引不会自动同步；S3 / OAuth / 邮件是占位配置，相关接口不可用（需要时用 `QUBAR_*` 环境变量覆盖）。下面是使用本机自装服务的方式。
+
 ### 环境要求
 
 - Go 1.25.4+
@@ -199,7 +211,7 @@ go mod download
 
 ### 3. 配置数据库
 
-表结构由 [migrations/](migrations/)（golang-migrate，forward-only）管理，规范见 [migrations/README.md](migrations/README.md)；[docs/pgsql-ddl/](docs/pgsql-ddl/) 只做字段语义说明（种子数据也在那里）。依赖 `brew install golang-migrate squawk`。
+表结构由 [migrations/](migrations/)（golang-migrate，forward-only）管理，规范见 [migrations/README.md](migrations/README.md)；[docs/pgsql-ddl/](docs/pgsql-ddl/) 只做字段语义说明（种子数据也在那里）。本机执行迁移依赖 `brew install golang-migrate`（`make migrate-check` 用的 Squawk 会自动下载到 `bin/`）。
 
 **新建本地库**：以超级用户执行 `.github/ci/pg-init.sql`（建 `qubar_owner` / `qubar_web_app` / `debezium` 角色、`domains` schema 与默认权限，密码均为 `ci`，仅限本机），再以 `qubar_owner` 执行全部迁移：
 

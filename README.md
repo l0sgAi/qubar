@@ -176,6 +176,18 @@ qubar/
 
 ## 🚀 Quick Start
 
+### Fastest: Docker dev stack (recommended, also what agents use)
+
+Only Go and Docker are required:
+
+```bash
+make dev-up    # start PG18 / Redis / ES(IK) / Redpanda (deploy/compose/dev, ports in the 2xxxx range) and run all migrations
+make dev-run   # run the app with configs/config.dev.yaml, http://localhost:8888/healthz
+make verify    # before committing: fmt + vet + lint + unit tests + migration checks and replay (same as CI)
+```
+
+The dev stack has no CDC (connect / Debezium), so business indices in ES are not synced; S3 / OAuth / email use placeholder config and those endpoints won't work (override with `QUBAR_*` env vars when needed). The sections below cover running against locally installed services.
+
 ### Requirements
 
 - Go 1.25.4+
@@ -199,7 +211,7 @@ go mod download
 
 ### 3. Set Up the Database
 
-The schema is managed by [migrations/](migrations/) (golang-migrate, forward-only); see [migrations/README.md](migrations/README.md) for the rules. [docs/pgsql-ddl/](docs/pgsql-ddl/) only documents column semantics (and seed data). Requires `brew install golang-migrate squawk`.
+The schema is managed by [migrations/](migrations/) (golang-migrate, forward-only); see [migrations/README.md](migrations/README.md) for the rules. [docs/pgsql-ddl/](docs/pgsql-ddl/) only documents column semantics (and seed data). Running migrations locally requires `brew install golang-migrate` (Squawk for `make migrate-check` is downloaded into `bin/` automatically).
 
 **Fresh local database**: run `.github/ci/pg-init.sql` as a superuser (creates the `qubar_owner` / `qubar_web_app` / `debezium` roles, the `domains` schema and default privileges; all passwords are `ci`, local use only), then apply all migrations as `qubar_owner`:
 

@@ -1,11 +1,18 @@
-# 本机数据库迁移（golang-migrate），规范见 migrations/README.md。
-# 依赖：brew install golang-migrate squawk；migrate-test 只需要 Docker
+# Qubar 常用命令。agent / 新人从这里开始（l0sgAi/qubar#67）：
 #
+#   make verify       # 提交 / 开 PR 前必须全绿：格式 + vet + lint + 单测 + 迁移检查与空库回放（与 CI 一致）
+#   make dev-up       # 起本机开发依赖栈（PG18 / Redis / ES+IK / Redpanda）并执行迁移，只需要 Docker
+#   make dev-run      # 用 configs/config.dev.yaml 启动应用（:8888）
+#   make dev-down     # 停栈保留数据；make dev-reset 连数据卷一起删
+#
+# 工具（golangci-lint / squawk）按固定版本自动下载到 bin/（已 git-ignore），无需 brew。
+#
+# 数据库迁移（golang-migrate），规范见 migrations/README.md：
 #   make migrate-new name=add_post_pin_until   # 生成 migrations/<ts>_add_post_pin_until.up.sql
-#   make migrate-up                            # 执行到最新
+#   make dev-migrate                           # 对开发栈执行到最新（只需要 Docker）
 #   make migrate-check                         # 规范检查 + Squawk（与 CI 一致）
 #   make migrate-test                          # 一次性 PG18 容器从空库回放全部迁移（与 CI 一致）
-#   make migrate-version / migrate-force v=<version>
+#   make migrate-up / migrate-version / migrate-force v=<version>   # 本机 Homebrew PG（brew install golang-migrate）
 
 MIGRATIONS := migrations
 MIGRATIONS_TABLE := x-migrations-table="public"."schema_migrations"&x-migrations-table-quoted=1
@@ -18,6 +25,13 @@ MIGRATE := migrate -path $(MIGRATIONS) -database '$(MIGRATE_DB)'
 # 与 .github/workflows/ci.yml db job 一致
 MIGRATE_IMAGE ?= migrate/migrate:v4.20.1
 PG_IMAGE ?= postgres:18.4
+
+# 固定版本的工具，下载到 bin/（文件名带版本号，升级版本即重新下载）。SQUAWK_VERSION 与 ci.yml 一致。
+BIN := $(CURDIR)/bin
+GOLANGCI_LINT_VERSION := v2.14.0
+GOLANGCI_LINT := $(BIN)/golangci-lint-$(GOLANGCI_LINT_VERSION)
+SQUAWK_VERSION := 2.69.0
+SQUAWK := $(BIN)/squawk-$(SQUAWK_VERSION)
 
 .PHONY: migrate-new migrate-up migrate-version migrate-force migrate-check migrate-test
 
@@ -42,9 +56,10 @@ migrate-force:
 	@[ -n "$(v)" ] || { echo "用法: make migrate-force v=<version>"; exit 1; }
 	$(MIGRATE) force $(v)
 
-migrate-check:
+migrate-check: $(SQUAWK)
 	scripts/check-migrations.sh
-	squawk --exclude-path='*_baseline.up.sql' '$(MIGRATIONS)/*.up.sql'
+	@files=$$(ls $(MIGRATIONS)/*.up.sql | grep -v '_baseline\.up\.sql$$' || true); \
+	if [ -z "$$files" ]; then echo "squawk: 没有基线以外的迁移"; else $(SQUAWK) $$files; fi
 
 # 空库回放：pg-init.sql 建角色 / schema / 默认权限 → qubar_owner migrate up → 二次 up 必须 no-op。
 # 容器与网络用完即删（失败也删），不占用本机端口、不碰本机 dev 库。
@@ -66,3 +81,70 @@ migrate-test:
 	migrate version; \
 	docker exec $$n psql -tA -U postgres -d qubar -c "select count(*) || ' tables in domains' from pg_tables where schemaname = 'domains'"; \
 	echo "migrate-test ok"
+
+# ---------- 验证（与 .github/workflows/ci.yml 一致）----------
+# lint 只看相对 LINT_BASE 的新增改动（存量告警清理前，见 .golangci.yml）；全量：make lint LINT_BASE=
+LINT_BASE ?= origin/develop
+
+.PHONY: verify fmt-check vet lint test
+
+verify: fmt-check vet lint test migrate-check migrate-test
+	@echo "verify ok"
+
+fmt-check:
+	@out=$$(gofmt -l cmd pkg); [ -z "$$out" ] || { echo "未 gofmt 的文件（gofmt -w cmd pkg）："; echo "$$out"; exit 1; }
+
+vet:
+	go vet ./...
+
+lint: $(GOLANGCI_LINT)
+	$(GOLANGCI_LINT) run $(if $(LINT_BASE),--new-from-merge-base=$(LINT_BASE)) ./...
+
+test:
+	go test ./pkg/...
+
+$(GOLANGCI_LINT):
+	@mkdir -p $(BIN)
+	GOBIN=$(BIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	mv $(BIN)/golangci-lint $@
+
+$(SQUAWK):
+	@mkdir -p $(BIN)
+	@os=$$(uname -s | tr A-Z a-z); arch=$$(uname -m); \
+	case $$arch in x86_64|amd64) arch=x64 ;; aarch64|arm64) arch=arm64 ;; *) echo "不支持的架构 $$arch"; exit 1 ;; esac; \
+	curl -fsSL -o $@.tmp "https://github.com/sbdchd/squawk/releases/download/v$(SQUAWK_VERSION)/squawk-$$os-$$arch" && chmod +x $@.tmp && mv $@.tmp $@
+
+# ---------- 本机 / agent 开发栈（deploy/compose/dev）----------
+# 端口：PG 25432 / Redis 26379 / ES 29200 / Redpanda 29092（避开 15432：ssh -L 到生产库的本地端口）
+DEV_COMPOSE := docker compose -f deploy/compose/dev/compose.yml
+DEV_CONFIG := configs/config.dev.yaml
+
+.PHONY: dev-up dev-migrate dev-run dev-down dev-reset dev-ps dev-logs dev-psql
+
+dev-up:
+	$(DEV_COMPOSE) up -d --build --wait
+	$(MAKE) dev-migrate
+
+# 以 qubar_owner 在 compose 网络内执行，不依赖本机 migrate
+dev-migrate:
+	docker run --rm --network qubar-dev_default -v "$(CURDIR)/$(MIGRATIONS):/migrations:ro" $(MIGRATE_IMAGE) \
+	  -path /migrations -database 'postgres://qubar_owner:ci@postgres:5432/qubar?sslmode=disable&$(MIGRATIONS_TABLE)' up
+
+dev-run:
+	go run cmd/main.go -c $(DEV_CONFIG) -b ""
+
+dev-down:
+	$(DEV_COMPOSE) down
+
+dev-reset:
+	$(DEV_COMPOSE) down -v
+
+dev-ps:
+	$(DEV_COMPOSE) ps
+
+dev-logs:
+	$(DEV_COMPOSE) logs -f --tail=100
+
+# 以超级用户进开发库：make dev-psql，或 make dev-psql q="select ..."
+dev-psql:
+	$(DEV_COMPOSE) exec postgres psql -U postgres -d qubar $(if $(q),-c "$(q)")

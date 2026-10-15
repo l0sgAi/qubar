@@ -1,0 +1,16 @@
+# golangci-lint v2（make lint；版本在 Makefile 的 GOLANGCI_LINT_VERSION 固定，CI 同一版本）。
+#
+# 存量代码还有约 70 条告警（errcheck / staticcheck SA1012 nil Context 等），清理前 make lint
+# 只检查相对 origin/develop 的新增改动（--new-from-merge-base，见 Makefile LINT_BASE）；
+# 全量：make lint LINT_BASE=
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard # errcheck / govet / ineffassign / staticcheck / unused
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
