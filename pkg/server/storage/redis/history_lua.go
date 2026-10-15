@@ -155,7 +155,7 @@ func ListPostLikedIDs(userID uuid.UUID, limit int64) ([]string, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
-	members, err := Client.ZRevRange(ctx, GetUserPostLikeListKey(userID), 0, limit-1).Result()
+	members, err := Client.ZRangeArgs(ctx, redis.ZRangeArgs{Key: GetUserPostLikeListKey(userID), Start: 0, Stop: limit - 1, Rev: true}).Result()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list liked post ids: %w", err)
 	}
@@ -169,7 +169,7 @@ func ListPostCollectedIDs(userID uuid.UUID, limit int64) ([]string, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
-	members, err := Client.ZRevRange(ctx, GetUserPostCollectListKey(userID), 0, limit-1).Result()
+	members, err := Client.ZRangeArgs(ctx, redis.ZRangeArgs{Key: GetUserPostCollectListKey(userID), Start: 0, Stop: limit - 1, Rev: true}).Result()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list collected post ids: %w", err)
 	}
