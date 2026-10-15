@@ -188,11 +188,11 @@ func (s *historyServiceImpl) ListHistoryPosts(ctx context.Context, userID uuid.U
 
 // searchHistoryPosts 在「最近浏览」范围内按关键字搜索。
 //
-// 1. loadAllViewEntries 取该用户全部浏览 entries(≤500,含冷启动 backfill)作 ID 集合 +
-//    postID→ViewedAt 映射(ZSET 序 = 最近访问序,仅用于回填 viewed_at,不参与排序);
-// 2. ES 在 ID 集合内 multi_match(title^3/summary) 过滤 + 失效帖过滤,按 _score desc 排序,
-//    from/size offset 分页,返回匹配总数;
-// 3. 按 ES 返回(相关性序)组装,附 viewed_at(查映射)。
+//  1. loadAllViewEntries 取该用户全部浏览 entries(≤500,含冷启动 backfill)作 ID 集合 +
+//     postID→ViewedAt 映射(ZSET 序 = 最近访问序,仅用于回填 viewed_at,不参与排序);
+//  2. ES 在 ID 集合内 multi_match(title^3/summary) 过滤 + 失效帖过滤,按 _score desc 排序,
+//     from/size offset 分页,返回匹配总数;
+//  3. 按 ES 返回(相关性序)组装,附 viewed_at(查映射)。
 //
 // 与无关键字路径的差异:排序改为相关性(_score),非最近访问时间;分页语义(offset)不变。
 func (s *historyServiceImpl) searchHistoryPosts(ctx context.Context, userID uuid.UUID, keyword string, size, offset int) (*ListHistoryPostsResult, error) {

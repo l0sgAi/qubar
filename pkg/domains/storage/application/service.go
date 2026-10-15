@@ -35,9 +35,9 @@ type UploadedImageVO struct {
 
 // UploadedImagesVO 多文件上传的聚合结果。
 type UploadedImagesVO struct {
-	Uploaded int                `json:"uploaded"`
-	Total    int                `json:"total"`
-	Images   []UploadedImageVO  `json:"images"`
+	Uploaded int               `json:"uploaded"`
+	Total    int               `json:"total"`
+	Images   []UploadedImageVO `json:"images"`
 }
 
 // FileWithKeyVO 含 key 的文件响应（用于 video 上传）。
@@ -58,19 +58,19 @@ type PresignedURLVO struct {
 type FileKind int
 
 const (
-	KindImage FileKind = iota // 单图（用户头像/通用图片）
-	KindPostImage             // 帖子多图
-	KindVideo                 // 视频
+	KindImage     FileKind = iota // 单图（用户头像/通用图片）
+	KindPostImage                 // 帖子多图
+	KindVideo                     // 视频
 )
 
 // 允许的扩展名与最大体积（与旧 upload controller 完全一致）。
 var (
 	imageExts     = []string{".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg"}
-	imageMaxSize  = int64(10 * 1024 * 1024)   // 10MB
+	imageMaxSize  = int64(10 * 1024 * 1024) // 10MB
 	postImageExts = []string{".jpg", ".jpeg", ".png", ".gif", ".webp"}
-	postImageSize = int64(10 * 1024 * 1024)   // 10MB
+	postImageSize = int64(10 * 1024 * 1024) // 10MB
 	videoExts     = []string{".mp4", ".avi", ".mov", ".mkv", ".webm"}
-	videoMaxSize  = int64(500 * 1024 * 1024)  // 500MB
+	videoMaxSize  = int64(500 * 1024 * 1024) // 500MB
 )
 
 // StorageService 是 storage 领域的应用服务接口。

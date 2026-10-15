@@ -7,8 +7,8 @@ import (
 	"github.com/google/uuid"
 
 	"interestBar/pkg/conf"
-	"interestBar/pkg/domains/discover/domain"
 	circledomain "interestBar/pkg/domains/circle/domain"
+	"interestBar/pkg/domains/discover/domain"
 	recommenddomain "interestBar/pkg/domains/recommend/domain"
 	"interestBar/pkg/logger"
 )

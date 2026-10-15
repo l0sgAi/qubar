@@ -7,8 +7,8 @@ import (
 	"github.com/google/uuid"
 
 	"interestBar/pkg/conf"
-	"interestBar/pkg/domains/trending/domain"
 	recommenddomain "interestBar/pkg/domains/recommend/domain"
+	"interestBar/pkg/domains/trending/domain"
 )
 
 // TrendingService 热点榜应用服务。
@@ -22,11 +22,11 @@ type TrendingService interface {
 }
 
 type trendingServiceImpl struct {
-	board       domain.BoardStore
-	hydrator    domain.PostHydrator
-	checker     domain.InteractionChecker
-	circle      domain.CircleLookup
-	user        domain.UserLookup
+	board    domain.BoardStore
+	hydrator domain.PostHydrator
+	checker  domain.InteractionChecker
+	circle   domain.CircleLookup
+	user     domain.UserLookup
 }
 
 // NewTrendingService 构造 TrendingService。

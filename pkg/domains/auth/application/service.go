@@ -608,7 +608,7 @@ func (s *authServiceImpl) ResetPassword(ctx context.Context, input ResetPassword
 	// 踢下线所有设备会话。密码已更新成功，kickout 失败仅记日志不阻断
 	// （与 Login 的 hash upgrade 失败处理一致）。
 	if kerr := s.session.Kickout(user.ID); kerr != nil {
-		logger.Log.Warn("failed to kickout sessions for user "+user.ID+" after password reset: "+kerr.Error())
+		logger.Log.Warn("failed to kickout sessions for user " + user.ID + " after password reset: " + kerr.Error())
 	}
 
 	_ = s.pwdReset.DeleteVerified(input.Email)

@@ -8,10 +8,11 @@ import (
 // RegisterRoutes 把 user 领域的路由挂到给定的路由组根上。
 //
 // 路由清单：
-//   GET /user/get          获取当前会话用户（需登录）
-//   PUT /user/update       修改资料（需登录）
-//   GET /user/search       搜索用户（访客可读，handler 不读 userID）
-//   GET /user/detail/:id   获取指定用户详情（访客可读，handler 不读 userID）
+//
+//	GET /user/get          获取当前会话用户（需登录）
+//	PUT /user/update       修改资料（需登录）
+//	GET /user/search       搜索用户（访客可读，handler 不读 userID）
+//	GET /user/detail/:id   获取指定用户详情（访客可读，handler 不读 userID）
 //
 // 访客可读端点（search/detail）挂 optionalCheck；个人资料读写（get/update）挂 authCheck。
 //
