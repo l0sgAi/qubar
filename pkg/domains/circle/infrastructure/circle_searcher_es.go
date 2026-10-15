@@ -20,7 +20,7 @@ func NewCircleSearcher() application.CircleSearcher {
 
 // Search 搜索圈子。
 func (s *circleSearcherES) Search(ctx context.Context, keyword string, size int, searchAfter []interface{}) (*application.CircleSearchResult, error) {
-	result, err := elasticsearch.SearchCircles(keyword, size, searchAfter)
+	result, err := elasticsearch.SearchCircles(ctx, keyword, size, searchAfter)
 	if err != nil {
 		return nil, err
 	}
@@ -29,7 +29,7 @@ func (s *circleSearcherES) Search(ctx context.Context, keyword string, size int,
 
 // SearchMy 在用户已加入的圈子范围内搜索。
 func (s *circleSearcherES) SearchMy(ctx context.Context, circleIDs []uuid.UUID, keyword string, size int, searchAfter []interface{}) (*application.MyCircleSearchResult, error) {
-	result, err := elasticsearch.SearchMyCircles(circleIDs, keyword, size, searchAfter)
+	result, err := elasticsearch.SearchMyCircles(ctx, circleIDs, keyword, size, searchAfter)
 	if err != nil {
 		return nil, err
 	}
@@ -38,7 +38,7 @@ func (s *circleSearcherES) SearchMy(ctx context.Context, circleIDs []uuid.UUID, 
 
 // SearchCirclePosts 搜索圈内帖子（返回原始 ES 结果，由 circle application 层组装）。
 func (s *circleSearcherES) SearchCirclePosts(ctx context.Context, circleID uuid.UUID, sortType, size int, searchAfter []interface{}) (*application.RawCirclePostResult, error) {
-	result, err := elasticsearch.SearchCirclePosts(circleID, sortType, size, searchAfter)
+	result, err := elasticsearch.SearchCirclePosts(ctx, circleID, sortType, size, searchAfter)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +65,7 @@ func (s *circleSearcherES) SearchCirclePosts(ctx context.Context, circleID uuid.
 
 // SearchActive 近期活跃圈子聚合（ES terms 聚合 + 时间窗口，按发帖数排序）。
 func (s *circleSearcherES) SearchActive(ctx context.Context, size, offset int) (*application.RawActiveCircleResult, error) {
-	result, err := elasticsearch.AggregateActiveCircles(size, offset)
+	result, err := elasticsearch.AggregateActiveCircles(ctx, size, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +89,7 @@ func (s *circleSearcherES) SearchActive(ctx context.Context, size, offset int) (
 
 // SearchRandom 随机圈子查询（ES random_score，每次结果不同；只取 ID，明细由 application 层组装）。
 func (s *circleSearcherES) SearchRandom(ctx context.Context, size int) (*application.RawRandomCircleResult, error) {
-	result, err := elasticsearch.SearchRandomCircles(size)
+	result, err := elasticsearch.SearchRandomCircles(ctx, size)
 	if err != nil {
 		return nil, err
 	}

@@ -2,6 +2,7 @@ package elasticsearch
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -26,7 +27,7 @@ const sampleDiscoverMaxSize = 500
 //
 // 已交互帖（liked/collected/viewed）的排除在调用方（syncer/service）内存做：
 // 数量可达上千，超出 ES terms 子句 1024 上限且性能随子句数下降；已有 Redis ZSET 数据，内存 set 过滤更稳。
-func SampleDiscoverPosts(excludeCircleIDs []uuid.UUID, size int) ([]string, error) {
+func SampleDiscoverPosts(ctx context.Context, excludeCircleIDs []uuid.UUID, size int) ([]string, error) {
 	if size <= 0 || size > sampleDiscoverMaxSize {
 		size = 200
 	}
@@ -64,7 +65,7 @@ func SampleDiscoverPosts(excludeCircleIDs []uuid.UUID, size int) ([]string, erro
 		"_source": []string{"id"}, // 只取 id，省传输
 	}
 
-	return sampleIDs(searchQuery, GetPostIndexName())
+	return sampleIDs(ctx, searchQuery, GetPostIndexName())
 }
 
 // SampleDiscoverCircles 发现页圈子随机采样（random_score）。
@@ -72,7 +73,7 @@ func SampleDiscoverPosts(excludeCircleIDs []uuid.UUID, size int) ([]string, erro
 // excludeCircleIDs：已加圈子（反气泡）；nil/空=全局（匿名）。
 // size：采样数量（<=0 || >500 回落 200）。
 // 基础过滤同 SearchCircles：status=1、deleted=0、must_not join_type=2（排除私圈，展示不暴露私圈）。
-func SampleDiscoverCircles(excludeCircleIDs []uuid.UUID, size int) ([]string, error) {
+func SampleDiscoverCircles(ctx context.Context, excludeCircleIDs []uuid.UUID, size int) ([]string, error) {
 	if size <= 0 || size > sampleDiscoverMaxSize {
 		size = 200
 	}
@@ -111,21 +112,21 @@ func SampleDiscoverCircles(excludeCircleIDs []uuid.UUID, size int) ([]string, er
 		"_source": []string{"id"},
 	}
 
-	return sampleIDs(searchQuery, GetCircleIndexName())
+	return sampleIDs(ctx, searchQuery, GetCircleIndexName())
 }
 
 // sampleIDs 执行随机采样查询，提取 hits._source.id 列表。
 //
 // 复用 SearchHomeFeed/SearchCircles 的请求骨架（Client.Search + WithTrackTotalHits），
 // 但只解析 id 字段（无需 sort_values / 全量 _source）。
-func sampleIDs(searchQuery map[string]interface{}, indexName string) ([]string, error) {
+func sampleIDs(ctx context.Context, searchQuery map[string]interface{}, indexName string) ([]string, error) {
 	queryJSON, err := json.Marshal(searchQuery)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal discover sample query: %w", err)
 	}
 
 	res, err := Client.Search(
-		Client.Search.WithContext(nil),
+		Client.Search.WithContext(ctx),
 		Client.Search.WithIndex(indexName),
 		Client.Search.WithBody(bytes.NewReader(queryJSON)),
 	)

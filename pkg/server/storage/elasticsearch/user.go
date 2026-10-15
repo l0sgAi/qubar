@@ -2,6 +2,7 @@ package elasticsearch
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -38,7 +39,7 @@ type UserListResponse struct {
 // circleID: 圈子作用域（@选人场景）。Nil=全站（排除所有圈内机器人）；
 // 非 Nil=圈内（可见普通用户+全局机器人+本圈机器人，排除他圈机器人）。
 // 返回：用户列表响应（包含用户列表、总数、分页信息）
-func SearchUsers(keyword string, size int, searchAfter []interface{}, circleID uuid.UUID) (*UserListResponse, error) {
+func SearchUsers(ctx context.Context, keyword string, size int, searchAfter []interface{}, circleID uuid.UUID) (*UserListResponse, error) {
 	// 默认每页 20 条
 	if size <= 0 || size > 100 {
 		size = 20
@@ -60,7 +61,7 @@ func SearchUsers(keyword string, size int, searchAfter []interface{}, circleID u
 	userIndex := GetUserIndexName()
 
 	res, err := Client.Search(
-		Client.Search.WithContext(nil),
+		Client.Search.WithContext(ctx),
 		Client.Search.WithIndex(userIndex),
 		Client.Search.WithBody(bytes.NewReader(queryJSON)),
 		Client.Search.WithTrackTotalHits(true),
