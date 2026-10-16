@@ -111,7 +111,8 @@ interfaces/http/   handler.go（Handler + Request DTO + writeXxxError）+ routes
 ```bash
 go build ./...              # 编译
 go vet ./...                # 静态检查
-go test ./pkg/...           # 测试（注意：测试很稀疏，仅 cursor/sanitize/password/adapter/cors）
+go test ./pkg/...           # 单元测试
+make test-integration       # 集成测试（先 make dev-up）：真实 PG / Redis / Redpanda，夹具 pkg/shared/testkit；改 infrastructure/ 或 SQL 必跑
 go run ./cmd -c configs/config.yaml -b configs/bootstrap.yaml   # 本地启动（-b 空=跳过 Nacos 用本地 yaml）
 ```
 

@@ -4,6 +4,7 @@ version: "2"
 
 run:
   timeout: 5m
+  build-tags: [integration] # 集成测试文件（//go:build integration）同样检查
 
 linters:
   default: standard # errcheck / govet / ineffassign / staticcheck / unused
