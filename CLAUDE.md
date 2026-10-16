@@ -10,10 +10,15 @@ Go 模块化单体（module `interestBar`）：Hertz + GORM/PostgreSQL 18 + Redi
 make dev-up     # 起开发依赖栈（deploy/compose/dev）+ 执行迁移，只需要 Docker
 make dev-run    # 启动应用 :8888（configs/config.dev.yaml），/healthz、/readyz 自检
 make verify     # 提交 / 开 PR 前必须全绿（格式 + vet + lint + 单测 + 迁移检查与空库回放，与 CI 一致）
+make test-integration  # 集成测试：连开发栈真实 PG / Redis / Redpanda（需先 make dev-up），CI integration job 同一命令
 make dev-psql q="select ..."   # 查开发库；make dev-reset 清空数据卷重来
 ```
 
 - `make verify` 失败就修到通过，不要跳过、不要改 lint / CI 配置去绕过。格式问题：`gofmt -w cmd pkg`。
+- **改了 `infrastructure/`、SQL / `migrations/`、Redis Lua、Redpanda 生产者 / 消费者时，必须 `make dev-up && make test-integration` 通过**（`make verify` 不含它，因为它需要起开发栈）。
+  输出里出现 `SKIP` 说明栈没起来，不算通过。新增基础设施代码要补集成测试：同目录 `*_integration_test.go`，首行 `//go:build integration`，
+  包里 `func TestMain(m *testing.M) { testkit.Main(m) }`，用 `pkg/shared/testkit` 的 `PG / Redis / Redpanda / CleanupRows / CleanupKeys / Eventually`；
+  数据一律用 `sharedomain.NewID()` 随机 ID 并注册清理，断言只针对自己插入的数据，测试要能 `t.Parallel()`、对同一个栈反复跑。
 - lint 目前只检查相对 `origin/develop` 的改动（存量告警待清理，见 `.golangci.yml`），新代码必须零告警。
 - 开发栈端口：PG 25432 / Redis 26379 / ES 29200 / Redpanda 29092。**不要连 15432**（那是 ssh 隧道到生产库的本地端口）。
 - 开发栈没有 CDC：ES 里的业务索引不会随 PG 自动同步；S3 / OAuth / 邮件是占位配置。依赖这些的改动在 PR 里写明未验证的部分。
