@@ -29,11 +29,21 @@ make dev-psql q="select ..."   # 查开发库；make dev-reset 清空数据卷�
 - PR 目标分支一律 `develop`。**`develop → main` 会触发生产发布，只由人操作。**
 - 一个 PR 只解决一个 issue，描述里写 `Closes #N`；业务代码改动尽量 ≤ 500 行（测试不计），大需求拆 issue。
 - commit 用 Conventional Commits，英文：`feat(post): ...`、`fix(auth): ... (#48)`。
-- PR 描述写清：做了什么、怎么验证的（`make verify` 结果、手动调用的接口）、哪些没验证。
+- PR 描述按 `.github/pull_request_template.md` 填写：做了什么、怎么验证的（`make verify` 结果、手动调用的接口）、哪些没验证。
+- `develop` 有分支规则（`.github/rulesets/`）：必须通过 `go` / `db` / `image` / `iac` / `gitleaks` / `integration`，且分支要与 `develop` 保持最新。
+  落后时 `gh pr update-branch <PR>`（或合并 `origin/develop`）后等 CI 重跑。不要尝试绕过规则。
+
+## Issue 与标签流转
+
+`agent:triage`（新 issue，spec 待人审核）→ 人改成 `agent:ready` → 认领时改 `agent:wip` → 开 PR 后改 `agent:review` → 合并后 issue 关闭。
+
+- 只认领 `agent:ready` 的 issue。`agent:triage` / `agent:found` 需要人审核，不要自己改成 `agent:ready`。
+- 做的过程中发现范围外的问题：用 issue 模板新开 issue 并打 `agent:found`，不要顺手在当前 PR 里改。
+- `risk:high` 由 `risk-labeler` 按 `.github/labeler.yml` 的路径自动添加：不要移除它，也不要给带它的 PR 开 auto-merge。
 
 ## 需要人工审核的改动（高风险）
 
-以下路径的改动必须在 PR 里显式说明，等人审核，不要顺手改：
+以下路径的改动必须在 PR 里显式说明，等人审核，不要顺手改（与 `.github/labeler.yml` 保持一致，改动时两处同步）：
 
 - `migrations/**`：只新增 forward-only 迁移（`make migrate-new name=...`），规则见 `migrations/README.md`；先迁移后发版，必须兼容旧版本应用；新建 `domains` 表要登记 CDC 或写 `-- cdc: none`。
 - `deploy/**`、`.github/**`、`Dockerfile`：生产基础设施与发布流水线。
