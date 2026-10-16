@@ -126,7 +126,7 @@ user/circle 基础信息走 `SetJSONCompressed`/`GetJSONCompressed`（zstd，`re
 5. `CircleHotSyncer`（34min）：`SCAN circle:hot:*` + `GETDEL` → 批量 UPDATE `domains.circle.hot` → 条件 HINCRBY `circle:stats` hot（仅当 stats Hash 已存在）。
 6. Post→ES 经 CDC。
 
-### 6.2 权重与上限（`conf.Hot` `conf.go:167`）
+### 6.2 权重与上限（`conf.Hot` `conf_hot.go`）
 | 事件 | weight | cap | dim |
 |---|---|---|---|
 | post_like | 2 | — | post_like |

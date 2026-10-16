@@ -483,7 +483,7 @@ satoken: your-token-here
 
 1. Create a domain directory under `pkg/domains/` following the `application/domain/infrastructure/interfaces` layering
 2. Register dependency wiring and routes in `pkg/composition/`
-3. For cross-domain calls, add a bridge implementation in `composition/facade_bridges.go`
+3. For cross-domain calls, add a bridge implementation in `composition/<domain>_bridges.go` (filed under the domain that receives it); per-domain wiring goes in `composition/wire_<domain>.go`
 
 ### Adding a New OAuth Provider
 

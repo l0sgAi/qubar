@@ -483,7 +483,7 @@ satoken: your-token-here
 
 1. 在 `pkg/domains/` 下创建领域目录，遵循 `application/domain/infrastructure/interfaces` 分层
 2. 在 `pkg/composition/` 中注册依赖装配和路由
-3. 如需跨领域调用，在 `composition/facade_bridges.go` 中添加桥接实现
+3. 如需跨领域调用，在 `composition/<domain>_bridges.go`（按被注入方归档）中添加桥接实现；领域装配写在 `composition/wire_<domain>.go`
 
 ### 添加新 OAuth Provider
 
