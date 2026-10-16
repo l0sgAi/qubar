@@ -5,7 +5,8 @@
 #          - 没有 risk:high → success；
 #          - 有 risk:high → 需要有写权限的人（非 bot）评论 `/approve <head-sha>`（至少 7 位），
 #            新的 push 会改变 head sha，之前的 /approve 自动失效。
-# pull_request_target / issue_comment 都从目标 / 默认分支取本文件，PR 无法改它来放行自己；不 checkout、不执行 PR 代码。
+# pull_request_target / issue_comment 都从默认分支（main）取本文件，PR 无法改它来放行自己；不 checkout、不执行 PR 代码。
+# 因此合并到 develop 后要等发版到 main 才生效。
 # 已知限制：在本机以你的账号运行的 agent 理论上也能以你的身份评论 /approve（.claude/settings.json 已禁止 agent 评论）；
 # Actions 里的 agent 是 claude[bot]，评论不会被计入。
 name: pr-gate

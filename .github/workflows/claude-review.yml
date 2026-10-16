@@ -5,6 +5,8 @@
 #       workflow_dispatch(carry=true)：pr-sync 用 update-branch 把 develop 合进来之后，如果新 head 是
 #       「上一个已通过审查的 head + 合并 develop」，直接沿用结论，不再花一次审查。
 # fork PR 拿不到密钥，不审查（也不会有 claude-review 状态，需要维护者处理）。
+# claude-code-action 要求工作流文件与默认分支（main）上的版本完全一致，否则跳过（状态记为 error）：
+# 本文件要发版到 main 才生效；修改本文件的 PR 自己审查不了，需要 admin 在 PR 上越过规则合并。
 name: claude-review
 
 on:

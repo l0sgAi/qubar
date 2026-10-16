@@ -1,6 +1,6 @@
 # pr-gate.yml 的 label job 使用：PR 触及以下路径时自动打 risk:high（l0sgAi/qubar#67 P2）。
 # risk:high 的 PR 不开 auto-merge，且必需检查 risk-gate 要等维护者评论 /approve <head-sha>。路径与 CLAUDE.md「需要人工审核的改动」保持一致。
-# pull_request_target 读取的是目标分支上的本文件，PR 无法通过修改它给自己去掉标签。
+# pull_request_target 读取的是默认分支（main）上的本文件，PR 无法通过修改它给自己去掉标签；改动要发版到 main 才生效。
 "risk:high":
   - changed-files:
       - any-glob-to-any-file:

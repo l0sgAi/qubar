@@ -11,6 +11,9 @@ GitHub 上的分支规则、仓库设置和标签不在代码里，这里记录�
 - 不要求 approve：仓库只有一个人，GitHub 不允许作者 approve 自己的 PR。人工审核由必需检查 `risk-gate` 强制：带 `risk:high` 的 PR 要维护者评论 `/approve <head-sha>` 才能合并（新的 push 会让之前的批准失效）。
 - `claude-review` 是必需检查：没配 `CLAUDE_CODE_OAUTH_TOKEN` 或额度用完时所有 PR 都会卡住，需要 admin 在 PR 上越过规则合并。
 - admin 可以在 PR 上越过规则合并（`bypass_mode: pull_request`），但不能直接 push 到 develop。
+- **生效顺序**：`pr-gate`（`pull_request_target`）和所有 claude-code-action 工作流都只按默认分支（main）上的版本运行。
+  先把工作流发版到 main、装好 Claude GitHub App、配好 `CLAUDE_CODE_OAUTH_TOKEN`，确认 PR 上出现了 `risk-gate` / `claude-review` 状态，
+  再更新规则把它们设为必需检查，否则所有 PR 都会卡住。
 
 ```bash
 # 首次创建
