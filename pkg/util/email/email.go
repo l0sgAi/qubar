@@ -158,7 +158,7 @@ func (c *Client) Send(ctx context.Context, toEmail, toName, subject string, opts
 	if err != nil {
 		return fmt.Errorf("failed to send email request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -231,7 +231,7 @@ func (c *Client) SendWithTemplate(ctx context.Context, toEmail, lang string, tem
 	if err != nil {
 		return fmt.Errorf("failed to send template email request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

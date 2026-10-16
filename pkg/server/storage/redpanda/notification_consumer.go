@@ -97,7 +97,11 @@ func StartNotificationEventConsumer() error {
 	go aggregator.run()
 
 	go func() {
-		defer r.Close()
+		defer func() {
+			if err := r.Close(); err != nil {
+				logger.Log.Error("Failed to close notification event reader: " + err.Error())
+			}
+		}()
 		for {
 			msg, err := r.ReadMessage(readerCtx)
 			if err != nil {

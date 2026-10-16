@@ -20,16 +20,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # lint 按 merge-base 只看新增改动
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
       - run: make fmt-check vet
-      - name: lint
-        env:
-          LINT_BASE: origin/${{ github.base_ref || 'develop' }}
-        run: make lint LINT_BASE="$LINT_BASE"
+      - run: make lint
       - run: make test
 
   # 集成测试：起与本机相同的开发栈（deploy/compose/dev）→ 迁移 → make test-integration。

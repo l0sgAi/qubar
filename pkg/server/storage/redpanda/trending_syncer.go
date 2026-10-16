@@ -103,7 +103,7 @@ func (s *TrendingRankSyncer) syncOne(dimension, window string) error {
 	}
 
 	// ① 窗口聚合
-	agg, err := elasticsearch.AggregateTrending(dimension, window, topN)
+	agg, err := elasticsearch.AggregateTrending(ctx, dimension, window, topN)
 	if err != nil {
 		return err
 	}
@@ -111,7 +111,7 @@ func (s *TrendingRankSyncer) syncOne(dimension, window string) error {
 
 	// ② 窗口为空 → 兜底：无窗口聚合（全局热门）
 	if len(items) == 0 {
-		fbAgg, fbErr := elasticsearch.AggregateTrending(dimension, "", topN)
+		fbAgg, fbErr := elasticsearch.AggregateTrending(ctx, dimension, "", topN)
 		if fbErr != nil {
 			// 兜底聚合失败：跳过本轮（保留上轮榜单），与窗口聚合错误的降级一致。
 			return fmt.Errorf("trending fallback (%s/%s) failed: %w", dimension, window, fbErr)

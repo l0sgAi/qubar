@@ -54,7 +54,7 @@ func InitRedpandaProducer() error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to redpanda: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }() // 仅用于连通性探测，关闭失败不影响初始化
 
 	// 设置连接超时
 	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {

@@ -21,7 +21,7 @@ func NewUserSearcher() application.UserSearcher {
 // Search 调用 ES 搜索用户，转换为 application 层的 UserSearchResult。
 // circleID 透传给 ES 作 @提及 圈子作用域过滤（Nil=全站）。
 func (s *userSearcherES) Search(ctx context.Context, keyword string, size int, searchAfter []interface{}, circleID uuid.UUID) (*application.UserSearchResult, error) {
-	result, err := elasticsearch.SearchUsers(keyword, size, searchAfter, circleID)
+	result, err := elasticsearch.SearchUsers(ctx, keyword, size, searchAfter, circleID)
 	if err != nil {
 		return nil, err
 	}

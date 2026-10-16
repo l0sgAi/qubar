@@ -70,7 +70,7 @@ func (c *Client) UploadFile(ctx context.Context, key string, file *multipart.Fil
 	if err != nil {
 		return "", fmt.Errorf("failed to open uploaded file: %w", err)
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }() // 只读上传文件，关闭失败不影响结果
 
 	// 读取文件内容到内存
 	buffer := make([]byte, file.Size)
@@ -78,9 +78,6 @@ func (c *Client) UploadFile(ctx context.Context, key string, file *multipart.Fil
 	if err != nil && err != io.EOF {
 		return "", fmt.Errorf("failed to read file content: %w", err)
 	}
-
-	// 重置文件指针
-	src.Seek(0, 0)
 
 	// 上传到 S3（不使用 ACL，使用 bucket 策略控制访问）
 	_, err = c.client.PutObject(ctx, &s3.PutObjectInput{
@@ -196,7 +193,7 @@ func (c *Client) DownloadFile(ctx context.Context, key string) ([]byte, string, 
 		)
 		return nil, "", fmt.Errorf("failed to download file from S3: %w", err)
 	}
-	defer result.Body.Close()
+	defer func() { _ = result.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	// 读取文件内容
 	data, err := io.ReadAll(result.Body)

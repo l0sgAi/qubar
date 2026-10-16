@@ -256,9 +256,8 @@ func (f *fakeBotUserScopeCleaner) ClearBotCircleScope(ctx context.Context, userI
 
 // fakeUserRoleReader 全局 role 读取 fake（全局链守卫测试用，模拟平台超管 role=1）。
 type fakeUserRoleReader struct {
-	role    int
-	ok      bool
-	gotRole int
+	role int
+	ok   bool
 }
 
 func (f *fakeUserRoleReader) GetUserRole(ctx context.Context, userID uuid.UUID) (int, bool, error) {
