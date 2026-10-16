@@ -26,10 +26,10 @@ const (
 	Window24h = "24h"
 	Window7d  = "7d"
 
-	SectionAll    = "all"
-	SectionPosts  = "posts"
+	SectionAll     = "all"
+	SectionPosts   = "posts"
 	SectionCircles = "circles"
-	SectionUsers  = "users"
+	SectionUsers   = "users"
 )
 
 // ScoredID ZSET 读出的「实体 ID + 热度分」，按 score 降序。
@@ -72,13 +72,13 @@ type TrendingUserItem struct {
 
 // TrendingBoard 热点聚合看板（GET /trending 响应体）。
 type TrendingBoard struct {
-	Window      string               `json:"window"`                // "24h" | "7d"
-	Posts       []TrendingPostItem   `json:"posts,omitempty"`       // section=all|posts 时填充
-	Circles     []TrendingCircleItem `json:"circles,omitempty"`     // section=all|circles 时填充
-	Users       []TrendingUserItem   `json:"users,omitempty"`       // section=all|users 时填充
-	RefreshedAt int64                `json:"refreshed_at"`          // 榜单最近刷新 Unix 秒（0=从未刷新）
-	Truncated   bool                 `json:"truncated,omitempty"`   // 触达 top_n 上限
-	Offset      int                  `json:"offset,omitempty"`      // 单板块翻页时回显
+	Window      string               `json:"window"`              // "24h" | "7d"
+	Posts       []TrendingPostItem   `json:"posts,omitempty"`     // section=all|posts 时填充
+	Circles     []TrendingCircleItem `json:"circles,omitempty"`   // section=all|circles 时填充
+	Users       []TrendingUserItem   `json:"users,omitempty"`     // section=all|users 时填充
+	RefreshedAt int64                `json:"refreshed_at"`        // 榜单最近刷新 Unix 秒（0=从未刷新）
+	Truncated   bool                 `json:"truncated,omitempty"` // 触达 top_n 上限
+	Offset      int                  `json:"offset,omitempty"`    // 单板块翻页时回显
 	Size        int                  `json:"size"`
 }
 

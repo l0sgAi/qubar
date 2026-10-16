@@ -55,12 +55,12 @@ type SendOptions struct {
 
 // Client Mailtrap 邮件客户端
 type Client struct {
-	apiToken              string
-	apiURL                string
-	senderEmail           string
-	senderName            string
-	httpClient            *http.Client
-	verificationTemplates map[string]string // lang -> template_uuid（注册验证码）
+	apiToken               string
+	apiURL                 string
+	senderEmail            string
+	senderName             string
+	httpClient             *http.Client
+	verificationTemplates  map[string]string // lang -> template_uuid（注册验证码）
 	passwordResetTemplates map[string]string // lang -> template_uuid（找回密码验证码）
 }
 

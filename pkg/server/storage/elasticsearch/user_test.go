@@ -1,7 +1,7 @@
 // user_test.go 用户搜索 DSL 构建的 @提及 圈子作用域过滤单元测试。
 //
 // 覆盖设计文档 P0-8 的"ES 过滤两路"：全站（circleID=Nil）排除所有圈内机器人
-//（must_not exists）、圈内（circleID 非 Nil）本圈机器人可见（should: 非圈内机器人
+// （must_not exists）、圈内（circleID 非 Nil）本圈机器人可见（should: 非圈内机器人
 // 或 agent_circle_id=本圈）。关键字/无关键字两分支均验证；排序与分页结构不受影响。
 package elasticsearch
 

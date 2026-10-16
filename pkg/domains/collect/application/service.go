@@ -92,7 +92,7 @@ func NewCollectService(
 
 // Setter 方法供 composition 注入跨领域依赖。
 func (s *collectServiceImpl) SetPostTarget(t domain.PostTarget) { s.postTarget = t }
-func (s *collectServiceImpl) SetPostFetcher(f PostFetcher)     { s.postFetcher = f }
+func (s *collectServiceImpl) SetPostFetcher(f PostFetcher)      { s.postFetcher = f }
 
 // Toggle 收藏/取消收藏。
 //

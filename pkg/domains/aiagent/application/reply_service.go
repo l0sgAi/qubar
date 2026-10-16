@@ -194,10 +194,10 @@ func NewReplyService(
 	}
 }
 
-func (s *replyServiceImpl) SetRoleReader(r RoleReader)         { s.roleReader = r }
+func (s *replyServiceImpl) SetRoleReader(r RoleReader)             { s.roleReader = r }
 func (s *replyServiceImpl) SetCircleRoleReader(r CircleRoleReader) { s.circleRoles = r }
-func (s *replyServiceImpl) SetPostReader(r PostReader)         { s.postReader = r }
-func (s *replyServiceImpl) SetCommentCreator(c CommentCreator) { s.commentCreator = c }
+func (s *replyServiceImpl) SetPostReader(r PostReader)             { s.postReader = r }
+func (s *replyServiceImpl) SetCommentCreator(c CommentCreator)     { s.commentCreator = c }
 
 // agentInScope 机器人回复的作用域匹配（三条入口共用，唯一核心规则）：
 //   - 全局机器人（CircleID=nil）全站回复（现状语义，含圈内帖）；
@@ -205,7 +205,7 @@ func (s *replyServiceImpl) SetCommentCreator(c CommentCreator) { s.commentCreato
 //   - postCircleID=Nil（理论不可达，防御性）时仅全局机器人触发——fail-closed。
 //
 // 候选集已由 repo ListEnabledForCircle 按圈收口，此函数是触发链内的第二道防线
-//（防候选集语义漂移；手动触发路径无候选集，直接用它做归属校验）。
+// （防候选集语义漂移；手动触发路径无候选集，直接用它做归属校验）。
 func agentInScope(agent *domain.AiAgent, postCircleID uuid.UUID) bool {
 	if agent.CircleID == nil {
 		return true

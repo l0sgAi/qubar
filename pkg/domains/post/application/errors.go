@@ -36,12 +36,12 @@ func IsMutedErr(err error) (time.Time, bool) {
 }
 
 // 错误判断函数（供 handler 层使用）。
-func IsCircleIDRequiredErr(err error) bool    { return errors.Is(err, errCircleIDRequired) }
-func IsTitleRequiredErr(err error) bool       { return errors.Is(err, errTitleRequired) }
-func IsNotMemberErr(err error) bool           { return errors.Is(err, errNotMember) }
-func IsCircleNotAvailableErr(err error) bool   { return errors.Is(err, errCircleNotAvailable) }
-func IsMembershipPendingErr(err error) bool    { return errors.Is(err, errMembershipPending) }
-func IsBannedFromCircleErr(err error) bool     { return errors.Is(err, errBannedFromCircle) }
+func IsCircleIDRequiredErr(err error) bool   { return errors.Is(err, errCircleIDRequired) }
+func IsTitleRequiredErr(err error) bool      { return errors.Is(err, errTitleRequired) }
+func IsNotMemberErr(err error) bool          { return errors.Is(err, errNotMember) }
+func IsCircleNotAvailableErr(err error) bool { return errors.Is(err, errCircleNotAvailable) }
+func IsMembershipPendingErr(err error) bool  { return errors.Is(err, errMembershipPending) }
+func IsBannedFromCircleErr(err error) bool   { return errors.Is(err, errBannedFromCircle) }
 
 // formatMutedMessage 格式化禁言错误消息（供 handler 使用）。
 func formatMutedMessage(t time.Time) string {

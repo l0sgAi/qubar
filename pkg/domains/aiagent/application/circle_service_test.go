@@ -166,7 +166,7 @@ func (f *fakeAgentRepo) SoftDelete(ctx context.Context, id uuid.UUID) error {
 }
 
 // ListEnabledForCircle 模拟 PG 的圈子收口语义：全局机器人 + circleID 圈内机器人
-//（circleID=Nil 仅全局）；scopeFilterEnabled=false 时返回全部启用机器人（漂移模拟）。
+// （circleID=Nil 仅全局）；scopeFilterEnabled=false 时返回全部启用机器人（漂移模拟）。
 func (f *fakeAgentRepo) ListEnabledForCircle(ctx context.Context, circleID uuid.UUID) ([]domain.AiAgent, error) {
 	var out []domain.AiAgent
 	for _, a := range f.byID {
@@ -212,7 +212,7 @@ func newFakeCircleRoles() *fakeCircleRoles {
 		r.members[cid] = map[uuid.UUID][2]int16{
 			ownerID:    {30, 1}, // owner, normal
 			adminID:    {20, 1}, // admin, normal
-			memberID:  {10, 1},  // member, normal
+			memberID:   {10, 1}, // member, normal
 			mutedOwner: {30, 2}, // owner, muted（管理权暂停）
 		}
 	}
@@ -440,7 +440,7 @@ func TestCircleAgentUpdate_MixedCredentialByAdmin(t *testing.T) {
 // ---- 限额 ----
 
 // TestCircleAgentCreate_QuotaExceeded 仓储返回 ErrCircleAgentLimit → 应用层 errCircleAgentLimit
-//（handler 映射 409）；且传给仓储的上限是 domain.MaxAgentsPerCircle。
+// （handler 映射 409）；且传给仓储的上限是 domain.MaxAgentsPerCircle。
 func TestCircleAgentCreate_QuotaExceeded(t *testing.T) {
 	repo := newFakeAgentRepo()
 	repo.createErr = domain.ErrCircleAgentLimit
@@ -546,7 +546,7 @@ func TestCircleAgent_CrossScopeAndUnknown404(t *testing.T) {
 }
 
 // TestGlobalAgent_CrossScopeCircleAgent404 全局链：圈内机器人 ID 查询/更新/删除 → 404
-//（平台超管对圈内机器人无读写特权，也不暴露其存在性）。
+// （平台超管对圈内机器人无读写特权，也不暴露其存在性）。
 func TestGlobalAgent_CrossScopeCircleAgent404(t *testing.T) {
 	repo := newFakeAgentRepo()
 	seedCircleAgent(repo)
@@ -594,7 +594,7 @@ func TestCircleAgent_FailClosed_CircleRoleReaderNotInjected(t *testing.T) {
 // ---- ManualReply 404 对齐 ----
 
 // TestManualReply_CircleAgentNotFound 圈内机器人走全局手动入口 → errAgentNotFound
-//（跨作用域不可见，404 不泄露存在性；原 errCircleReplyUnsupported 403 已废）；
+// （跨作用域不可见，404 不泄露存在性；原 errCircleReplyUnsupported 403 已废）；
 // 全局机器人不受影响（走到后续校验：非手动模式 → errNotManualMode）。
 func TestManualReply_CircleAgentNotFound(t *testing.T) {
 	repo := newFakeAgentRepo()
