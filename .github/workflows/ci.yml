@@ -32,6 +32,25 @@ jobs:
         run: make lint LINT_BASE="$LINT_BASE"
       - run: make test
 
+  # 集成测试：起与本机相同的开发栈（deploy/compose/dev）→ 迁移 → make test-integration。
+  # 只起测试用到的 PG / Redis / Redpanda（ES 镜像要现场构建 IK，当前没有 ES 集成测试）。
+  integration:
+    runs-on: ubuntu-latest
+    env:
+      QUBAR_TEST_REQUIRE_STACK: "1" # 栈不可达时失败而不是 Skip
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Start dev stack
+        run: docker compose -f deploy/compose/dev/compose.yml up -d --wait postgres redis redpanda
+      - run: make dev-migrate
+      - run: make test-integration
+      - name: Stack logs
+        if: failure()
+        run: docker compose -f deploy/compose/dev/compose.yml logs --tail=200 postgres redis redpanda
+
   image:
     runs-on: ubuntu-latest
     steps:

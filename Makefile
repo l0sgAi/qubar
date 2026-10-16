@@ -3,6 +3,7 @@
 #   make verify       # 提交 / 开 PR 前必须全绿：格式 + vet + lint + 单测 + 迁移检查与空库回放（与 CI 一致）
 #   make dev-up       # 起本机开发依赖栈（PG18 / Redis / ES+IK / Redpanda）并执行迁移，只需要 Docker
 #   make dev-run      # 用 configs/config.dev.yaml 启动应用（:8888）
+#   make test-integration  # 对开发栈跑集成测试（//go:build integration，先 make dev-up）；改 infrastructure/ 或 SQL 时必跑
 #   make dev-down     # 停栈保留数据；make dev-reset 连数据卷一起删
 #
 # 工具（golangci-lint / squawk）按固定版本自动下载到 bin/（已 git-ignore），无需 brew。
@@ -86,7 +87,7 @@ migrate-test:
 # lint 只看相对 LINT_BASE 的新增改动（存量告警清理前，见 .golangci.yml）；全量：make lint LINT_BASE=
 LINT_BASE ?= origin/develop
 
-.PHONY: verify fmt-check vet lint test
+.PHONY: verify fmt-check vet lint test test-integration
 
 verify: fmt-check vet lint test migrate-check migrate-test
 	@echo "verify ok"
@@ -94,14 +95,20 @@ verify: fmt-check vet lint test migrate-check migrate-test
 fmt-check:
 	@out=$$(gofmt -l cmd pkg); [ -z "$$out" ] || { echo "未 gofmt 的文件（gofmt -w cmd pkg）："; echo "$$out"; exit 1; }
 
+# 带 integration tag：集成测试文件也参与 vet（只编译，不需要开发栈）
 vet:
-	go vet ./...
+	go vet -tags integration ./...
 
 lint: $(GOLANGCI_LINT)
 	$(GOLANGCI_LINT) run $(if $(LINT_BASE),--new-from-merge-base=$(LINT_BASE)) ./...
 
 test:
 	go test ./pkg/...
+
+# 集成测试：连本机开发栈（make dev-up）的 PG / Redis / Redpanda，夹具见 pkg/shared/testkit。
+# 栈不可达时测试 Skip；QUBAR_TEST_REQUIRE_STACK=1（CI）时改为失败。可并行、可对同一个栈反复执行。
+test-integration:
+	go test -tags integration -count=1 ./pkg/...
 
 $(GOLANGCI_LINT):
 	@mkdir -p $(BIN)

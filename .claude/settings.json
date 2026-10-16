@@ -7,6 +7,7 @@
       "Bash(make lint)",
       "Bash(make lint *)",
       "Bash(make test)",
+      "Bash(make test-integration)",
       "Bash(make migrate-check)",
       "Bash(make migrate-test)",
       "Bash(make migrate-new *)",
