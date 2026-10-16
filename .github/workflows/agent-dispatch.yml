@@ -1,0 +1,121 @@
+# issue → PR 调度（l0sgAi/qubar#67 P3）。
+#
+# pick：同时处于 agent:wip 的 issue 最多 3 个（WIP 上限）；按创建时间从早到晚取 agent:ready 的 issue 填满空位，
+#       改成 agent:wip。
+# implement：每个 issue 一个 Claude（claude[bot]）：读 CLAUDE.md → 在 agent/<N>-<slug> 分支实现 → make verify →
+#       开 PR 到 develop（Closes #N）→ issue 改成 agent:review。需求不清 / 太大 / 需要改高风险路径时不写代码，
+#       在 issue 里说明并退回 agent:triage。运行失败或没开 PR 也退回 agent:triage。
+#
+# 触发：issue 被打上 agent:ready、每小时补位、手动（可指定 issue）。issues / schedule 事件只在默认分支（main）上生效。
+name: agent-dispatch
+
+on:
+  issues:
+    types: [labeled]
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: 只调度这个 issue（须带 agent:ready）；留空按队列取
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  WIP_LIMIT: 3
+
+jobs:
+  pick:
+    if: github.event_name != 'issues' || github.event.label.name == 'agent:ready'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: agent-dispatch-pick
+      cancel-in-progress: false
+    permissions:
+      issues: write
+    outputs:
+      issues: ${{ steps.pick.outputs.issues }}
+    steps:
+      - id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ONLY: ${{ inputs.issue }}
+        run: |
+          set -euo pipefail
+          wip=$(gh issue list -R "$REPO" --state open --label agent:wip --json number --jq length)
+          free=$(( WIP_LIMIT - wip ))
+          echo "wip=$wip free=$free"
+          if [ "$free" -le 0 ]; then echo 'issues=[]' >> "$GITHUB_OUTPUT"; exit 0; fi
+          ready=$(gh issue list -R "$REPO" --state open --label agent:ready --limit 100 --json number,createdAt \
+            --jq 'sort_by(.createdAt) | .[].number')
+          if [ -n "$ONLY" ]; then ready=$(grep -x "$ONLY" <<< "$ready" || true); fi
+          picked=$(head -n "$free" <<< "$ready" | sed '/^$/d')
+          for n in $picked; do
+            gh issue edit "$n" -R "$REPO" --remove-label agent:ready --add-label agent:wip
+          done
+          echo "issues=$(jq -Rsc 'split("\n") | map(select(length > 0) | tonumber)' <<< "$picked")" >> "$GITHUB_OUTPUT"
+
+  implement:
+    needs: pick
+    if: needs.pick.outputs.issues != '' && needs.pick.outputs.issues != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        issue: ${{ fromJSON(needs.pick.outputs.issues) }}
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            ISSUE: ${{ matrix.issue }}
+
+            你是 qubar 的开发 agent，负责实现 issue #${{ matrix.issue }}。
+            1. `gh issue view ${{ matrix.issue }} --comments` 读完整需求；读 CLAUDE.md 和 .agents/skills/qubar-skill/SKILL.md，严格遵守。
+            2. 先判断能不能做：需求或验收标准不清楚、业务代码明显超过 ~500 行、或必须改 CLAUDE.md 列出的高风险路径而 issue 没有明确要求时，
+               不要写代码：`gh issue comment` 说明原因（缺什么信息 / 建议怎么拆），然后
+               `gh issue edit ${{ matrix.issue }} --remove-label agent:wip --add-label agent:triage`，结束。
+            3. 从 develop 切分支 `agent/${{ matrix.issue }}-<英文短 slug>`，实现并补测试。
+            4. `make dev-up`，然后 `make verify` 必须通过；改了 infrastructure / SQL / Lua / Redpanda 时 `make test-integration` 也必须通过
+               （输出有 SKIP 不算通过）。需要时 `make dev-run` 后 curl 调接口自测。
+            5. Conventional Commits 提交，`git push -u origin <分支>`。
+            6. `gh pr create --base develop`：标题用 Conventional Commits 格式；正文按 .github/pull_request_template.md 填写，
+               写 `Closes #${{ matrix.issue }}`、做了什么、怎么验证的（命令和结果）、哪些没验证。
+            7. `gh issue edit ${{ matrix.issue }} --remove-label agent:wip --add-label agent:review`。
+            不要改与 issue 无关的代码；发现范围外的问题，用 `gh issue create` 新开 issue 并打 `agent:found` 标签。
+          claude_args: >-
+            --max-turns 200
+            --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,Bash(make:*),Bash(go:*),Bash(gofmt:*),Bash(git:*),Bash(curl -s localhost:8888/*),Bash(curl -s http://localhost:8888/*),Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh issue edit:*),Bash(gh issue create:*),Bash(gh pr create:*),Bash(gh pr view:*)"
+
+      - name: Return issue to triage if no PR was opened
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ matrix.issue }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          labels=$(gh issue view "$ISSUE" -R "$REPO" --json labels --jq '[.labels[].name] | join(",")')
+          if [[ ",$labels," == *",agent:wip,"* ]]; then
+            gh issue edit "$ISSUE" -R "$REPO" --remove-label agent:wip --add-label agent:triage
+            gh issue comment "$ISSUE" -R "$REPO" --body "agent-dispatch：这次运行没有开出 PR（[run]($RUN_URL)），已退回 \`agent:triage\`，请检查 spec 或日志后再改回 \`agent:ready\`。"
+          fi

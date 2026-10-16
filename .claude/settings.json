@@ -51,6 +51,8 @@
       "Bash(git push origin main)",
       "Bash(git push origin develop)",
       "Bash(gh pr merge *)",
+      "Bash(gh pr comment *)",
+      "Bash(gh pr review *)",
       "Read(./configs/config.yaml)",
       "Read(./configs/bootstrap.yaml)",
       "Read(./.env)",

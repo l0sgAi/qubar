@@ -1,0 +1,121 @@
+# agent PR 自动修复（l0sgAi/qubar#67 P3）。只处理同仓库的 agent/ 分支（agent-dispatch 开的 PR）。
+#
+#   reason=ci       ：ci 工作流失败（workflow_run，只在默认分支 main 上生效）
+#   reason=review   ：claude-review 结论有阻塞问题（claude-review 派发）
+#   reason=conflict ：pr-sync 更新分支冲突（pr-sync 派发）
+#
+# 每个 PR 最多自动修 3 次（按 PR 上的 <!-- agent-fix --> 标记计数），超过后打 hold（关掉 auto-merge）并请人处理。
+# 安全：会 checkout 并执行 PR 分支代码（make verify），只对有写权限的人 / claude[bot] 才能推的同仓库分支生效。
+name: agent-fix
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR 编号
+        required: true
+      reason:
+        description: ci / review / conflict
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+  id-token: write
+
+concurrency:
+  group: agent-fix-${{ inputs.pr || github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    outputs:
+      number: ${{ steps.pr.outputs.number }}
+      ref: ${{ steps.pr.outputs.ref }}
+      reason: ${{ steps.pr.outputs.reason }}
+      run: ${{ steps.pr.outputs.run }}
+    steps:
+      - id: pr
+        uses: actions/github-script@v7
+        env:
+          PR_INPUT: ${{ inputs.pr }}
+          REASON_INPUT: ${{ inputs.reason }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            let number = Number(process.env.PR_INPUT || 0);
+            let reason = process.env.REASON_INPUT || 'ci';
+            const run = context.payload.workflow_run;
+            if (run) {
+              number = run.pull_requests?.[0]?.number;
+              if (!number) { core.info('CI run not tied to a same-repo PR'); return; }
+            }
+            if (!['ci', 'review', 'conflict'].includes(reason)) { core.setFailed(`unknown reason ${reason}`); return; }
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: number });
+            if (pr.state !== 'open' || !pr.head.ref.startsWith('agent/') || pr.head.repo?.full_name !== `${owner}/${repo}`) {
+              core.info(`#${number} is not an open same-repo agent/ PR, skip`); return;
+            }
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100 });
+            const attempts = comments.filter(c => (c.body || '').includes('<!-- agent-fix -->')).length;
+            if (attempts >= 3) {
+              const labels = pr.labels.map(l => l.name);
+              if (!labels.includes('hold')) {
+                await github.rest.issues.addLabels({ owner, repo, issue_number: number, labels: ['hold'] });
+                // GITHUB_TOKEN 打的标签不会触发 pr-gate，这里直接关掉 auto-merge
+                await github.graphql('mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }',
+                  { id: pr.node_id }).catch(e => core.info(`disable auto-merge: ${e.message}`));
+                await github.rest.issues.createComment({ owner, repo, issue_number: number,
+                  body: `agent-fix：自动修复已达 3 次上限（本次原因：${reason}），已打 \`hold\` 关闭 auto-merge，需要人工处理。` });
+              }
+              return;
+            }
+            await github.rest.issues.createComment({ owner, repo, issue_number: number,
+              body: `<!-- agent-fix -->\nagent-fix：第 ${attempts + 1}/3 次自动修复，原因：\`${reason}\`（[run](${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId})）。` });
+            core.setOutput('number', number);
+            core.setOutput('ref', pr.head.ref);
+            core.setOutput('reason', reason);
+            core.setOutput('run', run ? String(run.id) : '');
+
+  fix:
+    needs: prepare
+    if: needs.prepare.outputs.number != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ needs.prepare.outputs.number }}
+            BRANCH: ${{ needs.prepare.outputs.ref }}
+            REASON: ${{ needs.prepare.outputs.reason }}
+            CI RUN: ${{ needs.prepare.outputs.run }}
+
+            你在修复 qubar 的一个 agent PR（当前已 checkout 到 BRANCH）。先读 CLAUDE.md，严格遵守。
+            - REASON=ci：`gh run view <CI RUN> --log-failed` 看失败原因并修复。
+            - REASON=review：`gh pr view --comments` 和 `gh api repos/${{ github.repository }}/pulls/${{ needs.prepare.outputs.number }}/comments`
+              找最新的 claude-review 总结与行内意见，修复所有阻塞问题；非阻塞建议合理的顺手改，不合理的在回复里说明。
+            - REASON=conflict：`git fetch origin develop && git merge origin/develop`，解决冲突（两边的意图都要保留）。
+            修完必须 `make dev-up && make verify` 通过；改了 infrastructure / SQL / Lua / Redpanda 再跑 `make test-integration`。
+            只改与这次修复相关的代码；不要改 CLAUDE.md、.github/、.claude/、Makefile、lint 配置来绕过检查。
+            用 Conventional Commits 提交并 `git push`（不要 force push），最后 `gh pr comment` 简要说明改了什么。
+            如果无法修复（需求不清、需要改高风险路径、需要人决定），不要硬改：`gh pr comment` 说明原因，然后 `gh pr edit --add-label hold`。
+          claude_args: >-
+            --max-turns 120
+            --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,Bash(make:*),Bash(go:*),Bash(gofmt:*),Bash(git:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh pr edit:*),Bash(gh run view:*),Bash(gh api repos/${{ github.repository }}/pulls/*)"

@@ -1,0 +1,58 @@
+# 让开了 auto-merge 的 PR 跟上 develop（l0sgAi/qubar#67 P3）。
+#
+# develop 分支规则要求「分支与 develop 保持最新」（替代个人仓库没有的 merge queue）。auto-merge 不会自己更新分支，
+# 落后的 PR 会一直卡住，所以这里定时找出 BEHIND 的 PR：
+#   gh pr update-branch → 用 workflow_dispatch 补跑 ci / pr-gate / claude-review（carry 模式）。
+# 为什么要手动补跑：用 GITHUB_TOKEN 推的提交不会触发 pull_request 事件，但 workflow_dispatch 例外。
+# 更新冲突时：agent/ 分支交给 agent-fix（reason=conflict），其他 PR 留言提醒。
+# 注意：schedule 只在默认分支（main）上生效；develop 上的 push 触发只覆盖人工合并（auto-merge 的合并不会触发 push 事件）。
+name: pr-sync
+
+on:
+  push:
+    branches: [develop]
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: pr-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          prs=$(gh pr list -R "$REPO" --base develop --state open \
+            --json number,headRefName,autoMergeRequest,isCrossRepository \
+            --jq '.[] | select(.autoMergeRequest != null and (.isCrossRepository | not)) | "\(.number) \(.headRefName)"')
+          [ -n "$prs" ] || { echo "no auto-merge PRs"; exit 0; }
+          while read -r pr ref; do
+            state=$(gh pr view "$pr" -R "$REPO" --json mergeStateStatus -q .mergeStateStatus)
+            echo "#$pr ($ref): $state"
+            [ "$state" = BEHIND ] || continue
+            if gh pr update-branch "$pr" -R "$REPO"; then
+              sleep 5
+              gh workflow run ci.yml -R "$REPO" --ref "$ref"
+              gh workflow run pr-gate.yml -R "$REPO" --ref develop -f pr="$pr"
+              gh workflow run claude-review.yml -R "$REPO" --ref develop -f pr="$pr" -f carry=true
+            elif [[ "$ref" == agent/* ]]; then
+              gh workflow run agent-fix.yml -R "$REPO" --ref develop -f pr="$pr" -f reason=conflict
+            else
+              head=$(gh pr view "$pr" -R "$REPO" --json headRefOid -q .headRefOid)
+              marker="<!-- pr-sync-conflict:$head -->"
+              if ! gh pr view "$pr" -R "$REPO" --json comments -q '.comments[].body' | grep -qF "$marker"; then
+                gh pr comment "$pr" -R "$REPO" --body "pr-sync：无法自动更新到最新 develop（可能有冲突），请手动合并 develop 后再推送。$marker"
+              fi
+            fi
+          done <<< "$prs"

@@ -6,6 +6,7 @@ on:
     branches: [develop, main]
   push:
     branches: [develop]
+  workflow_dispatch: # pr-sync 用 GITHUB_TOKEN 更新分支后补跑（GITHUB_TOKEN 的 push 不会触发 pull_request）
 
 permissions:
   contents: read
@@ -87,9 +88,12 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
           BEFORE: ${{ github.event.before }}
+          EVENT: ${{ github.event_name }}
         run: |
           if [ -n "$BASE_REF" ]; then
             echo "ref=origin/$BASE_REF" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT" = workflow_dispatch ]; then
+            echo "ref=origin/develop" >> "$GITHUB_OUTPUT" # pr-sync 补跑：按合入 develop 的标准检查
           elif [ -n "$BEFORE" ] && ! echo "$BEFORE" | grep -qE '^0+$'; then
             echo "ref=$BEFORE" >> "$GITHUB_OUTPUT"
           fi

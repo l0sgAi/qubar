@@ -30,8 +30,9 @@ make dev-psql q="select ..."   # 查开发库；make dev-reset 清空数据卷�
 - 一个 PR 只解决一个 issue，描述里写 `Closes #N`；业务代码改动尽量 ≤ 500 行（测试不计），大需求拆 issue。
 - commit 用 Conventional Commits，英文：`feat(post): ...`、`fix(auth): ... (#48)`。
 - PR 描述按 `.github/pull_request_template.md` 填写：做了什么、怎么验证的（`make verify` 结果、手动调用的接口）、哪些没验证。
-- `develop` 有分支规则（`.github/rulesets/`）：必须通过 `go` / `db` / `image` / `iac` / `gitleaks` / `integration`，且分支要与 `develop` 保持最新。
-  落后时 `gh pr update-branch <PR>`（或合并 `origin/develop`）后等 CI 重跑。不要尝试绕过规则。
+- `develop` 有分支规则（`.github/rulesets/`）：必须通过 `go` / `db` / `image` / `iac` / `gitleaks` / `integration` / `risk-gate` / `claude-review`，
+  且分支要与 `develop` 保持最新。落后时 `gh pr update-branch <PR>`（或合并 `origin/develop`）后等 CI 重跑。不要尝试绕过规则。
+- GitHub Actions 里的 agent 用 `agent/<issue号>-<slug>` 分支；本机 session 用上面的 `feature/` / `fix/` 命名。
 
 ## Issue 与标签流转
 
@@ -39,7 +40,17 @@ make dev-psql q="select ..."   # 查开发库；make dev-reset 清空数据卷�
 
 - 只认领 `agent:ready` 的 issue。`agent:triage` / `agent:found` 需要人审核，不要自己改成 `agent:ready`。
 - 做的过程中发现范围外的问题：用 issue 模板新开 issue 并打 `agent:found`，不要顺手在当前 PR 里改。
-- `risk:high` 由 `risk-labeler` 按 `.github/labeler.yml` 的路径自动添加：不要移除它，也不要给带它的 PR 开 auto-merge。
+- `risk:high` 由 `pr-gate` 按 `.github/labeler.yml` 的路径自动添加：不要移除它。带它的 PR 不会自动合并，必需检查 `risk-gate`
+  要等维护者评论 `/approve <head-sha>`。**agent 绝不能评论 `/approve`、不能给 PR 开 auto-merge、不能合并 PR。**
+
+## 自动化流程（`.github/workflows/`）
+
+- `agent-dispatch`：`agent:ready` 的 issue 由 Actions 里的 Claude 实现并开 PR（同时最多 3 个 `agent:wip`）；做不了就退回 `agent:triage`。
+- `claude-review`：每个 PR 自动审查，结论写成 `claude-review` 状态；`agent/` 分支有阻塞问题时交给 `agent-fix`。
+- `agent-fix`：`agent/` 分支 CI 失败 / 审查有阻塞问题 / 更新冲突时自动修复，每个 PR 最多 3 次，超过打 `hold`。
+- `pr-gate`：打 `risk:high`、写 `risk-gate` 状态、给同仓库非草稿且无 `risk:high` / `hold` 的 PR 开 auto-merge。
+- `pr-sync`：开了 auto-merge 但落后于 develop 的 PR 自动更新并补跑检查。
+- `claude`：有写权限的人在 issue / PR 里 `@claude` 让它答疑或改代码。
 
 ## 需要人工审核的改动（高风险）
 
