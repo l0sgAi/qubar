@@ -39,7 +39,10 @@ flag.Parse()
 apps.Run(config, bootstrap)
 ```
 
-### 2.2 Run() 启动顺序（`cmd/apps/server.go`，行号即源码）
+### 2.2 Run() 启动顺序（`cmd/apps/server.go`）
+
+`Run` 只按序调五个阶段：`initCore`（1-3）→ `initStorage`（4-9）→ `initPipelines`（10，`pipelines.go`）
+→ `serve`（11-12）→ `shutdown`（`shutdown.go`）。下列行号为拆分前的历史值，以函数为准。
 
 1. **Config** `conf.InitConfig`（`:21`）—— Nacos 优先，失败回落本地 yaml。
 2. **密码参数** 注入 Argon2id（`:25`）。
@@ -58,7 +61,7 @@ apps.Run(config, bootstrap)
 11. **Router** `router.InitRouter()`（`:184`）。
 12. **Run** `r.Spin()`（`:191`）阻塞于 SIGINT/SIGTERM。
 
-### 2.3 关停（`cmd/apps/server.go:194-206`）
+### 2.3 关停（`cmd/apps/shutdown.go` `shutdown`）
 
 `Spin()` 返回后：`redis.CloseRedis()` → `auth.CloseSaToken()` → 7 个 producer `Close*`
 → `redpanda.StopCircleHotSyncer()`（`:204`）→ `StopItemCFSyncer()`（`:205`）。
@@ -66,20 +69,20 @@ apps.Run(config, bootstrap)
 
 ## 三、配置系统
 
-### 3.1 全局访问（`pkg/conf/conf.go:12`）
+### 3.1 全局访问（`pkg/conf/conf.go` `Config`）
 ```go
 var Config *AppConfig
 ```
 到处用 `conf.Config.Xxx`。
 
-### 3.2 AppConfig 结构（`pkg/conf/conf.go:14-30`）
+### 3.2 AppConfig 结构（`pkg/conf/conf.go`，各段结构体在 `conf_<段名>.go`）
 节：`Server, CORS, App, Log, Oauth, Pgsql, Redis, SaToken, S3, Elasticsearch, Redpanda, Hot, Recommend, Mailtrap, Security`。
 关键节：`Hot`（`:168`，`HotWeight`+`HotCap`）、`Recommend`（`:190`，`CF`+`Feed`）、`Redpanda`（`:134`，最大，~30 字段）。
 所有字段带 `mapstructure`/`json`/`yaml` 三 tag。
 
-### 3.3 两级加载（`InitConfig` `conf.go:272`）
+### 3.3 两级加载（`InitConfig` `conf.go`）
 1. 先试 `initFromNacos(bootstrapPath)`，成功返回；`errNoBootstrap` 静默回落，其它错记日志回落。
-2. 兜底 `initFromFile(fallbackPath)`（`conf.go:287`）：viper + `WatchConfig`/`OnConfigChange`（fsnotify 热重载，重 `Unmarshal`）。
+2. 兜底 `initFromFile(fallbackPath)`（`conf.go`）：viper + `WatchConfig`/`OnConfigChange`（fsnotify 热重载，重 `Unmarshal`）。
 
 ### 3.3.1 环境变量覆盖（`pkg/conf/env.go`，#51）
 `QUBAR_` + 配置路径大写、`.`→`_`（如 `QUBAR_PGSQL_PASSWORD`），优先级 env > Nacos/YAML。
@@ -94,9 +97,9 @@ var Config *AppConfig
 
 ### 3.5 加新配置项的范式（必须三处同步）
 1. `configs/config.example.yaml` 加 key + 默认值（模板入库；`configs/config.yaml` 已 git-ignore，#49）。密钥类字段模板里留空/占位。
-2. `pkg/conf/conf.go` 对应节结构体加字段（带 `mapstructure`/`json`/`yaml` tag）。
+2. `pkg/conf/conf_<段名>.go` 对应节结构体加字段（带 `mapstructure`/`json`/`yaml` tag）；新节 = 新建 `conf_xxx.go` + `conf.go` 的 `AppConfig` 加字段。
 3. 消费处读 `conf.Config.Xxx`，**`<=0` 提供常量兜底**（仿 `circle_hot_syncer.go:40` interval 默认 34）。
-参考现有节：`Hot`（`conf.go:168`）、`Recommend`（`conf.go:190`）、`Feed{PoolSize,TTLMinutes,QuotaC1..C5,...}`（`conf.go:196`）。
+参考现有节：`Hot`（`conf_hot.go`）、`Recommend` / `Feed{PoolSize,TTLMinutes,QuotaC1..C5,...}` / `CF`（`conf_recommend.go`）。
 
 ## 四、PostgreSQL / GORM
 
@@ -129,7 +132,7 @@ var Config *AppConfig
 - `InitRedis(addr,password,db)` + `Ping`。包级 helper（`Set/Get/Del/Exists/Expire/SetJSON/GetJSON/Incr/Decr`）。
 - **压缩**：`SetJSONCompressed`/`GetJSONCompressed`（复用 zstd encoder/decoder）—— user/circle 基础信息走压缩。
 
-### 5.2 key 规范（`constants.go`，权威清单）
+### 5.2 key 规范（`redis/keys_<domain>.go`，按领域分文件的权威清单）
 | key | 类型 | TTL | 语义 |
 |---|---|---|---|
 | `register:code:{email}` | string | 5min | 注册验证码 |
@@ -154,7 +157,7 @@ var Config *AppConfig
 ⚠️ `circle:stats.hot`（读路径热值）与 `circle:hot:`（Δ 累加器）是**两回事**——前者供读，后者待落库。
 
 ### 5.3 加新 Redis key 的范式
-在 `constants.go` 加：前缀 `const`（带注释：类型/语义/TTL）+ `GetXxxKey(...)` helper。
+在对应领域的 `pkg/server/storage/redis/keys_<domain>.go` 加（新领域新建文件，别再往 `constants.go` 追加）：前缀 `const`（带注释：类型/语义/TTL）+ `GetXxxKey(...)` helper。
 **别在 domain infra 里硬编码 key 字符串**。参考 `trending-design.md` 的 `trending:{dim}:{window}`。
 
 ### 5.4 Lua 脚本（原子多键操作）
@@ -209,7 +212,7 @@ var Config *AppConfig
 like writer 用 `kafka.Hash{}`（key=`user:target`，消费者"末态为准"依赖同分区有序）。每个 producer `InitXxxProducer()` + `PublishXxx` + `CloseXxxProducer`。
 只有 `InitRedpandaProducer`（circle）真拨号 + `conn.Controller()` 验证连通（gate consumer），其余返回 nil（best-effort）。
 
-### 7.2 topics / groups（`constants.go` + config.yaml）
+### 7.2 topics / groups（`redpanda/constants.go` + config.yaml）
 `circle_statistics` / `post_statistics` / `like_events` / `collect_events` / `post_view_history` / `post_hot` / `post_interaction`。
 每个有 `*_consumer_group` + `*_flush_interval`（**单位混杂**：有秒有分，看 config）。
 
@@ -220,7 +223,7 @@ like writer 用 `kafka.Hash{}`（key=`user:target`，消费者"末态为准"依�
 骨架负责：`kafka.Dialer{Timeout:10s, DualStack:true, Resolver:nil}`（Resolver nil 故意——避免 advertised-address 缓存）；
 `kafka.NewReader{...,CommitInterval:0}` + `FetchMessage`；**落库成功后才 `CommitMessages`**（每分区最大 offset）；
 `persist` 失败 → `merge` 合并回缓冲 + offset 放回，下轮重试；提交失败只记日志（后续提交覆盖）；毒消息只推进 offset；
-定时 / 定量（`flushMessages`）flush；`StopBatchConsumersGlobal()` 并行排干（`cmd/apps/server.go` 关停序列，早于 `CloseRedis`）。
+定时 / 定量（`flushMessages`）flush；`StopBatchConsumersGlobal()` 并行排干（`cmd/apps/shutdown.go` 关停序列，早于 `CloseRedis`）。
 读错误 → `waitAfterReadError`（`reader.go`，1s 起倍增封顶 30s，成功读取后 `Reset`）。读阻塞时无数据不会返回错误，出错即真实故障。
 语义 at-least-once：增量 SQL 非幂等，"落库后、提交前被杀" 或再均衡时可能重复计数一次（窗口毫秒级）。
 点赞（`like_consumer.go`，末态幂等）与通知（`notification_consumer.go`）是独立实现。
@@ -238,7 +241,7 @@ like writer 用 `kafka.Hash{}`（key=`user:target`，消费者"末态为准"依�
 ### 7.6 加新后台 job 的范式（仿 `CircleHotSyncer`）
 struct `{mu sync.Mutex, ticker *time.Ticker, stopChan chan struct{}, stopped bool}`；`run()` select `ticker.C`/`stopChan`；
 `Stop()` 用 `stopped` flag 幂等 + `close(stopChan)` + 关停排干；包级单例 + `StartXxxWithRetry()`/`StopXxx()`。
-在 `cmd/apps/server.go` 启停点（`:164`/`:204-205` 附近）成对加 `go Start…` / `Stop…`。
+成对加：`cmd/apps/pipelines.go` 的 `initPipelines` 加 `go Start…`，`cmd/apps/shutdown.go` 的 `shutdown` 加 `Stop…`。
 
 ## 八、鉴权（sa-token-go）
 
