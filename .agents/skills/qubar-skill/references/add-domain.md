@@ -136,7 +136,7 @@ func (r *fooRepoPG) Create(ctx context.Context, f *domain.Foo) error {
 type fooCacheRedis struct{}
 func NewFooCache() domain.FooCache { return &fooCacheRedis{} }
 ```
-新 Redis key 加到 `pkg/server/storage/redis/constants.go`（前缀 const + `GetXxxKey` helper + 注释含类型/TTL/语义）。
+新 Redis key 加到 `pkg/server/storage/redis/keys_foo.go`（新领域新建该文件；前缀 const + `GetXxxKey` helper + 注释含类型/TTL/语义；不要再往 `constants.go` 追加）。
 miss 返 `nil,nil`；非 `redis.Nil` 错才记日志。
 
 ### 4.3 ES searcher —— 薄适配器，调 `pkg/server/storage/elasticsearch` 函数 + `toXxx` 字段拷贝。
@@ -192,35 +192,49 @@ func writeFooError(c appctx.AppContext, err error) {
 
 ## 6. composition 装配（`pkg/composition/`）
 
-### 6.1 import 别名（`server.go` 顶部）—— 仿 `:11-14`
-```go
-fooapp  "interestBar/pkg/domains/foo/application"
-fooinfra "interestBar/pkg/domains/foo/infrastructure"
-foohttp "interestBar/pkg/domains/foo/interfaces/http"
-```
+按领域分文件，新领域只**新建**两个文件 + 在 `server.go` 的 `RegisterDomainRoutes` 加几行，
+不要把构造器 / 桥接器写进 `server.go`（多个 agent 并行开发时它是唯一的共享清单，保持短小）。
 
-### 6.2 newFooService 助手 + registerFoo —— 仿 `newRecommendService`（`server.go:181`）/`registerRecommend`（`:195`）
+| 文件 | 放什么 | 仿 |
+|---|---|---|
+| `wire_foo.go`（新建） | `newFooService` 构造器 + `registerFoo` 路由注册 + 本文件需要的 import 别名 | `wire_recommend.go` |
+| `foo_bridges.go`（新建） | 注入 foo 的跨域桥接器（按**被注入方**归档）+ 编译期 guard | `recommend_bridges.go` / `circle_bridges.go` |
+| `server.go`（改几行） | 构造调用、跨域 setter 注入、`registerFoo` 调用，**按依赖顺序插入** | — |
+
+foo 给别的领域提供端口时，桥接器放到**被注入方**的 `<domain>_bridges.go`（如 foo → post 放 `post_bridges.go`）。
+
+### 6.1 `wire_foo.go`：import 别名 + newFooService + registerFoo —— 仿 `wire_recommend.go`
 ```go
+package composition
+
+import (
+	fooapp "interestBar/pkg/domains/foo/application"
+	fooinfra "interestBar/pkg/domains/foo/infrastructure"
+	foohttp "interestBar/pkg/domains/foo/interfaces/http"
+	postapp "interestBar/pkg/domains/post/application"
+	"interestBar/pkg/shared/routing"
+)
+
 func newFooService(deps *Deps, postSvc postapp.PostService) fooapp.FooService {
-	repo := foonfra.NewFooRepository(deps.DB.Get())
-	cache := foonfra.NewFooCache()
-	svc := fooapp.NewFooService(repo, cache)
-	svc.SetPostFetcher(&fooPostFetcher{delegate: postSvc})  // 跨域桥接注入
-	return svc
+	repo := fooinfra.NewFooRepository(deps.DB.Get())
+	cache := fooinfra.NewFooCache()
+	return fooapp.NewFooService(repo, cache, &fooPostFetcher{delegate: postSvc}) // 只读跨域依赖可直接构造注入
 }
+
 func registerFoo(root routing.RouterGroup, svc fooapp.FooService, authCheck routing.HandlerFunc) {
 	foohttp.RegisterRoutes(root, svc, authCheck)
 }
 ```
 
-### 6.3 RegisterDomainRoutes 里挂接 —— 仿 `server.go:100,113`
+### 6.2 `server.go` 的 RegisterDomainRoutes 里挂接（只加调用，不加实现）
 ```go
-fooSvc := newFooService(deps, postSvc)   // 构造（跨域依赖的 service 先于它构造）
-// ... 其它 setter 注入 ...
-registerFoo(root, fooSvc, authCheck)     // 注册
+fooSvc := newFooService(deps, postSvc)                      // 构造（跨域依赖的 service 先于它构造）
+fooSvc.SetUserFacade(&fooUserFacade{delegate: userFacade})  // 双向 / 可选依赖用 setter 注入，集中在这里
+// ...
+registerFoo(root, fooSvc, authCheck)                        // 注册（路由注册清单里按顺序追加）
 ```
 
-### 6.4 跨域桥接器 —— 加到 `facade_bridges.go`，仿 `circleUserFacade`（`:31`）
+### 6.3 `foo_bridges.go`：跨域桥接器 —— 仿 `circle_bridges.go` 的 `circleUserFacade`
 ```go
 type fooPostFetcher struct{ delegate postapp.PostService }
 func (f *fooPostFetcher) GetMediaByPostIDs(ctx context.Context, ids []uuid.UUID) ([]fooapp.PostMedia, error) {
@@ -233,13 +247,13 @@ func (f *fooPostFetcher) GetMediaByPostIDs(ctx context.Context, ids []uuid.UUID)
 
 三处同步（仿 `Hot`/`Recommend` 节）：
 1. `configs/config.example.yaml` 加 `foo:` 节 + 默认值（模板入库；本地 `config.yaml` 不入库）。
-2. `pkg/conf/conf.go` 加 `Foo` 结构体（mapstructure/json/yaml tag）+ `AppConfig` 加字段（`:14`）。
+2. 新建 `pkg/conf/conf_foo.go` 放 `Foo` 结构体（mapstructure/json/yaml tag，仿 `conf_hot.go`）+ `pkg/conf/conf.go` 的 `AppConfig` 加一个字段。env 覆盖（`QUBAR_FOO_XXX`）由 `env.go` 反射自动展开，无需登记。
 3. 消费处读 `conf.Config.Foo.Xxx`，`<=0` 提供常量兜底。
 
 ## 8. 后台 job（若需）
 
 仿 `CircleHotSyncer`（`redpanda/circle_hot_syncer.go:28`）：struct `{mu,ticker,stopChan,stopped}` + `run()` select + `Stop()` 幂等排干 + 包级 `StartFooSyncerWithRetry()`/`StopFooSyncer()`。
-在 `cmd/apps/server.go` 成对加 `go redpanda.StartFooSyncerWithRetry()`（`:164` 附近）+ `redpanda.StopFooSyncer()`（`:204` 附近）。
+成对加启停：`cmd/apps/pipelines.go` 的 `initPipelines` 里按依赖顺序加 `go redpanda.StartFooSyncerWithRetry()`，`cmd/apps/shutdown.go` 的 `shutdown` 里加 `redpanda.StopFooSyncer()`（`cmd/apps/server.go` 只有阶段调用，不用改）。
 
 ## 9. 文档
 
@@ -255,7 +269,8 @@ func (f *fooPostFetcher) GetMediaByPostIDs(ctx context.Context, ids []uuid.UUID)
 - [ ] 实体内联字段 → repo insert 前显式 `sharedomain.NewID()`
 - [ ] 软删除 `deleted = 0` 手动过滤（无 gorm.DeletedAt）
 - [ ] 用户文本过 `utils.SanitizeForPg`
-- [ ] Redis key 加到 `constants.go`（前缀 const + helper + 注释）
+- [ ] Redis key 加到 `redis/keys_<domain>.go`（前缀 const + helper + 注释）
+- [ ] composition：新建 `wire_foo.go` / `foo_bridges.go`，`server.go` 只加调用
 - [ ] 改表：新增 `migrations/` 迁移 + 同步 `docs/pgsql-ddl/` 说明，`make migrate-check` 通过（无 AutoMigrate）
 - [ ] 新配置项三处同步 + 兜底默认值
 - [ ] `go build ./...` + `go vet ./...` 通过
