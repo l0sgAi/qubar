@@ -174,7 +174,7 @@ func TestNewHTTPClient_BlocksLoopbackAtDial(t *testing.T) {
 	if err != nil {
 		t.Fatalf("allowPrivate client: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
 
 func TestNewHTTPClient_RejectsDowngradeRedirect(t *testing.T) {
@@ -210,7 +210,7 @@ func TestNewHTTPClient_PooledPrivateConnNotReusedByGuarded(t *testing.T) {
 		t.Fatalf("allowPrivate client: %v", err)
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
-	resp.Body.Close() // 连接回到 allowPrivate 的空闲池
+	_ = resp.Body.Close() // 连接回到 allowPrivate 的空闲池
 
 	if _, err := NewHTTPClient(5*time.Second, false).Get(srv.URL); !errors.Is(err, ErrBlocked) {
 		t.Errorf("want ErrBlocked at dial, got %v", err)

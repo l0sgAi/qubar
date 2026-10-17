@@ -120,7 +120,7 @@ func (c *joinedCirclesCacheRedis) PageByRank(ctx context.Context, userID uuid.UU
 	if limit <= 0 {
 		return nil, nil
 	}
-	members, err := redispkg.Client.ZRevRange(ctx, joinedKey(userID), start, start+limit-1).Result()
+	members, err := redispkg.Client.ZRangeArgs(ctx, redis.ZRangeArgs{Key: joinedKey(userID), Start: start, Stop: start + limit - 1, Rev: true}).Result()
 	if err != nil {
 		return nil, err
 	}

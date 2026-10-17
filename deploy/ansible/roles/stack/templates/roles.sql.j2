@@ -1,0 +1,20 @@
+-- 由 Ansible 渲染（root 0600，含密码）。幂等：每次 Ansible 运行时执行，之后紧接着执行 grants.sql。
+-- 角色：
+--   qubar_owner   库 / domains schema 及全部表的 owner，执行迁移（migrations/，db-migrate.sh）与人工 DDL
+--   qubar_web_app 应用运行时，只有 DML
+--   debezium      CDC：REPLICATION + 只读
+\set ON_ERROR_STOP on
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'qubar_owner') THEN CREATE ROLE qubar_owner; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'qubar_web_app') THEN CREATE ROLE qubar_web_app; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'debezium') THEN CREATE ROLE debezium; END IF;
+END $$;
+
+ALTER ROLE qubar_owner   WITH LOGIN NOSUPERUSER NOREPLICATION PASSWORD '{{ pg_owner_password | replace("'", "''") }}';
+ALTER ROLE qubar_web_app WITH LOGIN NOSUPERUSER NOREPLICATION PASSWORD '{{ pg_app_password | replace("'", "''") }}';
+ALTER ROLE debezium      WITH LOGIN NOSUPERUSER REPLICATION   PASSWORD '{{ pg_debezium_password | replace("'", "''") }}';
+
+-- DDL 拿不到锁时快速失败，而不是排队堵住线上读写（迁移文件里也会 SET；CONCURRENTLY 文件不能 SET，靠这里兜底）
+ALTER ROLE qubar_owner SET lock_timeout = '5s';

@@ -44,18 +44,18 @@ qubar（Go module `interestBar`）是一个 DDD 模块化单体的兴趣社区�
 1. **有没有现成的？** 先翻 `references/domain-guide.md` 或 grep，确认要加的能力不是某个域已实现的方法（如 `circleRepo.GetByIDs`、`UserFacade.GetBriefs`）。**复用优先于新建。**
 2. **改动落在哪一层？** 每层职责固定（见"四层职责"）。别把 infra 接口写进 application，别把 ES/Redis import 进 domain。
 3. **要不要跨域？** 跨域必须走 Facade/Port 接口 + composition 桥接器，**禁止** import 兄弟域包。
-4. **新配置项？** 同步改 `configs/config.example.yaml`（模板，入库）+ `pkg/conf/conf.go` 结构体，并提供 `<=0` 兜底默认值。
-5. **新后台 job？** 仿 `circle_hot_syncer.go`（`{mu,ticker,stopChan,stopped}` + 优雅排干），在 `cmd/apps/server.go` 启停。
-6. **新 Redis key？** 前缀常量 + `GetXxxKey` helper 加到 `pkg/server/storage/redis/constants.go`，写明类型/TTL/语义。
+4. **新配置项？** 同步改 `configs/config.example.yaml`（模板，入库）+ `pkg/conf/conf_<段名>.go` 结构体（新段再在 `conf.go` 的 `AppConfig` 加字段），并提供 `<=0` 兜底默认值。
+5. **新后台 job？** 仿 `circle_hot_syncer.go`（`{mu,ticker,stopChan,stopped}` + 优雅排干），在 `cmd/apps/pipelines.go`（启动）+ `cmd/apps/shutdown.go`（关停）成对加。
+6. **新 Redis key？** 前缀常量 + `GetXxxKey` helper 加到 `pkg/server/storage/redis/keys_<domain>.go`（按领域分文件），写明类型/TTL/语义。
 7. **设计文档先写？** 较大改动（新子系统/新聚合接口）参照 `docs/active-circles-design.md` 范式先写设计文档，caveman mode 规划待审。
 
 ## 核心红线（违反即返工）
 
 - ❌ **domain/ 包 import gorm / redis / elasticsearch / hertz / 兄弟 domain 包。** domain 是纯 Go，只放实体、值对象、端口接口。
-- ❌ **跨域直接 import。** 如 post 要拿 user 信息：在 `post/application/` 重新声明 `UserFacade` 接口，由 `pkg/composition/facade_bridges.go` 写桥接器，setter 注入。
+- ❌ **跨域直接 import。** 如 post 要拿 user 信息：在 `post/application/` 重新声明 `UserFacade` 接口，由 `pkg/composition/post_bridges.go`（按被注入方分文件）写桥接器，setter 注入。
 - ❌ **业务层 import hertz/gin。** handler 用 `appctx.AppContext`；响应用 `httputil.Success/BadRequest/...`，**禁止** `c.JSON(...)`。
 - ❌ **handler 里写查询逻辑 / domain 里写 DB 操作。** handler 只 bind + 调 service + 映射错误；DB/Redis/ES 只在 `infrastructure/`。
-- ❌ **AutoMigrate。** schema 由 `docs/pgsql-ddl/` 的 SQL 脚本管理（DB-owner 角色），运行时角色无 ALTER 权限。改表先改 docs/pgsql-ddl/。
+- ❌ **AutoMigrate / 手工到生产执行 DDL。** schema 由 `migrations/`（golang-migrate，forward-only）管理，发布时以 DB-owner 角色自动执行，运行时角色无 ALTER 权限。改表 = `make migrate-new name=xxx` 新增迁移 + 同步 `docs/pgsql-ddl/` 字段说明；规范见 `migrations/README.md`。
 - ❌ **GORM 软删除插件。** 用 `deleted = 0` 手动过滤（`Deleted int16`），不用 `gorm.DeletedAt`。
 - ❌ **用 `form:` tag 绑 query。** hertz 的 `BindQuery` 只认 `query:` tag（gin 时代用 form，迁移后必须改）。
 - ❌ **用户文本直接入库。** 必须先过 `utils.SanitizeForPg`（防 PG UTF8 错误），在 application 层调用。
@@ -111,16 +111,17 @@ interfaces/http/   handler.go（Handler + Request DTO + writeXxxError）+ routes
 ```bash
 go build ./...              # 编译
 go vet ./...                # 静态检查
-go test ./pkg/...           # 测试（注意：测试很稀疏，仅 cursor/sanitize/password/adapter/cors）
+go test ./pkg/...           # 单元测试
+make test-integration       # 集成测试（先 make dev-up）：真实 PG / Redis / Redpanda，夹具 pkg/shared/testkit；改 infrastructure/ 或 SQL 必跑
 go run ./cmd -c configs/config.yaml -b configs/bootstrap.yaml   # 本地启动（-b 空=跳过 Nacos 用本地 yaml）
 ```
 
 ## 速查：关键文件位置
 
-- 入口：`cmd/main.go`（flags `-c` `-b`）、`cmd/apps/server.go`（启动顺序 + 关停）
-- 装配根：`pkg/composition/server.go`（RegisterDomainRoutes）、`facade_bridges.go`、`deps.go`、`auth.go`
+- 入口：`cmd/main.go`（flags `-c` `-b`）、`cmd/apps/server.go`（启动阶段）、`pipelines.go`（异步链路启动序列）、`shutdown.go`（关停）
+- 装配根：`pkg/composition/server.go`（RegisterDomainRoutes 顺序清单）、`wire_<domain>.go`（构造 + 路由）、`<domain>_bridges.go`（跨域桥接）、`deps.go`、`auth.go`
 - 共享内核：`pkg/shared/domain/base.go`（NewID/BeforeCreate）、`appctx/context.go`、`routing/group.go`、`httputil/response.go`
 - 基础设施全局：`pkg/server/storage/{db/pgsql,redis,elasticsearch,redpanda,s3}`
-- 配置：`pkg/conf/conf.go`（Config 结构体）、`configs/config.example.yaml`（模板；本地 `configs/config.yaml` 已 git-ignore，勿提交密钥）、`configs/bootstrap.yaml`
-- schema：`docs/pgsql-ddl/`（DDL 权威来源，按领域拆分，入口 README.md；docs/db.md 仅作跳转入口）
+- 配置：`pkg/conf/conf.go`（AppConfig 聚合）+ `conf_<段名>.go`（各段结构体）、`configs/config.example.yaml`（模板；本地 `configs/config.yaml` 已 git-ignore，勿提交密钥）、`configs/bootstrap.yaml`
+- schema：`migrations/`（DDL 权威来源，golang-migrate 版本化迁移，规范见 migrations/README.md）；`docs/pgsql-ddl/` 为按领域拆分的设计 / 字段语义说明（入口 README.md；docs/db.md 仅作跳转入口）
 - 路由抽象适配：`pkg/composition/hertzadapter/group.go`、`pkg/shared/appctx/hertzadapter/adapter.go`

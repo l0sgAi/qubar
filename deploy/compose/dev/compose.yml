@@ -1,0 +1,87 @@
+# Qubar 本机 / agent 开发依赖栈（l0sgAi/qubar#67 P0）：PG18 / Redis / Elasticsearch(IK) / Redpanda。
+#
+#   make dev-up      # 起栈 + 等健康 + 执行迁移
+#   make dev-run     # go run 应用（configs/config.dev.yaml）
+#   make dev-down    # 停栈（保留数据）；make dev-reset 连数据卷一起删
+#
+# 端口全部绑 127.0.0.1，并统一用 2xxxx 段：避开 Homebrew 默认端口，也避开 15432
+# （migrations/README.md 里 ssh -L 到生产库用的本地端口，防止 dev 命令误连生产）。
+# 只有密码为 ci 的一次性开发凭据；不含 CDC（connect / Debezium），ES 里的业务索引不会自动同步。
+name: qubar-dev
+
+services:
+  postgres:
+    image: postgres:18.4
+    environment:
+      POSTGRES_PASSWORD: ci
+      POSTGRES_DB: qubar
+      TZ: Asia/Shanghai
+    command: ["postgres", "-c", "wal_level=logical", "-c", "timezone=Asia/Shanghai"]
+    volumes:
+      # 与 CI 同一份角色 / schema / 默认权限初始化（qubar_owner 迁移、qubar_web_app 应用连接，密码均为 ci）
+      - ../../../.github/ci/pg-init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+      - pg_data:/var/lib/postgresql
+    ports: ["127.0.0.1:25432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d qubar"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:8.2.7
+    ports: ["127.0.0.1:26379:6379"]
+    volumes: [redis_data:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  elasticsearch:
+    build:
+      context: ../../images/elasticsearch-ik # 与生产同一份 Dockerfile（应用启动时建的 index template 依赖 IK 分词）
+    image: qubar-dev/elasticsearch-ik:8.15.3
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+      ingest.geoip.downloader.enabled: "false"
+    volumes: [es_data:/usr/share/elasticsearch/data]
+    ports: ["127.0.0.1:29200:9200"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s' || exit 1"]
+      interval: 5s
+      timeout: 10s
+      start_period: 1m
+      retries: 30
+
+  redpanda:
+    image: redpandadata/redpanda:v26.1.10
+    command:
+      - redpanda
+      - start
+      - --mode
+      - dev-container
+      - --smp
+      - "1"
+      - --memory
+      - 1G
+      - --kafka-addr
+      - INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:29092
+      - --advertise-kafka-addr
+      - INTERNAL://redpanda:9092,EXTERNAL://127.0.0.1:29092
+    volumes: [redpanda_data:/var/lib/redpanda/data]
+    ports: ["127.0.0.1:29092:29092"]
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -qE 'Healthy:.+true'"]
+      interval: 3s
+      timeout: 5s
+      start_period: 20s
+      retries: 30
+
+volumes:
+  pg_data:
+  redis_data:
+  es_data:
+  redpanda_data:

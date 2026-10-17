@@ -84,7 +84,7 @@ func readinessChecker() *health.Checker {
 				if err != nil {
 					return err
 				}
-				defer res.Body.Close()
+				defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 				if res.IsError() {
 					return errors.New(res.Status())
 				}

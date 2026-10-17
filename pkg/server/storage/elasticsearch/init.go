@@ -29,7 +29,7 @@ func InitElasticsearch() error {
 	if err != nil {
 		return fmt.Errorf("failed to get elasticsearch info: %w", err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.IsError() {
 		return fmt.Errorf("elasticsearch returned error: %s", res.String())
@@ -156,7 +156,7 @@ func ensureIndexTemplate() error {
 	if err != nil {
 		return fmt.Errorf("failed to put index template: %w", err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.IsError() {
 		return fmt.Errorf("failed to put index template: %s", res.String())
@@ -175,7 +175,7 @@ func createCircleIndex() error {
 	if err != nil {
 		return fmt.Errorf("failed to check index existence: %w", err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.StatusCode == 200 {
 		logger.Log.Info(fmt.Sprintf("Index '%s' already exists", indexName))
@@ -263,7 +263,7 @@ func createCircleIndex() error {
 	if err != nil {
 		return fmt.Errorf("failed to create index: %w", err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.IsError() {
 		return fmt.Errorf("failed to create index: %s", res.String())

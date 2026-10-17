@@ -1,0 +1,44 @@
+name: Bug
+description: 线上或开发环境的错误行为
+labels: ["bug", "agent:triage"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 现象
+      description: 实际发生了什么；错误日志、响应体（注意去掉 token / 个人信息）
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      description: 请求、数据前提、环境（生产 / 开发栈 make dev-up）
+      value: |
+        1. 
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 修复后应满足什么；建议补一个能复现该问题的测试
+      value: |
+        - [ ] 
+        - [ ] 增加回归测试
+        - [ ] `make verify` 通过
+  - type: dropdown
+    id: risk
+    attributes:
+      label: 风险等级
+      options:
+        - 低：单领域内业务逻辑 / 测试 / 文档
+        - 高：需要人工审核
+    validations:
+      required: true

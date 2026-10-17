@@ -2,6 +2,7 @@ package elasticsearch
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -45,7 +46,7 @@ type TrendingAggResult struct {
 //	size      = 入榜条数（job 传 top_n，如 100）
 //
 // 返回有序 TrendingScoredItem（score 降序）。
-func AggregateTrending(dimension, window string, size int) (*TrendingAggResult, error) {
+func AggregateTrending(ctx context.Context, dimension, window string, size int) (*TrendingAggResult, error) {
 	if size <= 0 || size > trendingTermsSize {
 		size = trendingTermsSize
 	}
@@ -84,14 +85,14 @@ func AggregateTrending(dimension, window string, size int) (*TrendingAggResult, 
 
 	postIndex := GetPostIndexName()
 	res, err := Client.Search(
-		Client.Search.WithContext(nil),
+		Client.Search.WithContext(ctx),
 		Client.Search.WithIndex(postIndex),
 		Client.Search.WithBody(bytes.NewReader(queryJSON)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to aggregate trending (%s/%s): %w", dimension, window, err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.IsError() {
 		return nil, fmt.Errorf("elasticsearch trending aggregate error: %s", res.String())

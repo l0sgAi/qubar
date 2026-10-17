@@ -30,7 +30,7 @@ func runProbe(url string) int {
 		fmt.Fprintln(os.Stderr, "probe failed:", err)
 		return 1
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		fmt.Fprintln(os.Stderr, "probe failed: status", resp.StatusCode)
 		return 1

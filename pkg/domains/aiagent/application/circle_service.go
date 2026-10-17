@@ -7,7 +7,7 @@
 // 圈内机器人回复触发已按圈落地（docs/circle-agent-reply-design.md）：本圈帖
 // 关键词/@提及/圈主手动触发，限流缺省防圈主 key 裸奔。
 // 权限每次直查 member 记录（无缓存）：任免/转让/禁言即时生效；圈子被封禁不阻断管理
-//（owner 需要能停用/删除机器人止血），权限只看 member 记录。
+// （owner 需要能停用/删除机器人止血），权限只看 member 记录。
 // 设计见 docs/circle-agent-manage-design.md。
 package application
 
@@ -51,7 +51,7 @@ type CircleRoleReader interface {
 // CircleAgentService 圈子级机器人管理服务接口。
 //
 // 所有方法第一个业务参数为操作者 userID，service 内统一做圈内角色校验
-//（fail-closed：CircleRoleReader 未注入一律拒绝），handler 无需（也不应）自行判断，
+// （fail-closed：CircleRoleReader 未注入一律拒绝），handler 无需（也不应）自行判断，
 // 防止新增入口漏检。
 type CircleAgentService interface {
 	// CreateCircleAgent 创建圈内机器人（admin+，每圈 ≤MaxAgentsPerCircle，超限 409）。
@@ -98,7 +98,7 @@ func (s *circleAgentServiceImpl) SetBotUserScopeCleaner(c BotUserScopeCleaner) {
 
 // requireCircleManager 校验操作者是该圈 admin+（role>=20）且成员状态正常。
 // 端口未注入/非成员/圈子不存在/状态非 normal（禁言/拉黑/待审/退出）一律拒绝
-//（fail-closed；非成员不暴露"你不是成员"细节，防成员身份探测）。
+// （fail-closed；非成员不暴露"你不是成员"细节，防成员身份探测）。
 func (s *circleAgentServiceImpl) requireCircleManager(ctx context.Context, circleID, operatorID uuid.UUID) error {
 	if s.circleRoles == nil {
 		return errNotCircleAdmin

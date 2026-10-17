@@ -2,8 +2,12 @@
 #
 #   changes ─┬─ infra（deploy/** 变更）：Terraform apply → Ansible 收敛主机 / 中间件
 #            └─ test → build（应用代码变更）：镜像推 GHCR ghcr.io/l0sgai/qubar:<sha>
-#   deploy（needs infra + build）：SSH(经 Cloudflare Access) → deploy-app.sh（失败自动回滚）
+#   migrate（needs infra + build；migrations/** 变更或有新镜像时）：同步 migrations/ → db-migrate.sh
+#            （migrate up + 重跑 grants.sql 刷新授权 / dbz_pub）。失败 → 不发布应用。
+#   deploy（needs migrate）：SSH(经 Cloudflare Access) → deploy-app.sh（失败自动回滚）
 #            → register-connectors.sh → 外网冒烟 https://api-next.qubar.site/healthz
+#
+# 先迁移、后发版：迁移必须兼容正在运行的旧版本应用（expand / contract，见 migrations/README.md）；回滚不回退 schema。
 #
 # 手动触发：Actions → release → Run workflow（可强制 infra / 回滚上一版本）。
 # 密钥全部在 GitHub Environment「production」（限 main 分支），清单见 deploy/README.md。
@@ -20,6 +24,10 @@ on:
         default: false
       force_deploy:
         description: 强制构建并发布当前 main
+        type: boolean
+        default: false
+      force_migrate:
+        description: 强制执行 schema 迁移（如 dirty 修复后重试）
         type: boolean
         default: false
       rollback:
@@ -44,8 +52,9 @@ jobs:
     outputs:
       infra: ${{ steps.f.outputs.infra == 'true' || inputs.force_infra == true }}
       app: ${{ (steps.f.outputs.app == 'true' || inputs.force_deploy == true) && inputs.rollback != true }}
+      db: ${{ (steps.f.outputs.db == 'true' || inputs.force_migrate == true) && inputs.rollback != true }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - id: f
         uses: dorny/paths-filter@v3
         with:
@@ -61,13 +70,15 @@ jobs:
               - 'go.sum'
               - 'Dockerfile'
               - '.dockerignore'
+            db:
+              - 'migrations/**'
 
   test:
     needs: changes
     if: needs.changes.outputs.app == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -82,7 +93,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -109,7 +120,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: ./.github/actions/prod-access
         with:
@@ -157,20 +168,52 @@ jobs:
           ANSIBLE_FORCE_COLOR: "1"
         run: ansible-playbook site.yml -e "@$RUNNER_TEMP/ansible-vars.json" --private-key ~/.ssh/qubar_deploy
 
+  migrate:
+    needs: [changes, test, build, infra]
+    # 有迁移变更、或要发布新镜像时执行（无待执行迁移时是 no-op，保证应用永远不早于 schema）；回滚不迁移
+    if: >-
+      always() && !cancelled() && inputs.rollback != true &&
+      needs.test.result != 'failure' && needs.build.result != 'failure' && needs.infra.result != 'failure' &&
+      (needs.changes.outputs.db == 'true' || needs.build.result == 'success')
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/prod-access
+        with:
+          r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          deploy-ssh-key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+
+      - name: Sync migrations/（整目录替换，服务器无 rsync）
+        run: |
+          tar -C migrations -cf - --exclude README.md . | ssh "$PROD_SSH" '
+            set -e; cd /opt/qubar/migrate
+            rm -rf migrations.new && mkdir migrations.new && tar -xf - -C migrations.new
+            rm -rf migrations && mv migrations.new migrations'
+
+      - name: Migrate
+        run: |
+          # shellcheck disable=SC2029  # sha 有意在 runner 侧展开
+          ssh "$PROD_SSH" /opt/qubar/bin/db-migrate.sh "${{ github.sha }}"
+
   deploy:
-    needs: [changes, build, infra]
-    # infra / build 允许被跳过，但不能失败；回滚不依赖 build
+    needs: [changes, build, infra, migrate]
+    # infra / build / migrate 允许被跳过，但不能失败；回滚不依赖 build。
+    # 只有 infra / 迁移变更时也运行（不换镜像）：cdc_tables 等 connector 配置变化需要重新注册。
     if: >-
       always() && !cancelled() &&
-      needs.build.result != 'failure' && needs.infra.result != 'failure' &&
-      (needs.build.result == 'success' || inputs.rollback == true)
+      needs.build.result != 'failure' && needs.infra.result != 'failure' && needs.migrate.result != 'failure' &&
+      (needs.build.result == 'success' || inputs.rollback == true ||
+       needs.migrate.result == 'success' || needs.infra.result == 'success')
     runs-on: ubuntu-latest
     environment: production
     permissions:
       contents: read
       packages: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: ./.github/actions/prod-access
         with:
@@ -179,9 +222,11 @@ jobs:
           deploy-ssh-key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
 
       - name: GHCR login on host（GITHUB_TOKEN 仅本 job 有效）
+        if: needs.build.result == 'success' || inputs.rollback == true
         run: echo "${{ secrets.GITHUB_TOKEN }}" | ssh "$PROD_SSH" docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Deploy
+        if: needs.build.result == 'success' || inputs.rollback == true
         run: |
           if [ "${{ inputs.rollback }}" = "true" ]; then
             ssh "$PROD_SSH" /opt/qubar/bin/deploy-app.sh --rollback
@@ -194,7 +239,7 @@ jobs:
         run: ssh "$PROD_SSH" /opt/qubar/bin/register-connectors.sh
 
       - name: GHCR logout
-        if: always()
+        if: always() && (needs.build.result == 'success' || inputs.rollback == true)
         run: ssh "$PROD_SSH" docker logout ghcr.io || true
 
       - name: Smoke（经 Cloudflare 外网）

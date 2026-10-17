@@ -19,7 +19,7 @@ import (
 )
 
 // TestMain 测试装配：agent_count 回填的降级路径会记 Error 日志，注入 nop logger
-//（生产由启动流程初始化，单测环境 logger.Log 为 nil）。
+// （生产由启动流程初始化，单测环境 logger.Log 为 nil）。
 func TestMain(m *testing.M) {
 	logger.InitLogger()
 	m.Run()

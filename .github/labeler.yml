@@ -1,0 +1,30 @@
+# pr-gate.yml 的 label job 使用：PR 触及以下路径时自动打 risk:high（l0sgAi/qubar#67 P2）。
+# risk:high 的 PR 不开 auto-merge，且必需检查 risk-gate 要等维护者评论 /approve <head-sha>。路径与 CLAUDE.md「需要人工审核的改动」保持一致。
+# pull_request_target 读取的是默认分支（main）上的本文件，PR 无法通过修改它给自己去掉标签；改动要发版到 main 才生效。
+"risk:high":
+  - changed-files:
+      - any-glob-to-any-file:
+          # 表结构（先迁移后发版，生产自动执行）
+          - migrations/**
+          # 生产基础设施与发布流水线
+          - deploy/**
+          - .github/**
+          - Dockerfile
+          # 鉴权 / SSRF 防护 / 加密
+          - pkg/domains/auth/**
+          - pkg/server/auth/**
+          - pkg/util/netguard/**
+          - pkg/util/crypto/**
+          # 配置
+          - pkg/conf/**
+          - configs/**
+          # agent 规则与验证门槛（agent 不能悄悄放宽自己的约束）
+          - CLAUDE.md
+          - AGENTS.md
+          - .claude/**
+          - .agents/**
+          - Makefile
+          - .golangci.yml
+          - .gitleaks.toml
+          - .squawk.toml
+          - scripts/**

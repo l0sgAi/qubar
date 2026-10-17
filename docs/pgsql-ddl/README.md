@@ -1,5 +1,9 @@
 # 数据库表结构定义(UUIDv7 主键版)
 
+> **表结构权威来源已迁到 [`migrations/`](../../migrations/README.md)(golang-migrate,随发布自动执行)。**
+> 本目录降为**设计说明 / 字段语义文档**:改表 = 新增迁移文件 + 同步更新这里对应领域的说明。
+> 这里的 `CREATE TABLE` 片段用于阅读,不再手工到生产执行;与实际 schema 不一致时以 `migrations/` 为准。
+
 > 中间件:PostgreSQL 18,内置 `uuidv7()` 函数(无需 CREATE EXTENSION,`uuid` 类型为 PG 内置)。
 > 全表主键与外键统一使用 **UUIDv7**(`UUID` 类型)。UUIDv7 前 48 位为毫秒级时间戳,**字典序 == 时间序**,可直接用于「最新优先」排序与 keyset 游标分页。
 >
@@ -28,27 +32,17 @@
 
 ---
 
-## 附录:应用角色权限(DB-owner 建表后必做)
+## 附录:应用角色权限
 
-运行时应用角色(`qubar_web_app`,见 `configs/config.yaml` 的 `pgsql.username`)对 `domains` schema 下的表**只有被显式 GRANT 的权限**。DB-owner 角色新建表后不授权,应用即报 `permission denied for table xxx (SQLSTATE 42501)`。
+迁移以 `qubar_owner` 执行,生产 `grants.sql`(Ansible 渲染,见 `deploy/ansible/roles/stack/templates/grants.sql.j2`)已配置
+`ALTER DEFAULT PRIVILEGES FOR ROLE qubar_owner`,新表自动授予 `qubar_web_app` 行级 DML(`SELECT/INSERT/UPDATE/DELETE`)与 `debezium` 只读;
+每次迁移后还会重跑 `grants.sql` 兜底。**迁移文件里不需要写 GRANT。**
 
-**建表后标准步骤**(以 DB-owner 身份执行):
+约定:
 
-```sql
--- 1. 新表现表授权(立即生效;一次授予 schema 下所有表现表)
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA domains TO qubar_web_app;
-
--- 2. 默认权限:以后本角色新建的表自动授权(新表免再手工 GRANT)
-ALTER DEFAULT PRIVILEGES IN SCHEMA domains
-    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO qubar_web_app;
-```
-
-**约定**:
-
-- 应用角色只给行级 DML(`SELECT/INSERT/UPDATE/DELETE`),**不给** `TRUNCATE/ALTER`——schema 变更一律走 DB-owner(与"运行时角色无 ALTER 权限、禁止 AutoMigrate"一致);
-- UUID 主键无 sequence,无需 `GRANT USAGE ON SEQUENCE`;
-- append-only 表(如 `ai_agent_reply_log`)可只授 `SELECT, INSERT`,不给 `UPDATE/DELETE`;
-- `ALTER DEFAULT PRIVILEGES` 只对**执行该语句的角色**之后新建的表生效;若 DDL 由多个 owner 角色执行,需各自执行一次;
+- 应用角色只给行级 DML,**不给** `TRUNCATE/ALTER`——schema 变更一律走迁移(与"运行时角色无 ALTER 权限、禁止 AutoMigrate"一致);
+- append-only 表(如 `ai_agent_reply_log`)如需收紧,在迁移里显式 `REVOKE UPDATE, DELETE ON domains.<table> FROM qubar_web_app;`;
+- 本机 dev 库若不是以 `qubar_owner` 建表,default privileges 不生效,需自行 `GRANT`;
 - 验证:`\dp domains.<table>` 或应用重试对应接口。
 
 ---

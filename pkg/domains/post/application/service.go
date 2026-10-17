@@ -528,7 +528,7 @@ func (s *postServiceImpl) filterMentionUserIDs(ctx context.Context, actorID uuid
 
 // stripOutOfScopeAgents 从 mention 候选中剔除越圈的圈内机器人：绑定圈子 ≠ postCircleID
 // 的机器人静默移除；普通用户/全局机器人（map 无记录）保留。查询失败 fail-open 跳过剔除
-//（正常用户已被 @选人列表过滤，兜底只防构造请求）。
+// （正常用户已被 @选人列表过滤，兜底只防构造请求）。
 func (s *postServiceImpl) stripOutOfScopeAgents(ctx context.Context, candidates []uuid.UUID, postCircleID uuid.UUID) []uuid.UUID {
 	if len(candidates) == 0 {
 		return candidates
@@ -679,7 +679,7 @@ func (s *postServiceImpl) assembleMentions(ctx context.Context, postID uuid.UUID
 	mentions := make([]MentionVO, 0, len(ids))
 	for _, id := range ids {
 		if b, ok := briefs[id.String()]; ok {
-			mentions = append(mentions, MentionVO{ID: b.ID, Username: b.Username, AvatarURL: b.AvatarURL})
+			mentions = append(mentions, MentionVO(b))
 		}
 	}
 	return mentions

@@ -1,0 +1,111 @@
+# PR 闸口（l0sgAi/qubar#67 P3），三个 job 串行，保证后面的 job 看到的是最终标签：
+#   label：按 .github/labeler.yml 的路径给 PR 打 risk:high（只加不减；只在 opened / synchronize / reopened 时跑，
+#          人手动去掉 risk:high 后不会被立刻加回来）。
+#   gate ：给 PR 头提交写 commit status `risk-gate`（develop 分支规则的必需检查）：
+#          - 没有 risk:high → success；
+#          - 有 risk:high → 需要有写权限的人（非 bot）评论 `/approve <head-sha>`（至少 7 位），
+#            新的 push 会改变 head sha，之前的 /approve 自动失效。
+# pull_request_target / issue_comment 都从默认分支（main）取本文件，PR 无法改它来放行自己；不 checkout、不执行 PR 代码。
+# 因此合并到 develop 后要等发版到 main 才生效。
+# 已知限制：在本机以你的账号运行的 agent 理论上也能以你的身份评论 /approve（.claude/settings.json 已禁止 agent 评论）；
+# Actions 里的 agent 是 claude[bot]，评论不会被计入。
+name: pr-gate
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+  issue_comment:
+    types: [created]
+  workflow_dispatch: # pr-sync 在 update-branch 后用它给新的 head sha 补 risk-gate 状态
+    inputs:
+      pr:
+        description: PR 编号
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+  statuses: write
+
+concurrency:
+  group: pr-gate-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
+  cancel-in-progress: false
+
+jobs:
+  label:
+    if: github.event_name == 'pull_request_target' && contains(fromJSON('["opened","synchronize","reopened"]'), github.event.action)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/labeler@v5
+        with:
+          sync-labels: false
+
+  gate:
+    needs: label
+    if: >-
+      always() && needs.label.result != 'failure' &&
+      (github.event_name != 'issue_comment' ||
+       (github.event.issue.pull_request && startsWith(github.event.comment.body, '/approve')))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v8
+        env:
+          PR_INPUT: ${{ inputs.pr }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const number = context.payload.pull_request?.number ?? context.payload.issue?.number ?? Number(process.env.PR_INPUT);
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: number });
+            const sha = pr.head.sha;
+            const set = (state, description) =>
+              github.rest.repos.createCommitStatus({ owner, repo, sha, state, context: 'risk-gate', description: description.slice(0, 140) });
+
+            const labels = (await github.rest.issues.listLabelsOnIssue({ owner, repo, issue_number: number, per_page: 100 })).data.map(l => l.name);
+            if (!labels.includes('risk:high')) {
+              await set('success', 'not risk:high');
+              return;
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100 });
+            const re = /^\/approve\s+([0-9a-f]{7,40})\s*$/;
+            for (const c of comments.reverse()) {
+              if (c.user?.type !== 'User') continue;
+              const m = re.exec((c.body || '').trim());
+              if (!m || !sha.startsWith(m[1])) continue;
+              const { data: perm } = await github.rest.repos.getCollaboratorPermissionLevel({ owner, repo, username: c.user.login });
+              if (['admin', 'maintain', 'write'].includes(perm.permission)) {
+                await set('success', `risk:high approved by ${c.user.login} at ${sha.slice(0, 7)}`);
+                return;
+              }
+            }
+            await set('pending', `risk:high: maintainer must comment /approve ${sha.slice(0, 7)}`);
+
+  automerge:
+    needs: label
+    if: always() && needs.label.result != 'failure' && github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          info=$(gh pr view "$PR" -R "$REPO" --json state,isDraft,baseRefName,isCrossRepository,labels,autoMergeRequest)
+          eligible=$(jq -r '
+            .state == "OPEN" and (.isDraft | not) and .baseRefName == "develop" and (.isCrossRepository | not)
+            and ([.labels[].name] | index("risk:high") | not) and ([.labels[].name] | index("hold") | not)' <<< "$info")
+          enabled=$(jq -r '.autoMergeRequest != null' <<< "$info")
+          if [ "$eligible" = true ] && [ "$enabled" = false ]; then
+            gh pr merge "$PR" -R "$REPO" --auto --merge
+            echo "auto-merge enabled"
+          elif [ "$eligible" = false ] && [ "$enabled" = true ]; then
+            gh pr merge "$PR" -R "$REPO" --disable-auto
+            echo "auto-merge disabled"
+          else
+            echo "no change (eligible=$eligible enabled=$enabled)"
+          fi

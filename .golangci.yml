@@ -1,0 +1,14 @@
+# golangci-lint v2（make lint；版本在 Makefile 的 GOLANGCI_LINT_VERSION 固定，CI 同一版本）。
+# 全仓库零告警（存量已在 #67 清理），新代码同样必须零告警。
+version: "2"
+
+run:
+  timeout: 5m
+  build-tags: [integration] # 集成测试文件（//go:build integration）同样检查
+
+linters:
+  default: standard # errcheck / govet / ineffassign / staticcheck / unused
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

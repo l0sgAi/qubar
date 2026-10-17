@@ -16,26 +16,26 @@ import (
 // 与旧 model.SysUser 字段、TableName、GORM tag 完全一致，仅迁移归属：
 // 现在它属于 user 领域。表名保持 domains.users 不变，无需 DB 变更。
 type SysUser struct {
-	ID          uuid.UUID  `json:"id" gorm:"type:uuid;primaryKey;column:id"`
-	Username    string     `json:"username" gorm:"column:username;not null"`
-	Email       string     `json:"email" gorm:"column:email;unique;not null"`
-	Phone       string     `json:"phone,omitempty" gorm:"column:phone"`
-	Pwd         string     `json:"-" gorm:"column:pwd"`
-	GoogleID    string     `json:"google_id,omitempty" gorm:"column:google_id"`
-	XID         string     `json:"x_id,omitempty" gorm:"column:x_id"`
-	GithubID    string     `json:"github_id,omitempty" gorm:"column:github_id"`
-	MicrosoftID string     `json:"microsoft_id,omitempty" gorm:"column:microsoft_id"`
-	AvatarURL   string     `json:"avatar_url,omitempty" gorm:"column:avatar_url"`
+	ID          uuid.UUID `json:"id" gorm:"type:uuid;primaryKey;column:id"`
+	Username    string    `json:"username" gorm:"column:username;not null"`
+	Email       string    `json:"email" gorm:"column:email;unique;not null"`
+	Phone       string    `json:"phone,omitempty" gorm:"column:phone"`
+	Pwd         string    `json:"-" gorm:"column:pwd"`
+	GoogleID    string    `json:"google_id,omitempty" gorm:"column:google_id"`
+	XID         string    `json:"x_id,omitempty" gorm:"column:x_id"`
+	GithubID    string    `json:"github_id,omitempty" gorm:"column:github_id"`
+	MicrosoftID string    `json:"microsoft_id,omitempty" gorm:"column:microsoft_id"`
+	AvatarURL   string    `json:"avatar_url,omitempty" gorm:"column:avatar_url"`
 	// AgentCircleID 机器人绑定圈子ID（ai_agent.circle_id 的投影，供 @提及 作用域过滤）。
 	// nil=普通用户或全局机器人；仅 role=2 行有意义。不回显（内部机制）。
 	AgentCircleID *uuid.UUID `json:"-" gorm:"column:agent_circle_id;type:uuid"`
 	Gender        int        `json:"gender" gorm:"column:gender;default:0"`
-	Birthdate   *time.Time `json:"birthdate,omitempty" gorm:"column:birthdate"`
-	Status      int        `json:"status" gorm:"column:status;default:1"`
-	Role        int        `json:"role" gorm:"column:role;default:0"`
-	Deleted     int        `json:"deleted" gorm:"column:deleted;default:0"`
-	CreateTime  time.Time  `json:"create_time" gorm:"column:create_time;autoCreateTime"`
-	UpdateTime  time.Time  `json:"update_time" gorm:"column:update_time;autoUpdateTime"`
+	Birthdate     *time.Time `json:"birthdate,omitempty" gorm:"column:birthdate"`
+	Status        int        `json:"status" gorm:"column:status;default:1"`
+	Role          int        `json:"role" gorm:"column:role;default:0"`
+	Deleted       int        `json:"deleted" gorm:"column:deleted;default:0"`
+	CreateTime    time.Time  `json:"create_time" gorm:"column:create_time;autoCreateTime"`
+	UpdateTime    time.Time  `json:"update_time" gorm:"column:update_time;autoUpdateTime"`
 }
 
 // TableName 指定表名（与旧 model.SysUser 保持一致）。

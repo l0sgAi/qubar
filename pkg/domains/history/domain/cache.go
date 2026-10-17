@@ -29,4 +29,3 @@ type PostHistoryCache interface {
 	// entries 须已按 ViewedAt DESC 排序(由 repo 保证);用 ViewedAt 作 score,回填后 ZSET 序 = DB 序。
 	Backfill(ctx context.Context, userID uuid.UUID, entries []ViewEntry) error
 }
-

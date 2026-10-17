@@ -48,7 +48,7 @@ func GetAzureUser(client *http.Client) (*AzureUser, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user info: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("failed to get user info: status code %d", resp.StatusCode)
@@ -69,7 +69,7 @@ func GetAzureProfilePhoto(client *http.Client) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to fetch profile photo: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, "", nil

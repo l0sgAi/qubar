@@ -5,10 +5,11 @@
 #     deploy/scripts/migrate-pg.sh
 #   （CF Access 就绪后：SSH_TARGET=deploy@ssh.qubar.site，~/.ssh/config 配好 ProxyCommand）
 #
-# 行为：pg_dump(-n domains, 不带 owner/ACL) → 上传 → 以 qubar_owner 身份 pg_restore → 重跑 bootstrap.sql
+# 行为：pg_dump(-n domains, 不带 owner/ACL) → 上传 → 以 qubar_owner 身份 pg_restore → 重跑 grants.sql
 # （补 grants / default privileges / dbz_pub publication）→ 对比行数。
 # 安全阀：生产 domains 已有表时拒绝执行，除非 FORCE=1（会 DROP SCHEMA domains 重建！）。
 # 必须在注册 CDC connectors 之前执行（Debezium 初始快照会读到完整数据）。
+# 之后还要标记迁移基线（migrate force <baseline>），见 deploy/README.md「首次引导」4.1。
 set -euo pipefail
 
 SSH_TARGET="${SSH_TARGET:?设置 SSH_TARGET，如 root@43.107.44.74}"
@@ -39,8 +40,8 @@ log "restore（role=qubar_owner）"
 rsh "docker exec -i qubar-postgres pg_restore -U postgres -d qubar --role=qubar_owner \
        --no-owner --no-privileges --clean --if-exists --exit-on-error < $remote && rm -f $remote"
 
-log "重跑 bootstrap.sql（grants / publication）"
-rsh "sudo sh -c 'docker exec -i qubar-postgres psql -U postgres -d qubar -v ON_ERROR_STOP=1 -q < /opt/qubar/middleware/pg/bootstrap.sql'"
+log "重跑 grants.sql（grants / publication）"
+rsh "sudo sh -c 'docker exec -i qubar-postgres psql -U postgres -d qubar -v ON_ERROR_STOP=1 -q < /opt/qubar/middleware/pg/grants.sql'"
 
 count_sql="select string_agg(t || '=' || n, ' ' order by t) from (select relname t, n_live_tup n from pg_stat_user_tables where schemaname='domains') s"
 rsh "docker exec qubar-postgres psql -U postgres -d qubar -c 'ANALYZE' >/dev/null"
