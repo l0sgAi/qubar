@@ -39,7 +39,9 @@
           { "context": "image", "integration_id": 15368 },
           { "context": "iac", "integration_id": 15368 },
           { "context": "gitleaks", "integration_id": 15368 },
-          { "context": "integration", "integration_id": 15368 }
+          { "context": "integration", "integration_id": 15368 },
+          { "context": "risk-gate", "integration_id": 15368 },
+          { "context": "claude-review", "integration_id": 15368 }
         ]
       }
     }
