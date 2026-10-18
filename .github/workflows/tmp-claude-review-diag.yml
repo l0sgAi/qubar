@@ -32,8 +32,8 @@ jobs:
             echo "RAW rule=[$rule]: $(grep -oE '"result":"[^"]{0,300}|"permission_denials":\[[^]]{0,300}' <<< "$out" | tr '\n' ' ')"
             echo "RESULT rule=[$rule] cmd=[$cmd] denials=$(jq -c '[.permission_denials[] | .tool_input.command]' <<< "$out" 2>/dev/null)"
           }
-          try 'Bash(gh pr view:*)' "gh pr view $PR --json number"
-          try 'Bash(gh pr comment:*)' "gh pr comment $PR --body-file tmp/body.md"
-          try 'Bash(gh pr comment *)' "gh pr comment $PR --body-file tmp/body.md"
-          try 'Bash(gh:*)' "gh pr comment $PR --body-file tmp/body.md"
-          try 'Read,Bash(gh pr comment:*)' "gh pr comment $PR --body-file tmp/body.md"
+          try 'Bash(gh pr comment:*)' "gh pr comment $PR --body 'diag: bash rule test inline'"
+          try 'Bash(gh pr comment:*)' "gh pr comment $PR -F tmp/body.md"
+          try "Bash(gh pr comment $PR --body-file tmp/body.md)" "gh pr comment $PR --body-file tmp/body.md"
+          try 'Bash(gh pr create:*)' "gh pr create --base develop --head tmp/claude-review-diag-20261018 --title x --body-file tmp/body.md --dry-run"
+          try 'Bash(gh pr create:*)' "gh pr create --base develop --head tmp/claude-review-diag-20261018 --title x --body 'one line' --dry-run"
