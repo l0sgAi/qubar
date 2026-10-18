@@ -29,6 +29,7 @@ jobs:
             rule="$1"; cmd="$2"
             out=$("$HOME/.local/bin/claude" -p "Run exactly this shell command once with the Bash tool and nothing else: $cmd" \
               --allowedTools "$rule" --max-turns 3 --output-format json 2>&1)
+            echo "RAW rule=[$rule]: $(grep -oE '"result":"[^"]{0,300}|"permission_denials":\[[^]]{0,300}' <<< "$out" | tr '\n' ' ')"
             echo "RESULT rule=[$rule] cmd=[$cmd] denials=$(jq -c '[.permission_denials[] | .tool_input.command]' <<< "$out" 2>/dev/null)"
           }
           try 'Bash(gh pr view:*)' "gh pr view $PR --json number"
