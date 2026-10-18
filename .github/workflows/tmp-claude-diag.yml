@@ -1,0 +1,28 @@
+# 临时诊断（不合并）：用同一个 CLAUDE_CODE_OAUTH_TOKEN 直接跑 Claude CLI，只打印结果文本，定位 claude-review 失败原因。
+name: tmp-claude-diag
+on:
+  pull_request:
+    branches: [develop]
+permissions:
+  contents: read
+jobs:
+  diag:
+    if: github.head_ref == 'tmp/claude-auth-diag-20261018'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install Claude Code
+        run: curl -fsSL https://claude.ai/install.sh | bash
+      - name: Token present
+        env:
+          T: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          echo "length=${#T} prefix_ok=$([[ "$T" == sk-ant-oat* ]] && echo yes || echo no)"
+      - name: One-shot call
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          set +e
+          out=$("$HOME/.local/bin/claude" -p "Reply with the single word OK." --output-format json --max-turns 1 2>&1)
+          echo "exit=$?"
+          echo "$out" | jq -c '{subtype, is_error, result, model: (.modelUsage | keys)}' 2>/dev/null || echo "$out" | tail -5
