@@ -20,7 +20,7 @@ func NewPostSearcher() application.PostSearcher {
 
 // Search 搜索帖子（circleID 为 uuid.Nil 时搜索所有圈子）。
 func (s *postSearcherES) Search(ctx context.Context, keyword string, circleID uuid.UUID, size int, searchAfter []interface{}) (*application.RawPostSearchResult, error) {
-	result, err := elasticsearch.SearchPosts(keyword, circleID, size, searchAfter)
+	result, err := elasticsearch.SearchPosts(ctx, keyword, circleID, size, searchAfter)
 	if err != nil {
 		return nil, err
 	}
@@ -29,7 +29,7 @@ func (s *postSearcherES) Search(ctx context.Context, keyword string, circleID uu
 
 // SearchMy 搜索指定用户自己的帖子（keyword 为空时返回该用户全部帖子）。
 func (s *postSearcherES) SearchMy(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*application.RawPostSearchResult, error) {
-	result, err := elasticsearch.SearchMyPosts(userID, keyword, size, searchAfter)
+	result, err := elasticsearch.SearchMyPosts(ctx, userID, keyword, size, searchAfter)
 	if err != nil {
 		return nil, err
 	}
@@ -38,7 +38,7 @@ func (s *postSearcherES) SearchMy(ctx context.Context, userID uuid.UUID, keyword
 
 // SearchByUser 搜索指定用户已发布的帖子（查看「他人」发帖用，强制 status=1）。
 func (s *postSearcherES) SearchByUser(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*application.RawPostSearchResult, error) {
-	result, err := elasticsearch.SearchUserPosts(userID, keyword, size, searchAfter)
+	result, err := elasticsearch.SearchUserPosts(ctx, userID, keyword, size, searchAfter)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +51,7 @@ func (s *postSearcherES) SearchByIDs(ctx context.Context, postIDs []uuid.UUID, s
 	for _, id := range postIDs {
 		idStrs = append(idStrs, id.String())
 	}
-	result, err := elasticsearch.SearchPostsByIDs(idStrs, size)
+	result, err := elasticsearch.SearchPostsByIDs(ctx, idStrs, size)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +65,7 @@ func (s *postSearcherES) SearchByIDsAndKeyword(ctx context.Context, postIDs []uu
 	for _, id := range postIDs {
 		idStrs = append(idStrs, id.String())
 	}
-	result, err := elasticsearch.SearchPostsByIDsAndKeyword(idStrs, keyword, size, offset)
+	result, err := elasticsearch.SearchPostsByIDsAndKeyword(ctx, idStrs, keyword, size, offset)
 	if err != nil {
 		return nil, err
 	}

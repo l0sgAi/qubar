@@ -2,6 +2,7 @@ package elasticsearch
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -49,7 +50,7 @@ type PostListResponse struct {
 // size: 每页数量，默认 20
 // searchAfter: 上一页返回的 search_after 值，用于获取下一页
 // 返回：帖子列表响应（包含帖子列表、总数、分页信息）
-func SearchPosts(keyword string, circleID uuid.UUID, size int, searchAfter []interface{}) (*PostListResponse, error) {
+func SearchPosts(ctx context.Context, keyword string, circleID uuid.UUID, size int, searchAfter []interface{}) (*PostListResponse, error) {
 	// 默认每页 20 条
 	if size <= 0 || size > 100 {
 		size = 20
@@ -154,7 +155,7 @@ func SearchPosts(keyword string, circleID uuid.UUID, size int, searchAfter []int
 	postIndex := GetPostIndexName()
 
 	res, err := Client.Search(
-		Client.Search.WithContext(nil),
+		Client.Search.WithContext(ctx),
 		Client.Search.WithIndex(postIndex),
 		Client.Search.WithBody(bytes.NewReader(queryJSON)),
 		Client.Search.WithTrackTotalHits(true),
@@ -162,7 +163,7 @@ func SearchPosts(keyword string, circleID uuid.UUID, size int, searchAfter []int
 	if err != nil {
 		return nil, fmt.Errorf("failed to search: %w", err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.IsError() {
 		return nil, fmt.Errorf("elasticsearch search error: %s", res.String())
@@ -175,7 +176,7 @@ func SearchPosts(keyword string, circleID uuid.UUID, size int, searchAfter []int
 //
 // postIDs: 帖子ID列表(必传,核心过滤);用 terms 查询,过滤 deleted=0 + status=1。
 // size: 上限(<= len(postIDs))。顺序不保证(调用方按浏览时间重排),失效帖静默过滤。
-func SearchPostsByIDs(postIDs []string, size int) (*PostListResponse, error) {
+func SearchPostsByIDs(ctx context.Context, postIDs []string, size int) (*PostListResponse, error) {
 	if len(postIDs) == 0 {
 		return &PostListResponse{}, nil
 	}
@@ -205,7 +206,7 @@ func SearchPostsByIDs(postIDs []string, size int) (*PostListResponse, error) {
 	postIndex := GetPostIndexName()
 
 	res, err := Client.Search(
-		Client.Search.WithContext(nil),
+		Client.Search.WithContext(ctx),
 		Client.Search.WithIndex(postIndex),
 		Client.Search.WithBody(bytes.NewReader(queryJSON)),
 		Client.Search.WithTrackTotalHits(true),
@@ -213,7 +214,7 @@ func SearchPostsByIDs(postIDs []string, size int) (*PostListResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to search: %w", err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.IsError() {
 		return nil, fmt.Errorf("elasticsearch search error: %s", res.String())
@@ -230,7 +231,7 @@ func SearchPostsByIDs(postIDs []string, size int) (*PostListResponse, error) {
 // 失效帖(deleted/status)静默过滤。
 //
 // postIDs/keyword 任一为空 → 空结果(调用方已保证非空,此处防御)。
-func SearchPostsByIDsAndKeyword(postIDs []string, keyword string, size, offset int) (*PostListResponse, error) {
+func SearchPostsByIDsAndKeyword(ctx context.Context, postIDs []string, keyword string, size, offset int) (*PostListResponse, error) {
 	if len(postIDs) == 0 || keyword == "" {
 		return &PostListResponse{}, nil
 	}
@@ -271,7 +272,7 @@ func SearchPostsByIDsAndKeyword(postIDs []string, keyword string, size, offset i
 	postIndex := GetPostIndexName()
 
 	res, err := Client.Search(
-		Client.Search.WithContext(nil),
+		Client.Search.WithContext(ctx),
 		Client.Search.WithIndex(postIndex),
 		Client.Search.WithBody(bytes.NewReader(queryJSON)),
 		Client.Search.WithTrackTotalHits(true),
@@ -279,7 +280,7 @@ func SearchPostsByIDsAndKeyword(postIDs []string, keyword string, size, offset i
 	if err != nil {
 		return nil, fmt.Errorf("failed to search: %w", err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.IsError() {
 		return nil, fmt.Errorf("elasticsearch search error: %s", res.String())
@@ -303,7 +304,7 @@ func SearchPostsByIDsAndKeyword(postIDs []string, keyword string, size, offset i
 // 与 SearchPosts 的差异：
 //   - 过滤条件用 user_id（而非 circle_id）；
 //   - 关键字 multi_match 增加 fuzziness=AUTO，容忍拼写错误。
-func searchUserPostsInternal(userID uuid.UUID, keyword string, publishedOnly bool, size int, searchAfter []interface{}) (*PostListResponse, error) {
+func searchUserPostsInternal(ctx context.Context, userID uuid.UUID, keyword string, publishedOnly bool, size int, searchAfter []interface{}) (*PostListResponse, error) {
 	// 默认每页 20 条
 	if size <= 0 || size > 100 {
 		size = 20
@@ -406,7 +407,7 @@ func searchUserPostsInternal(userID uuid.UUID, keyword string, publishedOnly boo
 	postIndex := GetPostIndexName()
 
 	res, err := Client.Search(
-		Client.Search.WithContext(nil),
+		Client.Search.WithContext(ctx),
 		Client.Search.WithIndex(postIndex),
 		Client.Search.WithBody(bytes.NewReader(queryJSON)),
 		Client.Search.WithTrackTotalHits(true),
@@ -414,7 +415,7 @@ func searchUserPostsInternal(userID uuid.UUID, keyword string, publishedOnly boo
 	if err != nil {
 		return nil, fmt.Errorf("failed to search: %w", err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.IsError() {
 		return nil, fmt.Errorf("elasticsearch search error: %s", res.String())
@@ -431,8 +432,8 @@ func searchUserPostsInternal(userID uuid.UUID, keyword string, publishedOnly boo
 // 返回：帖子列表响应（包含帖子列表、总数、分页信息）
 //
 // 不过滤 status：作者可见自己全部状态（草稿/审核/已发布/拒绝/封禁），仅排除已删除。
-func SearchMyPosts(userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostListResponse, error) {
-	return searchUserPostsInternal(userID, keyword, false, size, searchAfter)
+func SearchMyPosts(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostListResponse, error) {
+	return searchUserPostsInternal(ctx, userID, keyword, false, size, searchAfter)
 }
 
 // SearchUserPosts 搜索指定用户已发布的帖子（查看「他人」发帖记录用）。
@@ -443,8 +444,8 @@ func SearchMyPosts(userID uuid.UUID, keyword string, size int, searchAfter []int
 // 返回：帖子列表响应（包含帖子列表、总数、分页信息）
 //
 // 与 SearchMyPosts 的差异：强制 status=1（仅已发布），他人不可见对方草稿/审核/拒绝/封禁帖。
-func SearchUserPosts(userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostListResponse, error) {
-	return searchUserPostsInternal(userID, keyword, true, size, searchAfter)
+func SearchUserPosts(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostListResponse, error) {
+	return searchUserPostsInternal(ctx, userID, keyword, true, size, searchAfter)
 }
 
 // parsePostSearchResponse 解析帖子搜索响应
@@ -578,7 +579,7 @@ type ActiveCircleAggResult struct {
 //
 // 前置条件：post 索引 circle_id 须为 keyword、create_time 须为 date
 // （见 docs/active-circles-design.md §4.2）。
-func AggregateActiveCircles(size, offset int) (*ActiveCircleAggResult, error) {
+func AggregateActiveCircles(ctx context.Context, size, offset int) (*ActiveCircleAggResult, error) {
 	if size <= 0 || size > 100 {
 		size = 20
 	}
@@ -631,14 +632,14 @@ func AggregateActiveCircles(size, offset int) (*ActiveCircleAggResult, error) {
 
 	postIndex := GetPostIndexName()
 	res, err := Client.Search(
-		Client.Search.WithContext(nil),
+		Client.Search.WithContext(ctx),
 		Client.Search.WithIndex(postIndex),
 		Client.Search.WithBody(bytes.NewReader(queryJSON)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to aggregate active circles: %w", err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.IsError() {
 		return nil, fmt.Errorf("elasticsearch aggregate error: %s", res.String())
@@ -703,7 +704,7 @@ func parseActiveCirclesResponse(res *esapi.Response) (*ActiveCircleAggResult, er
 // circleIDs 为 nil/空 → 全局检索；非空 → terms 过滤（供 C1 兴趣圈子 / C3 行为圈子路）。
 // sort: "hot"=rank_score 时间衰减（hot/(age_h+2)^0.8），"latest"=create_time desc。
 // 供 recommend 域 C1/C2/C3/C4 召回路；返回 PostListResponse，调用方提取 PostDoc.ID 做纯 ID 合并。
-func SearchHomeFeed(sort string, circleIDs []uuid.UUID, size int, searchAfter []interface{}) (*PostListResponse, error) {
+func SearchHomeFeed(ctx context.Context, sort string, circleIDs []uuid.UUID, size int, searchAfter []interface{}) (*PostListResponse, error) {
 	if size <= 0 || size > 100 {
 		size = 20
 	}
@@ -772,7 +773,7 @@ func SearchHomeFeed(sort string, circleIDs []uuid.UUID, size int, searchAfter []
 	postIndex := GetPostIndexName()
 
 	res, err := Client.Search(
-		Client.Search.WithContext(nil),
+		Client.Search.WithContext(ctx),
 		Client.Search.WithIndex(postIndex),
 		Client.Search.WithBody(bytes.NewReader(queryJSON)),
 		Client.Search.WithTrackTotalHits(true),
@@ -780,7 +781,7 @@ func SearchHomeFeed(sort string, circleIDs []uuid.UUID, size int, searchAfter []
 	if err != nil {
 		return nil, fmt.Errorf("failed to search: %w", err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.IsError() {
 		return nil, fmt.Errorf("elasticsearch search error: %s", res.String())
@@ -794,7 +795,7 @@ func SearchHomeFeed(sort string, circleIDs []uuid.UUID, size int, searchAfter []
 // sortType: 排序类型 1=近期热点 2=最新 3=精华
 // size: 每页数量，默认 20
 // searchAfter: 上一页返回的 search_after 值，用于获取下一页
-func SearchCirclePosts(circleID uuid.UUID, sortType int, size int, searchAfter []interface{}) (*PostListResponse, error) {
+func SearchCirclePosts(ctx context.Context, circleID uuid.UUID, sortType int, size int, searchAfter []interface{}) (*PostListResponse, error) {
 	if size <= 0 || size > 100 {
 		size = 20
 	}
@@ -864,7 +865,7 @@ func SearchCirclePosts(circleID uuid.UUID, sortType int, size int, searchAfter [
 	postIndex := GetPostIndexName()
 
 	res, err := Client.Search(
-		Client.Search.WithContext(nil),
+		Client.Search.WithContext(ctx),
 		Client.Search.WithIndex(postIndex),
 		Client.Search.WithBody(bytes.NewReader(queryJSON)),
 		Client.Search.WithTrackTotalHits(true),
@@ -872,7 +873,7 @@ func SearchCirclePosts(circleID uuid.UUID, sortType int, size int, searchAfter [
 	if err != nil {
 		return nil, fmt.Errorf("failed to search: %w", err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.IsError() {
 		return nil, fmt.Errorf("elasticsearch search error: %s", res.String())

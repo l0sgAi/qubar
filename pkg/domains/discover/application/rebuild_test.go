@@ -91,12 +91,12 @@ func TestDefaultInt(t *testing.T) {
 // normalizeSection 非法值回落 all；合法值原样返回。
 func TestNormalizeSection(t *testing.T) {
 	cases := map[string]string{
-		"":            domain.SectionAll,
-		"all":         domain.SectionAll,
-		"posts":       domain.SectionPosts,
-		"circles":     domain.SectionCircles,
-		"invalid":     domain.SectionAll,
-		"POSTS":       domain.SectionAll, // 大小写敏感
+		"":        domain.SectionAll,
+		"all":     domain.SectionAll,
+		"posts":   domain.SectionPosts,
+		"circles": domain.SectionCircles,
+		"invalid": domain.SectionAll,
+		"POSTS":   domain.SectionAll, // 大小写敏感
 	}
 	for in, want := range cases {
 		if got := normalizeSection(in); got != want {

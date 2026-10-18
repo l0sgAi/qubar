@@ -20,7 +20,7 @@ pkg/
     appctx/                       # 框架无关的请求上下文接口（+ hertz 实现）
     routing/                      # RouterGroup 抽象
     httputil/                     # 响应助手
-  composition/                    # 装配根: server.go / facade_bridges.go / deps.go / auth.go / hertzadapter/
+  composition/                    # 装配根: server.go（顺序清单）/ wire_<domain>.go / <domain>_bridges.go / deps.go / auth.go / hertzadapter/
   server/                         # 基础设施（DB/Redis/ES/Redpanda/S3 全局客户端）+ router + auth
   logger/ conf/ util/ enums/      # 横切
 ```
@@ -189,7 +189,7 @@ func (r *circleRepoPG) GetByID(ctx context.Context, circleID uuid.UUID) (*domain
 
 ## 五、跨域 Facade 模式（最重要的一条架构规则）
 
-文档来源：`pkg/composition/facade_bridges.go:3-12`。
+文档来源：`pkg/composition/doc.go`（包注释）。
 
 三步：
 1. **生产者域**在 `application/` 暴露 Facade 接口（如 `user.application.UserFacade`），并提供构造器
@@ -197,7 +197,10 @@ func (r *circleRepoPG) GetByID(ctx context.Context, circleID uuid.UUID) (*domain
 2. **消费者域**在自己的 `application/` 重新声明同形接口（同名 DTO + 同形方法）。
 3. **composition** 写**桥接适配器 struct**，包生产者 Facade，逐字段拷贝 DTO（两个 `UserBrief` 结构同形但名义不同）。
 
-桥接器示例（`facade_bridges.go:31-45` `circleUserFacade`）：
+桥接器按**被注入方**归档到 `pkg/composition/<domain>_bridges.go`（注入 post 的放 `post_bridges.go`；
+recommend/trending/discover 共用的 `postInteractionChecker` 在 `feed_interaction_bridge.go`）。
+
+桥接器示例（`circle_bridges.go` `circleUserFacade`）：
 ```go
 type circleUserFacade struct { delegate userapp.UserFacade }
 
@@ -214,7 +217,7 @@ func (f *circleUserFacade) GetBriefs(ctx context.Context, userIDs []string) (map
 
 桥接器既可包 Facade，也可直接包 repo/service（如 `circleMemberCheckerForPost` 包 `circledomain.MemberRepository`）。
 
-### setter 注入顺序（`pkg/composition/server.go:65-97`）
+### setter 注入顺序（`pkg/composition/server.go` `RegisterDomainRoutes`）
 
 构造完所有 service 后，统一调 setter：
 ```go
@@ -225,7 +228,7 @@ postSvc.SetCircleFacade(&postCircleFacade{delegate: circleFacade})
 postSvc.SetMemberChecker(&circleMemberCheckerForPost{memberRepo: memberRepo})
 // ...
 ```
-注入遗漏不会 panic，只会请求时空数据/校验失败，启动日志打一条便于排查（`server.go:95-97`）。
+注入遗漏不会 panic，只会请求时空数据/校验失败，启动日志打一条便于排查（`cross-domain facades injected: ...`）。
 
 ## 六、interfaces/http 层
 
@@ -285,17 +288,29 @@ func NewDeps() *Deps { return &Deps{DB: &pgsql.DBHolder{}} }
 ```
 `DBHolder.Get()` 返回全局 `pgsql.DB`（过渡期 DI 包装，`deps.go:18-29` 注释）。
 
-### 7.2 RegisterDomainRoutes 流程（`pkg/composition/server.go:47-113`）
+### 7.2 文件布局（按领域拆分，减少并行开发冲突）
+
+| 文件 | 内容 |
+|---|---|
+| `server.go` | 只有 `RegisterDomainRoutes`：构造顺序 + 跨域 setter 注入 + 路由注册顺序三张清单 |
+| `wire_<domain>.go` | 该领域的 `new<Domain>Service` 构造器 + `register<Domain>` 路由注册（及其 import 别名） |
+| `<domain>_bridges.go` | 注入该领域的跨域桥接器（按被注入方归档）+ 编译期 guard |
+| `doc.go` | 包注释：布局约定 + Facade 桥接模式说明 |
+| `deps.go` / `auth.go` / `notice_stream.go` / `user_session_store_bridge.go` | Deps、RequireLogin/OptionalLogin、SSE 裸 handler、auth→user 会话存储桥 |
+
+加领域 = 新建 `wire_foo.go` + `foo_bridges.go`，`server.go` 只按依赖顺序插几行调用（见 `add-domain.md` §6）。
+
+### 7.3 RegisterDomainRoutes 流程（`pkg/composition/server.go`）
 
 1. `deps := NewDeps()`；`authCheck := RequireLogin`。
-2. 逐域构造 service（`new<Service>(deps)` 助手：建 repo/cache/searcher/publisher + 调 `New<Service>Service`）。
-   `newCircleService` 额外返回 repo（post 域桥接器要用，`server.go:209`）。
+2. 逐域构造 service（`new<Service>(deps)` 助手，在 `wire_<domain>.go`：建 repo/cache/searcher/publisher + 调 `New<Service>Service`）。
+   `newCircleService` 额外返回 repo（post 域桥接器要用）。
 3. 建 Facade：`userFacade := userapp.NewUserFacade(userSvc)`、`circleFacade := circleapp.NewCircleFacade(circleRepo)`。
-4. **跨域 setter 注入**（`server.go:65-97`）。
-5. `recommendSvc` 最后构造（依赖 post+circle，`server.go:100,181`）。
-6. 逐域 `register<Domain>(root, svc, authCheck)` 注册路由。
+4. **跨域 setter 注入**（集中在 `RegisterDomainRoutes`，不散落到 wire 文件；`newNoticeStreamHub` 在 `wire_notice.go`）。
+5. 只读编排域 recommend / trending / discover 与 aiagent 在注入之后构造（依赖 post+circle 等）。
+6. 逐域 `register<Domain>(root, svc, authCheck)` 注册路由；最后起 Discover pool syncer。
 
-### 7.3 new<Service> 助手范式（`server.go:224-232` newPostService）
+### 7.4 new<Service> 助手范式（`wire_post.go` newPostService）
 ```go
 func newPostService(deps *Deps) postapp.PostService {
 	repo := postinfra.NewPostRepository(deps.DB.Get())
@@ -304,7 +319,7 @@ func newPostService(deps *Deps) postapp.PostService {
 	return postapp.NewPostService(repo, statsCache, likeCache, collectCache, searcher, publisher)
 }
 ```
-Redis/ES infra 构造器**无参**（读全局客户端）。category/storage/auth 因无跨域依赖，直接在 `register<Domain>` 内联装配。
+Redis/ES infra 构造器**无参**（读全局客户端）。category/storage/auth 因无跨域依赖，直接在 `register<Domain>`（`wire_category.go` 等）内联装配。
 
 ## 八、共享内核（`pkg/shared/`）—— 保持克制
 

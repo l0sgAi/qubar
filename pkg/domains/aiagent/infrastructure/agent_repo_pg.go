@@ -54,7 +54,7 @@ func (r *agentRepoPG) ExistsByName(ctx context.Context, name string, excludeID u
 }
 
 // ExistsByNameInScope 检查 (作用域, name) 是否被占用。circleID=uuid.Nil 查全局桶
-//（circle_id IS NULL），否则查该圈桶，与唯一索引 idx_ai_agent_name 的分桶口径一致。
+// （circle_id IS NULL），否则查该圈桶，与唯一索引 idx_ai_agent_name 的分桶口径一致。
 func (r *agentRepoPG) ExistsByNameInScope(ctx context.Context, circleID uuid.UUID, name string, excludeID uuid.UUID) (bool, error) {
 	var a domain.AiAgent
 	query := r.db.WithContext(ctx).Where("name = ? AND deleted = ?", name, 0)

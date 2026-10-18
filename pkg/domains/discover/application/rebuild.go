@@ -47,15 +47,15 @@ func (s *discoverServiceImpl) RebuildPool(ctx context.Context, userID *uuid.UUID
 	interacted := toUUIDSet(liked, collected, viewed)
 
 	// 2. 圈子采样（ES 排除已加圈子）。
-	circleIDs := sampleCircleIDs(joinedCircles, poolSize)
+	circleIDs := sampleCircleIDs(ctx, joinedCircles, poolSize)
 
 	// 3. 帖子采样（ES 排除已加圈子，多取以补内存剔除）。
-	rawPostIDs := samplePostIDs(joinedCircles, poolSize*2)
+	rawPostIDs := samplePostIDs(ctx, joinedCircles, poolSize*2)
 	postIDs := filterOutUUIDs(rawPostIDs, interacted)
 
 	// 4. 兜底：剔除后过少 → 不排除再采（保证非空）。
 	if len(postIDs) < minPoolPosts {
-		postIDs = samplePostIDs(joinedCircles, poolSize)
+		postIDs = samplePostIDs(ctx, joinedCircles, poolSize)
 	}
 
 	// 5. 重建 LIST 池。token 以 posts 池为准（读路径 posts 分区先取 token）。
@@ -75,8 +75,8 @@ func (s *discoverServiceImpl) RebuildPool(ctx context.Context, userID *uuid.UUID
 // rebuildAnon 重建匿名共享池（纯随机，无排除）。
 func (s *discoverServiceImpl) rebuildAnon(ctx context.Context, poolSize int, ttl time.Duration) (string, error) {
 	userKey := domain.AnonUserKey
-	circleIDs := sampleCircleIDs(nil, poolSize)
-	postIDs := samplePostIDs(nil, poolSize)
+	circleIDs := sampleCircleIDs(ctx, nil, poolSize)
+	postIDs := samplePostIDs(ctx, nil, poolSize)
 
 	token, err := s.pool.Rebuild(ctx, domain.SectionCircles, userKey, circleIDs, ttl)
 	if err != nil {
@@ -89,8 +89,8 @@ func (s *discoverServiceImpl) rebuildAnon(ctx context.Context, poolSize int, ttl
 }
 
 // sampleCircleIDs 把 ES 返回的 string ID 列表转成 []uuid.UUID（跳过非法）。
-func sampleCircleIDs(excludeCircleIDs []uuid.UUID, size int) []uuid.UUID {
-	raw, err := elasticsearch.SampleDiscoverCircles(excludeCircleIDs, size)
+func sampleCircleIDs(ctx context.Context, excludeCircleIDs []uuid.UUID, size int) []uuid.UUID {
+	raw, err := elasticsearch.SampleDiscoverCircles(ctx, excludeCircleIDs, size)
 	if err != nil {
 		return nil
 	}
@@ -98,8 +98,8 @@ func sampleCircleIDs(excludeCircleIDs []uuid.UUID, size int) []uuid.UUID {
 }
 
 // samplePostIDs 同上，帖子。
-func samplePostIDs(excludeCircleIDs []uuid.UUID, size int) []uuid.UUID {
-	raw, err := elasticsearch.SampleDiscoverPosts(excludeCircleIDs, size)
+func samplePostIDs(ctx context.Context, excludeCircleIDs []uuid.UUID, size int) []uuid.UUID {
+	raw, err := elasticsearch.SampleDiscoverPosts(ctx, excludeCircleIDs, size)
 	if err != nil {
 		return nil
 	}

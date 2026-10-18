@@ -366,7 +366,7 @@ func retryBotUserProfileSync(updater BotUserProfileUpdater, userID uuid.UUID, us
 }
 
 // DeleteAgent 软删（deleted=1 且 status=0）。软删生效后清机器人账号的圈子绑定
-//（清列失败不回滚，仅记日志：软删已优先生效，最坏后果=已删机器人仍在原圈@列表
+// （清列失败不回滚，仅记日志：软删已优先生效，最坏后果=已删机器人仍在原圈@列表
 // 短暂可见，与 CDC 延迟窗口同级，见设计文档风险表）。
 func (s *agentServiceImpl) DeleteAgent(ctx context.Context, adminID, agentID uuid.UUID) error {
 	if err := s.ensureAdmin(ctx, adminID); err != nil {
@@ -385,7 +385,7 @@ func (s *agentServiceImpl) DeleteAgent(ctx context.Context, adminID, agentID uui
 
 // clearBotCircleScope 机器人软删后清 users.agent_circle_id 的统一入口（全局/圈内共用）。
 // fail-open：端口未注入或清列失败均只记日志不报错——软删已生效，列未清可幂等补偿
-//（重试/人工清），不阻断删除主流程。
+// （重试/人工清），不阻断删除主流程。
 func clearBotCircleScope(ctx context.Context, cleaner BotUserScopeCleaner, linkedUserID uuid.UUID) {
 	if cleaner == nil {
 		logger.Log.Warn("BotUserScopeCleaner not injected, skip clearing agent_circle_id: user=" + linkedUserID.String())
@@ -559,7 +559,7 @@ func validateAndBuildAgent(ctx context.Context, input CreateAgentInput) (*domain
 // buildAgentUpdateFields 校验部分更新入参并组装字段 map（全局/圈内更新共用）。
 // scope 为名称唯一预检的作用域：uuid.Nil=全局桶（circle_id IS NULL），否则圈内桶，
 // 与 idx_ai_agent_name 的分桶口径一致。返回空 map 表示无字段要更新
-//（调用方决定是否报 errNoFieldsToUpdate）。
+// （调用方决定是否报 errNoFieldsToUpdate）。
 func buildAgentUpdateFields(ctx context.Context, repo domain.AgentRepository, agentID uuid.UUID, input UpdateAgentInput, scope uuid.UUID) (map[string]interface{}, error) {
 	fields := make(map[string]interface{})
 

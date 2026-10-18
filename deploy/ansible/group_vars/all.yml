@@ -9,17 +9,20 @@ deploy_ssh_public_keys:
   - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBZcwSKQLCbDI08Am/m2WdOIK3Ryie1Y+/fb7uXzCk45 qubar-github-actions-deploy
   - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCuvADuw/1+N61ErDUPbz4bKCXHFeJRYQ4Vz1mDh/UPFj+6RnoJg4d9mNEU16p2eZOjm8+0OxQ0hGtFPaKKZ4wp8XVofEsbNy6uq6THEg74fCKp2l8DT97WJvC+Ez4W4hOjgUD6h0PMyOHreeuZ43C8aIA4CV4R0z401Rt+2RznGde11EfRigbESN0WrsgVRzsgP30ZOC4SRD9JELDwhlD2aIr3L9JgcQtjymRZD4SNPx0rf07gRlmTAoNoQMi9/UhDc6RIountu2bhKejMocVhz72RvJUv/CwYlgGAYv2eDD3BcIlDbFxIWuB7orTmcW/GuWUwZMC09yjyEFnjb3xj losgai-aliyun-pem
 
-# root 直登：CF Access SSH 验证通过后改为 "no"
-ssh_permit_root_login: "no"
-# sshd 只监听 127.0.0.1（只能经 cloudflared 进入，公网 22 彻底关闭）。
-# ⚠️ 打开前先确认 CF Access SSH 可用；cloudflared 故障时只能走阿里云控制台 VNC（Workbench）救援。
-ssh_listen_local_only: true
+# 公网 SSH 必须保持开放：服务器拥有者用 root + 阿里云密钥对（skp-v1sdthv1b4fzapd60uvl）从公网 22 登录，
+# 22 端口的 IP 白名单由拥有者在阿里云安全组管理（IaC 不管安全组）。Cloudflare Access SSH（ssh.qubar.site）
+# 与之并存，继续作为 CI / 运维通道。不要改成 "no" / true，否则会把拥有者锁在外面（见 #60 之后的回退）。
+ssh_permit_root_login: prohibit-password # root 只允许密钥登录；密码登录由 base 角色全局关闭
+ssh_listen_local_only: false             # sshd 监听 0.0.0.0 / [::]，公网可达性由安全组白名单决定
 
 swap_size_mb: 4096
 
 # 中间件自建镜像（服务器上构建，tag = 版本 + Dockerfile 内容哈希）
 es_version: "8.15.3"
 connect_version: "7.7.1"
+
+# schema 迁移工具镜像（db-migrate.sh 使用；与 .github/workflows/ci.yml db job 的 MIGRATE_IMAGE 保持一致）
+migrate_image: migrate/migrate:v4.20.1
 
 # CDC：Debezium source 表清单（= dbz_pub publication 表清单）与 ES sink 字段白名单
 cdc_tables: [users, category, circle, circle_member, post, comment, comment_like, post_like]

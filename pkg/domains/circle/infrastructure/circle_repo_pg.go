@@ -261,9 +261,10 @@ func (r *memberRepoPG) JoinCircle(ctx context.Context, circleID, userID uuid.UUI
 	}
 
 	var status int16 = domain.MemberStatusNormal
-	if joinType == domain.CircleJoinTypeApproval {
+	switch joinType {
+	case domain.CircleJoinTypeApproval:
 		status = domain.MemberStatusPending
-	} else if joinType == domain.CircleJoinTypePrivate {
+	case domain.CircleJoinTypePrivate:
 		return nil, fmt.Errorf("this circle is private and requires invitation")
 	}
 

@@ -151,9 +151,11 @@ qubar/
 │   ├── config.example.yaml # Config template; copy to config.yaml (git-ignored, fallback when Nacos is unavailable)
 │   └── bootstrap.yaml    # Nacos bootstrap config (address, namespace, group)
 │
+├── migrations/           # Database migrations (golang-migrate, source of truth for the schema)
+│
 ├── docs/
-│   ├── pgsql-ddl/        # Database schemas (UUIDv7 PK version, split by domain)
-│   ├── db.md             # DDL entry point (redirects to pgsql-ddl/)
+│   ├── pgsql-ddl/        # Column semantics, split by domain (schema lives in migrations/)
+│   ├── db.md             # DDL entry point (points to migrations/ and pgsql-ddl/)
 │   ├── api/              # API docs
 │   └── design/           # Design docs
 │
@@ -173,6 +175,19 @@ qubar/
 ```
 
 ## 🚀 Quick Start
+
+### Fastest: Docker dev stack (recommended, also what agents use)
+
+Only Go and Docker are required:
+
+```bash
+make dev-up    # start PG18 / Redis / ES(IK) / Redpanda (deploy/compose/dev, ports in the 2xxxx range) and run all migrations
+make dev-run   # run the app with configs/config.dev.yaml, http://localhost:8888/healthz
+make verify    # before committing: fmt + vet + lint + unit tests + migration checks and replay (same as CI)
+make test-integration  # integration tests against the dev stack (PG / Redis / Redpanda); required when touching infrastructure/ or SQL
+```
+
+The dev stack has no CDC (connect / Debezium), so business indices in ES are not synced; S3 / OAuth / email use placeholder config and those endpoints won't work (override with `QUBAR_*` env vars when needed). Integration tests are `//go:build integration` files next to the code they cover, with shared fixtures in `pkg/shared/testkit` (isolated random IDs, Redis DB 15, per-run Redpanda topics); they skip when the stack is unreachable. The sections below cover running against locally installed services.
 
 ### Requirements
 
@@ -197,14 +212,23 @@ go mod download
 
 ### 3. Set Up the Database
 
-Create the database and schema:
+The schema is managed by [migrations/](migrations/) (golang-migrate, forward-only); see [migrations/README.md](migrations/README.md) for the rules. [docs/pgsql-ddl/](docs/pgsql-ddl/) only documents column semantics (and seed data). Running migrations locally requires `brew install golang-migrate` (Squawk for `make migrate-check` is downloaded into `bin/` automatically).
 
-```sql
-CREATE DATABASE qubar;
-CREATE SCHEMA IF NOT EXISTS domains;
+**Fresh local database**: run `.github/ci/pg-init.sql` as a superuser (creates the `qubar_owner` / `qubar_web_app` / `debezium` roles, the `domains` schema and default privileges; all passwords are `ci`, local use only), then apply all migrations as `qubar_owner`:
+
+```bash
+createdb qubar
+psql -d qubar -f .github/ci/pg-init.sql
+make migrate-up        # add PGPASSWORD=ci if pg_hba is not trust
 ```
 
-For table schemas and seed data, see [docs/pgsql-ddl/](docs/pgsql-ddl/) (split by domain; entry point: [README.md](docs/pgsql-ddl/README.md))
+**Existing local database** (tables created by hand from `docs/pgsql-ddl/`): mark the baseline instead of running it; tables must be owned by `qubar_owner`:
+
+```bash
+make migrate-force v=20261015000000
+```
+
+Schema changes: `make migrate-new name=xxx` → edit the SQL → `make migrate-up` → `make migrate-check && make migrate-test` (replays all migrations on a throwaway PG18 container, same as CI; needs only Docker).
 
 ### 4. Configure the App
 
@@ -459,7 +483,7 @@ satoken: your-token-here
 
 1. Create a domain directory under `pkg/domains/` following the `application/domain/infrastructure/interfaces` layering
 2. Register dependency wiring and routes in `pkg/composition/`
-3. For cross-domain calls, add a bridge implementation in `composition/facade_bridges.go`
+3. For cross-domain calls, add a bridge implementation in `composition/<domain>_bridges.go` (filed under the domain that receives it); per-domain wiring goes in `composition/wire_<domain>.go`
 
 ### Adding a New OAuth Provider
 

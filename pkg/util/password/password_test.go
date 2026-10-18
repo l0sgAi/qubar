@@ -86,12 +86,12 @@ func TestVerifyMalformed(t *testing.T) {
 	cases := []string{
 		"",
 		"not-a-hash",
-		"$argon2id$",                                // 段数不够（2 段）
-		"$argon2id$v=19$m=65536,t=3,p=4$onlysalt",   // 段数不够（5 段，缺 hash）
-		"$argon2id$v=19$m=65536,t=3,p=4$!!!$@@@",    // base64 损坏
+		"$argon2id$", // 段数不够（2 段）
+		"$argon2id$v=19$m=65536,t=3,p=4$onlysalt",      // 段数不够（5 段，缺 hash）
+		"$argon2id$v=19$m=65536,t=3,p=4$!!!$@@@",       // base64 损坏
 		"$argon2id$v=19$m=65536,t=0,p=4$dGVzdA$dGVzdA", // time=0 → 参数守卫拦截（防 panic）
 		"$argon2id$v=19$m=65536,t=3,p=0$dGVzdA$dGVzdA", // threads=0 → 参数守卫拦截（防 panic）
-		strings.Repeat("g", 64),                      // 64 字符但不是十六进制
+		strings.Repeat("g", 64),                        // 64 字符但不是十六进制
 	}
 	for _, c := range cases {
 		ok, _, err := Verify("any", c)
@@ -122,13 +122,13 @@ func TestHashRandomness(t *testing.T) {
 
 func TestIsLegacyHash(t *testing.T) {
 	cases := map[string]bool{
-		"":                       false,
-		strings.Repeat("a", 64):  true,
-		strings.Repeat("F", 64):  true,
-		strings.Repeat("0", 64):  true,
-		strings.Repeat("a", 63):  false,
-		strings.Repeat("a", 65):  false,
-		strings.Repeat("g", 64):  false, // 非十六进制
+		"":                                       false,
+		strings.Repeat("a", 64):                  true,
+		strings.Repeat("F", 64):                  true,
+		strings.Repeat("0", 64):                  true,
+		strings.Repeat("a", 63):                  false,
+		strings.Repeat("a", 65):                  false,
+		strings.Repeat("g", 64):                  false, // 非十六进制
 		"$argon2id$v=19$m=65536,t=3,p=4$abc$def": false,
 	}
 	for input, want := range cases {

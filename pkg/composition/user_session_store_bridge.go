@@ -50,15 +50,15 @@ func (b *userSessionStoreBridge) GetByEmail(email string) (*authdomain.LoginUser
 // Create 创建用户（邮箱注册流程）。
 func (b *userSessionStoreBridge) Create(input authdomain.CreateUserInput) (*authdomain.LoginUser, error) {
 	u := userdomain.SysUser{
-		ID:       sharedomain.NewID(),
-		Username: input.Username,
-		Email:    input.Email,
-		Pwd:      input.Pwd,
+		ID:        sharedomain.NewID(),
+		Username:  input.Username,
+		Email:     input.Email,
+		Pwd:       input.Pwd,
 		AvatarURL: input.AvatarURL,
-		Gender:   input.Gender,
-		Role:     0,
-		Status:   authdomain.UserStatusActive,
-		Deleted:  0,
+		Gender:    input.Gender,
+		Role:      0,
+		Status:    authdomain.UserStatusActive,
+		Deleted:   0,
 	}
 	// OAuth 注册时设置 provider ID
 	if input.Provider != "" && input.ProviderID != "" {

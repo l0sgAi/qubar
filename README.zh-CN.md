@@ -151,9 +151,11 @@ qubar/
 │   ├── config.example.yaml # 配置模板；复制为 config.yaml（已 git-ignore，Nacos 不可用时兜底）
 │   └── bootstrap.yaml    # Nacos 引导配置（地址、命名空间、分组）
 │
+├── migrations/           # 数据库迁移（golang-migrate，表结构权威来源）
+│
 ├── docs/
-│   ├── pgsql-ddl/        # 数据库表结构（UUIDv7 主键版，按领域拆分）
-│   ├── db.md             # DDL 跳转入口（指向 pgsql-ddl/）
+│   ├── pgsql-ddl/        # 表字段语义说明（按领域拆分；表结构以 migrations/ 为准）
+│   ├── db.md             # DDL 跳转入口（指向 migrations/ 与 pgsql-ddl/）
 │   ├── api/              # API 文档
 │   └── design/           # 设计文档
 │
@@ -173,6 +175,19 @@ qubar/
 ```
 
 ## 🚀 快速开始
+
+### 最快方式：Docker 开发栈（推荐，agent 同样用这条）
+
+只需要 Go 和 Docker：
+
+```bash
+make dev-up    # 起 PG18 / Redis / ES(IK) / Redpanda（deploy/compose/dev，端口 2xxxx 段）并执行全部迁移
+make dev-run   # 用 configs/config.dev.yaml 启动应用，http://localhost:8888/healthz
+make verify    # 提交前：格式 + vet + lint + 单测 + 迁移检查与空库回放（与 CI 一致）
+make test-integration  # 对开发栈（PG / Redis / Redpanda）跑集成测试；改 infrastructure/ 或 SQL 时必跑
+```
+
+开发栈不含 CDC（connect / Debezium），ES 业务索引不会自动同步；S3 / OAuth / 邮件是占位配置，相关接口不可用（需要时用 `QUBAR_*` 环境变量覆盖）。集成测试是与被测代码同目录的 `//go:build integration` 文件，公共夹具在 `pkg/shared/testkit`（随机 ID 隔离、Redis 15 号库、每次运行独立的 Redpanda topic），栈不可达时自动跳过。下面是使用本机自装服务的方式。
 
 ### 环境要求
 
@@ -197,14 +212,23 @@ go mod download
 
 ### 3. 配置数据库
 
-创建数据库和 schema：
+表结构由 [migrations/](migrations/)（golang-migrate，forward-only）管理，规范见 [migrations/README.md](migrations/README.md)；[docs/pgsql-ddl/](docs/pgsql-ddl/) 只做字段语义说明（种子数据也在那里）。本机执行迁移依赖 `brew install golang-migrate`（`make migrate-check` 用的 Squawk 会自动下载到 `bin/`）。
 
-```sql
-CREATE DATABASE qubar;
-CREATE SCHEMA IF NOT EXISTS domains;
+**新建本地库**：以超级用户执行 `.github/ci/pg-init.sql`（建 `qubar_owner` / `qubar_web_app` / `debezium` 角色、`domains` schema 与默认权限，密码均为 `ci`，仅限本机），再以 `qubar_owner` 执行全部迁移：
+
+```bash
+createdb qubar
+psql -d qubar -f .github/ci/pg-init.sql
+make migrate-up        # pg_hba 不是 trust 时加 PGPASSWORD=ci
 ```
 
-数据库表结构及种子数据请参考 [docs/pgsql-ddl/](docs/pgsql-ddl/)（按领域拆分，入口 [README.md](docs/pgsql-ddl/README.md)）
+**已有本地库**（之前按 `docs/pgsql-ddl/` 手工建过表）：只标记基线、不执行，且表须归 `qubar_owner` 所有：
+
+```bash
+make migrate-force v=20261015000000
+```
+
+改表：`make migrate-new name=xxx` → 编辑 SQL → `make migrate-up` → `make migrate-check && make migrate-test`（一次性 PG18 容器从空库回放全部迁移，与 CI 一致，只需 Docker）。
 
 ### 4. 配置应用
 
@@ -459,7 +483,7 @@ satoken: your-token-here
 
 1. 在 `pkg/domains/` 下创建领域目录，遵循 `application/domain/infrastructure/interfaces` 分层
 2. 在 `pkg/composition/` 中注册依赖装配和路由
-3. 如需跨领域调用，在 `composition/facade_bridges.go` 中添加桥接实现
+3. 如需跨领域调用，在 `composition/<domain>_bridges.go`（按被注入方归档）中添加桥接实现；领域装配写在 `composition/wire_<domain>.go`
 
 ### 添加新 OAuth Provider
 

@@ -81,13 +81,3 @@ type AppContext interface {
 	// SetDevice 设置登录设备标识。
 	SetDevice(device string)
 }
-
-// contextKey 是 AppContext 内部用于在框架 context 里存取业务值的 key 类型。
-// 不导出，避免外部包构造同名 key 造成冲突。
-type contextKey int
-
-const (
-	keyUserID contextKey = iota
-	keyLoginID
-	keyDevice
-)

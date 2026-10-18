@@ -141,8 +141,8 @@ func seedCircleBot(repo *fakeAgentRepo, id uuid.UUID, linked uuid.UUID, circle u
 	a := &domain.AiAgent{
 		ID: id, Name: "圈机器人", CircleID: &circle, LinkedUserID: linked,
 		APIProtocol: "openai", Model: "test-model", Status: domain.AgentStatusEnabled,
-		TriggerMode:      mode,
-		TriggerKeywords:  domain.KeywordsJSON(keywords),
+		TriggerMode:       mode,
+		TriggerKeywords:   domain.KeywordsJSON(keywords),
 		MaxRepliesPerHour: 30, MinIntervalSec: 60,
 	}
 	repo.byID[id] = a
@@ -181,10 +181,10 @@ func TestAgentInScope(t *testing.T) {
 	inA := seedCircleBot(newFakeAgentRepo(), circleABotID, circleABotLinked, circleAID, domain.TriggerModeKeyword)
 
 	cases := []struct {
-		name          string
-		agent         *domain.AiAgent
-		postCircle    uuid.UUID
-		want          bool
+		name       string
+		agent      *domain.AiAgent
+		postCircle uuid.UUID
+		want       bool
 	}{
 		{"global bot in any circle", global, circleAID, true},
 		{"global bot with unknown circle (Nil)", global, uuid.Nil, true},
@@ -254,7 +254,7 @@ func TestOnCommentCreated_CircleScope(t *testing.T) {
 // ---- 发帖 @提及 触发：scope 匹配第二道防线 ----
 
 // TestOnPostMentioned_CircleScope 越圈机器人即使被 @ 且混进候选集也不触发
-//（mention 兜底剔除是名单层第一道，此处验证触发层兜底）；本圈 + 全局机器人正常触发。
+// （mention 兜底剔除是名单层第一道，此处验证触发层兜底）；本圈 + 全局机器人正常触发。
 func TestOnPostMentioned_CircleScope(t *testing.T) {
 	t.Run("cross-circle mention blocked by scope", func(t *testing.T) {
 		f := newReplyFixture()
@@ -435,7 +435,7 @@ func TestCircleManualReply_RateLimitApplied(t *testing.T) {
 // ---- 创建链决策B：圈内限流缺省 ----
 
 // TestCircleAgentCreate_RateLimitDefaults 圈内创建未传限流字段 → 兜底 30/60
-//（防圈主计费 key 裸奔）；全局链路不做兜底（0=不限语义保持）。
+// （防圈主计费 key 裸奔）；全局链路不做兜底（0=不限语义保持）。
 func TestCircleAgentCreate_RateLimitDefaults(t *testing.T) {
 	repo := newFakeAgentRepo()
 	svc := newCircleAgentSvc(repo, newFakeCircleRoles())

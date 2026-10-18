@@ -52,7 +52,7 @@ func InitDB() {
 	sqlDB.SetMaxIdleConns(p.MaxIdleConns)
 	sqlDB.SetMaxOpenConns(p.MaxOpenConns)
 
-	// 表结构由 SQL 脚本（docs/pgsql-ddl/）管理，并由 DB owner 角色执行。
+	// 表结构由 migrations/ 下的版本化迁移（golang-migrate）管理，发布时以 DB owner 角色执行。
 	// 运行时连接用的是最小权限角色（如 qubar_web_app），并非表 owner，
 	// 不具备 ALTER 权限，因此这里不做 AutoMigrate——这与 post/circle/user/
 	// like/category 等领域的做法保持一致（它们也都只依赖 SQL 脚本建表）。

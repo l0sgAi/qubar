@@ -1,0 +1,51 @@
+name: 任务（功能 / 改进）
+description: 写成 agent 可以直接开工的 spec；人审核后改标签 agent:triage → agent:ready
+labels: ["enhancement", "agent:triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        一个 issue 对应一个 PR。业务代码预计超过 ~500 行（测试不计）就拆成多个 issue。
+        写清「做完是什么样」，agent 才能自己判断是否完成。
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景
+      description: 为什么要做；现状是什么（相关代码、接口、文档链接）
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 可验证的结果，尽量写成可测试的条目（接口行为、数据变化、性能指标）
+      value: |
+        - [ ] 
+        - [ ] `make verify` 通过
+    validations:
+      required: true
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: 范围外
+      description: 明确不做什么，防止 agent 顺手扩大改动
+  - type: textarea
+    id: areas
+    attributes:
+      label: 涉及区域
+      description: 领域 / 包 / 接口 / 表，例如 pkg/domains/post、GET /post/list、domains.post
+  - type: dropdown
+    id: risk
+    attributes:
+      label: 风险等级
+      description: 涉及迁移、部署、CI、鉴权 / 加密 / SSRF、配置、agent 规则的选「高」（见 CLAUDE.md）
+      options:
+        - 低：单领域内业务逻辑 / 测试 / 文档
+        - 高：需要人工审核
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: 实现提示 / 参考
+      description: 设计文档、已知约束、建议做法（可选）

@@ -2,7 +2,7 @@
 //
 // 覆盖设计文档 P0-8 的"兜底剔除"（comment 侧）：越圈机器人剔除 / 本圈机器人保留 /
 // 全局机器人与普通用户保留 / GetAgentCircleIDs 失败 fail-open。与 post 域同构逻辑
-//（UserFacade 名义类型不同，各自声明），故独立成套。
+// （UserFacade 名义类型不同，各自声明），故独立成套。
 package application
 
 import (
