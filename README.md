@@ -181,13 +181,13 @@ qubar/
 Only Go and Docker are required:
 
 ```bash
-make dev-up    # start PG18 / Redis / ES(IK) / Redpanda (deploy/compose/dev, ports in the 2xxxx range) and run all migrations
+make dev-up    # start PG18 / Redis / ES(IK) / Redpanda (deploy/compose/dev; ports PG 25432 / Redis 26379 / ES 29200 / Redpanda 29092) and run all migrations
 make dev-run   # run the app with configs/config.dev.yaml, http://localhost:8888/healthz
 make verify    # before committing: fmt + vet + lint + unit tests + migration checks and replay (same as CI)
 make test-integration  # integration tests against the dev stack (PG / Redis / Redpanda); required when touching infrastructure/ or SQL
 ```
 
-The dev stack has no CDC (connect / Debezium), so business indices in ES are not synced; S3 / OAuth / email use placeholder config and those endpoints won't work (override with `QUBAR_*` env vars when needed). Integration tests are `//go:build integration` files next to the code they cover, with shared fixtures in `pkg/shared/testkit` (isolated random IDs, Redis DB 15, per-run Redpanda topics); they skip when the stack is unreachable. The sections below cover running against locally installed services.
+The dev stack has no CDC (connect / Debezium), so business indices in ES are not synced; S3 / OAuth / email use placeholder config and those endpoints won't work (override with `QUBAR_*` env vars when needed). Integration tests are `//go:build integration` files next to the code they cover, with shared fixtures in `pkg/shared/testkit` (isolated random IDs, Redis DB 15, per-run Redpanda topics); they skip when the stack is unreachable. The ports avoid 15432, which is the local `ssh -L` port to the production database; never point dev commands at it. The sections below cover running against locally installed services.
 
 ### Requirements
 
