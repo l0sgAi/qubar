@@ -116,8 +116,9 @@ jobs:
             只改与这次修复相关的代码；不要改 CLAUDE.md、.github/、.claude/、Makefile、lint 配置来绕过检查。
             用 Conventional Commits 提交并 `git push`（不要 force push），最后 `gh pr comment` 简要说明改了什么。
             如果无法修复（需求不清、需要改高风险路径、需要人决定），不要硬改：`gh pr comment` 说明原因，然后 `gh pr edit --add-label hold`。
-            命令规则：多行正文（PR / issue / 评论 / commit message）一律先用 Write 工具写到 /tmp/ 下的文件，
-            再用 `--body-file` / `git commit -F`；命令里不要用 heredoc、`$(...)`、管道或 `&&`，这些会被权限规则拦下。
+            命令规则：多行正文（PR / issue / 评论 / commit message）一律先用 Write 工具写到仓库内的 `tmp/` 目录
+            （已 git-ignore，例如 `tmp/pr-body.md`），再用 `--body-file` / `git commit -F`；不要写到 /tmp（工作目录外会被拒），
+            命令里也不要用 heredoc、`$(...)`、管道或 `&&`，这些会被权限规则拦下。
           claude_args: >-
             --max-turns 120
             --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,Bash(make:*),Bash(go:*),Bash(gofmt:*),Bash(git:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh pr edit:*),Bash(gh run view:*),Bash(gh api repos/${{ github.repository }}/pulls/*)"
