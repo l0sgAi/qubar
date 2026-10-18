@@ -81,6 +81,10 @@ ansible-playbook site.yml -e ansible_host=43.107.44.74 -e ansible_user=deploy \
 SSH_TARGET=deploy@43.107.44.74 SSH_OPTS="-i ~/deployements/aliyun-deployment/ALIYUN.pem" deploy/scripts/migrate-pg.sh
 
 # 4.1 标记迁移基线（存量库不回放基线；不做这步 db-migrate.sh 会拒绝执行）。全新空库则跳过，由 migrate 从零建表
+#     生产已于 2026-10-18 完成：force 前核对 domains 17 张表、全部归 qubar_owner，pg_dump 与基线文件一致；
+#     首次带迁移的发布 release 39125657356：current=20261015000000 pending=0 → no change。
+#     本机 ~/.ssh/config 没有 ssh.qubar.site 条目时，隧道需显式带 ProxyCommand 与密钥：
+#     ssh -f -N -L 15432:127.0.0.1:5432 -o ProxyCommand='cloudflared access ssh --hostname %h' -i <密钥> deploy@ssh.qubar.site
 ssh -L 15432:127.0.0.1:5432 ssh.qubar.site   # 另开终端保持
 migrate -path migrations -database 'postgres://qubar_owner@127.0.0.1:15432/qubar?sslmode=disable&x-migrations-table="public"."schema_migrations"&x-migrations-table-quoted=1' \
   force 20261015000000
