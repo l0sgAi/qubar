@@ -181,13 +181,13 @@ qubar/
 只需要 Go 和 Docker：
 
 ```bash
-make dev-up    # 起 PG18 / Redis / ES(IK) / Redpanda（deploy/compose/dev，端口 2xxxx 段）并执行全部迁移
+make dev-up    # 起 PG18 / Redis / ES(IK) / Redpanda（deploy/compose/dev，端口 PG 25432 / Redis 26379 / ES 29200 / Redpanda 29092）并执行全部迁移
 make dev-run   # 用 configs/config.dev.yaml 启动应用，http://localhost:8888/healthz
 make verify    # 提交前：格式 + vet + lint + 单测 + 迁移检查与空库回放（与 CI 一致）
 make test-integration  # 对开发栈（PG / Redis / Redpanda）跑集成测试；改 infrastructure/ 或 SQL 时必跑
 ```
 
-开发栈不含 CDC（connect / Debezium），ES 业务索引不会自动同步；S3 / OAuth / 邮件是占位配置，相关接口不可用（需要时用 `QUBAR_*` 环境变量覆盖）。集成测试是与被测代码同目录的 `//go:build integration` 文件，公共夹具在 `pkg/shared/testkit`（随机 ID 隔离、Redis 15 号库、每次运行独立的 Redpanda topic），栈不可达时自动跳过。下面是使用本机自装服务的方式。
+开发栈不含 CDC（connect / Debezium），ES 业务索引不会自动同步；S3 / OAuth / 邮件是占位配置，相关接口不可用（需要时用 `QUBAR_*` 环境变量覆盖）。集成测试是与被测代码同目录的 `//go:build integration` 文件，公共夹具在 `pkg/shared/testkit`（随机 ID 隔离、Redis 15 号库、每次运行独立的 Redpanda topic），栈不可达时自动跳过。端口避开了 15432：那是 `ssh -L` 到生产库的本地端口，开发命令不要连它。下面是使用本机自装服务的方式。
 
 ### 环境要求
 
