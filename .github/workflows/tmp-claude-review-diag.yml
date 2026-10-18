@@ -6,6 +6,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  issues: write
 jobs:
   diag:
     if: github.head_ref == 'tmp/claude-review-diag-20261018'
@@ -32,8 +33,8 @@ jobs:
             echo "RAW rule=[$rule]: $(grep -oE '"result":"[^"]{0,300}|"permission_denials":\[[^]]{0,300}' <<< "$out" | tr '\n' ' ')"
             echo "RESULT rule=[$rule] cmd=[$cmd] denials=$(jq -c '[.permission_denials[] | .tool_input.command]' <<< "$out" 2>/dev/null)"
           }
-          try 'Bash(gh pr comment:*)' "gh pr comment $PR --body 'diag: bash rule test inline'"
-          try 'Bash(gh pr comment:*)' "gh pr comment $PR -F tmp/body.md"
-          try "Bash(gh pr comment $PR --body-file tmp/body.md)" "gh pr comment $PR --body-file tmp/body.md"
-          try 'Bash(gh pr create:*)' "gh pr create --base develop --head tmp/claude-review-diag-20261018 --title x --body-file tmp/body.md --dry-run"
-          try 'Bash(gh pr create:*)' "gh pr create --base develop --head tmp/claude-review-diag-20261018 --title x --body 'one line' --dry-run"
+          try 'Bash(gh issue comment:*)' "gh issue comment 92 --body-file tmp/body.md"
+          try 'Bash(gh issue edit:*)' "gh issue edit 92 --add-label agent:found"
+          try 'Bash(gh pr edit:*)' "gh pr edit $PR --add-label hold"
+          try 'Bash(gh issue create:*)' "gh issue create --title tmp-diag-delete-me --body-file tmp/body.md"
+          try 'Bash(git commit:*)' "git -c user.name=x -c user.email=x@x commit --allow-empty -m diag"
