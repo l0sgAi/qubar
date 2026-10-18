@@ -24,6 +24,7 @@ jobs:
             out=$("$HOME/.local/bin/claude" -p "Use the Write tool exactly once to write the text hi to the file $target. Do nothing else." \
               --allowedTools "$rule" --max-turns 3 --output-format json 2>&1)
             if [ -f "$target" ]; then w=written; else w=missing; fi
+            echo "RAW: $(tail -c 600 <<< "$out")"
             echo "RESULT rule=$rule target=$target file=$w denials=$(jq -r '.permission_denials | length' <<< "$out" 2>/dev/null) is_error=$(jq -r .is_error <<< "$out" 2>/dev/null)"
           }
           try 'Write(/tmp/qperm-a.md)' /tmp/qperm-a.md
