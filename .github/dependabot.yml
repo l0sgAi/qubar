@@ -1,0 +1,48 @@
+# Dependabot 版本更新（l0sgAi/qubar#67）：PR 一律提到 develop，走与其他 PR 相同的闸口。
+#
+# - target-branch 只对「版本更新」生效。「安全更新」（Settings → Code security → Dependabot security updates）
+#   GitHub 固定提到默认分支 main，配置改不了：不要合并它们（会绕过 develop 的全部检查），处理方式见
+#   .github/rulesets/README.md「Dependabot」。
+# - minor / patch 合成一个分组 PR；major 单独开 PR。
+# - claude-review：Dependabot 触发的工作流拿不到 Actions 密钥，只改依赖版本的 PR 由 claude-review.yml 直接记 success
+#   （条件见该文件），CI 是它们的闸口。
+# - auto-merge：只改 go.mod / go.sum 的 PR 没有 risk:high，CI 全绿后由 pr-gate 自动合并；
+#   改 .github/** 的 Actions 版本 PR 会被打 risk:high，要维护者 /approve 后手动合并。
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      go-minor-patch:
+        update-types: [minor, patch]
+    ignore:
+      # Go 的 major 升级是换模块路径（/v2），需要改 import，不是改版本号能完成的，人工处理。
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    # "/" 覆盖 .github/workflows；composite action 要单独列目录
+    directories: [/, /.github/actions/*]
+    target-branch: develop
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]

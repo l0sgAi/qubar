@@ -5,6 +5,8 @@
 #       workflow_dispatch(carry=true)：pr-sync 用 update-branch 把 develop 合进来之后，如果新 head 是
 #       「上一个已通过审查的 head + 合并 develop」，直接沿用结论，不再花一次审查。
 # fork PR 拿不到密钥，不审查（也不会有 claude-review 状态，需要维护者处理）。
+# Dependabot PR 同样拿不到密钥（GITHUB_TOKEN 仍按下面的 permissions 授权）：只改依赖版本的直接记 success，
+# 其余记 failure 等人处理（条件见 prepare 脚本）。
 # claude-code-action 要求工作流文件与默认分支（main）上的版本完全一致，否则跳过（状态记为 error）：
 # 本文件要发版到 main 才生效；修改本文件的 PR 自己审查不了，需要 admin 在 PR 上越过规则合并。
 name: claude-review
@@ -48,6 +50,7 @@ jobs:
         env:
           PR_INPUT: ${{ inputs.pr }}
           CARRY: ${{ inputs.carry }}
+          HAS_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -59,6 +62,48 @@ jobs:
             core.setOutput('ref', pr.head.ref);
             const skip = pr.draft || pr.state !== 'open' || pr.head.repo?.full_name !== `${owner}/${repo}`;
             if (skip) { core.setOutput('review', 'false'); return; }
+
+            // Dependabot 触发的工作流拿不到密钥，Claude 审查不了。只改依赖版本的 Dependabot PR 直接记 success，CI 是闸口：
+            //   PR 作者是 dependabot[bot]；非合并提交都由 dependabot[bot] 提交且签名已验证（别人推到它分支上的提交走正常审查）；
+            //   PR 整体 diff 只碰 go.mod / go.sum / 工作流与 composite action，且 go.mod 只改依赖与 go / toolchain 版本行、
+            //   工作流只改 `uses: x@版本` 行（不允许 replace / exclude / retract 等指令）。
+            if (pr.user?.login === 'dependabot[bot]') {
+              const why = await (async () => {
+                const commits = await github.paginate(github.rest.pulls.listCommits, { owner, repo, pull_number: number, per_page: 100 });
+                for (const c of commits) {
+                  if (c.parents.length > 1) continue;
+                  if (c.author?.login !== 'dependabot[bot]' || !c.commit.verification?.verified) return `commit ${c.sha.slice(0, 7)} not by dependabot`;
+                }
+                const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number: number, per_page: 100 });
+                const goMod = /^\s*((require\s+)?[\w.~\/+-]+\s+v\d\S*(\s*\/\/\s*indirect)?|require\s*\(|\)|go\s+\d[\w.]*|toolchain\s+go\d[\w.]*)?\s*$/;
+                const uses = /^\s*(-\s+)?uses:\s*[^\s@'"]+@[^\s#'"]+(\s+#.*)?$/;
+                for (const f of files) {
+                  if (f.status !== 'modified') return `${f.filename}: ${f.status}`;
+                  let re;
+                  if (f.filename === 'go.sum') continue;
+                  else if (f.filename === 'go.mod') re = goMod;
+                  else if (/^\.github\/(workflows\/[^/]+|actions\/[^/]+\/action)\.ya?ml$/.test(f.filename)) re = uses;
+                  else return `${f.filename} is not a dependency file`;
+                  if (f.patch === undefined) return `${f.filename}: diff too large to check`;
+                  const bad = f.patch.split('\n').find(l => /^[+-]/.test(l) && !re.test(l.slice(1)));
+                  if (bad !== undefined) return `${f.filename}: not a version change: ${bad.slice(0, 60)}`;
+                }
+                return '';
+              })();
+              if (!why) {
+                await github.rest.repos.createCommitStatus({ owner, repo, sha, state: 'success', context: 'claude-review',
+                  description: 'dependabot: dependency-only PR, CI is the gate' });
+                core.setOutput('review', 'false');
+                return;
+              }
+              core.warning(`claude-review: dependabot PR needs a real review: ${why}`);
+              if (process.env.HAS_TOKEN !== 'true') {
+                await github.rest.repos.createCommitStatus({ owner, repo, sha, state: 'failure', context: 'claude-review',
+                  description: `dependabot PR needs human review: ${why}`.slice(0, 140) });
+                core.setOutput('review', 'false');
+                return;
+              }
+            }
 
             if (process.env.CARRY === 'true') {
               const { data: commit } = await github.rest.repos.getCommit({ owner, repo, ref: sha });
