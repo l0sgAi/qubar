@@ -97,7 +97,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - uses: anthropics/claude-code-action@v1
+      - id: claude
+        uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
@@ -114,11 +115,34 @@ jobs:
             - REASON=conflict：`git fetch origin develop && git merge origin/develop`，解决冲突（两边的意图都要保留）。
             修完必须 `make dev-up && make verify` 通过；改了 infrastructure / SQL / Lua / Redpanda 再跑 `make test-integration`。
             只改与这次修复相关的代码；不要改 CLAUDE.md、.github/、.claude/、Makefile、lint 配置来绕过检查。
-            用 Conventional Commits 提交并 `git push`（不要 force push），最后 `gh pr comment` 简要说明改了什么。
-            如果无法修复（需求不清、需要改高风险路径、需要人决定），不要硬改：`gh pr comment` 说明原因，然后 `gh pr edit --add-label hold`。
+            用 Conventional Commits 提交并 `git push`（不要 force push）。
+            如果无法修复（需求不清、需要改高风险路径、需要人决定），不要硬改，执行 `gh pr edit ${{ needs.prepare.outputs.number }} --add-label hold`。
+            不要自己发 PR 评论（Actions 里 `gh pr comment` 一律被拒）：把改了什么、或为什么没修，写进结构化输出的 `note` 字段（中文 Markdown），
+            工作流会替你发到 PR 上；`fixed` 表示这次是否已推送修复。
             命令规则：多行正文（PR / issue / 评论 / commit message）一律先用 Write 工具写到仓库内的 `tmp/` 目录
-            （已 git-ignore，例如 `tmp/pr-body.md`），再用 `--body-file` / `git commit -F`；不要写到 /tmp（工作目录外会被拒），
+            （已 git-ignore，例如 `tmp/commit-msg.txt`），再用 `--body-file` / `git commit -F`；不要写到 /tmp（工作目录外会被拒），
             命令里也不要用 heredoc、`$(...)`、管道或 `&&`，这些会被权限规则拦下。
           claude_args: >-
             --max-turns 120
-            --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,Bash(make:*),Bash(go:*),Bash(gofmt:*),Bash(git:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh pr edit:*),Bash(gh run view:*),Bash(gh api repos/${{ github.repository }}/pulls/*)"
+            --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,Bash(make:*),Bash(go:*),Bash(gofmt:*),Bash(git:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr edit:*),Bash(gh run view:*),Bash(gh api repos/${{ github.repository }}/pulls/*)"
+            --json-schema '{"type":"object","properties":{"fixed":{"type":"boolean"},"note":{"type":"string"}},"required":["fixed","note"]}'
+
+      - name: Post note
+        if: always()
+        uses: actions/github-script@v8
+        env:
+          OUTPUT: ${{ steps.claude.outputs.structured_output }}
+          NUMBER: ${{ needs.prepare.outputs.number }}
+          REASON: ${{ needs.prepare.outputs.reason }}
+        with:
+          script: |
+            // Claude 在 Actions 里不能 gh pr comment，说明由工作流代发
+            const { owner, repo } = context.repo;
+            let out = {};
+            try { out = JSON.parse(process.env.OUTPUT || '{}'); } catch {}
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const head = out.fixed === true ? `agent-fix：已推送修复（原因：\`${process.env.REASON}\`）` :
+              out.fixed === false ? `agent-fix：未修复（原因：\`${process.env.REASON}\`），需要人工处理` :
+              `agent-fix：运行没有返回结果（原因：\`${process.env.REASON}\`），请看 run 日志`;
+            await github.rest.issues.createComment({ owner, repo, issue_number: Number(process.env.NUMBER),
+              body: `${head}（[run](${runUrl})）\n\n${(out.note || '').trim()}`.slice(0, 65000) });
