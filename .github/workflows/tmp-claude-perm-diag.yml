@@ -1,0 +1,32 @@
+# 临时诊断（不合并）：在 Actions 里测试 Write 权限规则的路径写法，定位 claude-review 总结评论被拦的原因。
+name: tmp-claude-perm-diag
+on:
+  pull_request:
+    branches: [develop]
+permissions:
+  contents: read
+jobs:
+  diag:
+    if: github.head_ref == 'tmp/claude-perm-diag-20261018'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - run: curl -fsSL https://claude.ai/install.sh | bash
+      - name: Try rule forms
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          set +e
+          mkdir -p tmp
+          try() {
+            rule="$1"; target="$2"
+            out=$("$HOME/.local/bin/claude" -p "Use the Write tool exactly once to write the text hi to the file $target. Do nothing else." \
+              --allowedTools "$rule" --max-turns 3 --output-format json 2>&1)
+            if [ -f "$target" ]; then w=written; else w=missing; fi
+            echo "RESULT rule=$rule target=$target file=$w denials=$(jq -r '.permission_denials | length' <<< "$out" 2>/dev/null) is_error=$(jq -r .is_error <<< "$out" 2>/dev/null)"
+          }
+          try 'Write(/tmp/qperm-a.md)' /tmp/qperm-a.md
+          try 'Write(//tmp/qperm-b.md)' /tmp/qperm-b.md
+          try 'Write(tmp/**)' tmp/qperm-c.md
+          try 'Write(tmp/**)' "$PWD/tmp/qperm-d.md"
