@@ -531,6 +531,13 @@ go test ./pkg/composition/middleware/...
 
 Issues and Pull Requests are welcome!
 
+This repo is developed with agents (l0sgAi/qubar#67); the rules live in [CLAUDE.md](CLAUDE.md):
+
+- **Issues**: use the issue templates (background + acceptance criteria); they start as `agent:triage`. Once a maintainer relabels one `agent:ready`, Claude in GitHub Actions picks it up and opens a PR (at most 3 at a time).
+- **PRs**: target `develop` and follow the PR template; CI must pass (`go` / `db` / `image` / `iac` / `gitleaks` / `integration`), and every PR gets an automatic Claude review.
+- **Merging**: same-repo, non-draft PRs without `risk:high` / `hold` merge automatically once checks pass. PRs touching migrations, deployment, CI, auth or config get `risk:high` and need a maintainer comment `/approve <head-sha>`.
+- **Releases**: `develop → main` deploys to production and is done by maintainers only.
+
 ## 📧 Contact
 
 For questions or suggestions, please open an Issue or contact the maintainer.

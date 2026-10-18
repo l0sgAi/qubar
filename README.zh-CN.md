@@ -531,6 +531,13 @@ go test ./pkg/composition/middleware/...
 
 欢迎提交 Issue 和 Pull Request！
 
+本仓库用 agent 协作开发（l0sgAi/qubar#67），规则写在 [CLAUDE.md](CLAUDE.md)：
+
+- **Issue**：用 issue 模板写清背景和验收标准，默认带 `agent:triage`；维护者审核后改成 `agent:ready`，Actions 里的 Claude 会自动认领并开 PR（同时最多 3 个）。
+- **PR**：目标分支 `develop`，按 PR 模板写清验证过程；必须通过 CI（`go` / `db` / `image` / `iac` / `gitleaks` / `integration`），每个 PR 由 Claude 自动审查。
+- **合并**：同仓库、非草稿、没有 `risk:high` / `hold` 的 PR 检查全绿后自动合并；触及迁移、部署、CI、鉴权、配置等路径的 PR 会被打上 `risk:high`，需要维护者评论 `/approve <head-sha>`。
+- **发版**：`develop → main` 触发生产发布，只由维护者操作。
+
 ## 📧 联系方式
 
 如有问题或建议，请提交 Issue 或联系维护者。
