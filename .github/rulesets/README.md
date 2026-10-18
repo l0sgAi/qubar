@@ -23,6 +23,33 @@ id=$(gh api repos/l0sgAi/qubar/rulesets --jq '.[] | select(.name=="develop") | .
 gh api -X PUT repos/l0sgAi/qubar/rulesets/$id --input .github/rulesets/develop.json
 ```
 
+## Dependabot（`.github/dependabot.yml`）
+
+- **版本更新**：`gomod`（根目录）和 `github-actions`（工作流 + `.github/actions/*`）每周一检查，PR 提到 `develop`，
+  minor / patch 合成一个分组 PR，major 单独开（gomod 忽略 major：Go 的 major 是换模块路径，要人工改 import）。
+- **claude-review**：Dependabot 触发的工作流拿不到 Actions 密钥（`GITHUB_TOKEN` 仍按 `permissions` 授权），Claude 审查跑不了。
+  `claude-review.yml` 的 prepare 对满足以下全部条件的 PR 直接记 `success`（`dependabot: dependency-only PR, CI is the gate`）：
+  PR 作者是 `dependabot[bot]`；非合并提交都由 `dependabot[bot]` 提交且签名已验证；diff 只碰 `go.mod` / `go.sum` /
+  工作流 / composite action，且 `go.mod` 只改依赖、`go`、`toolchain` 版本行，工作流只改 `uses: x@版本` 行。
+  不满足时记 `failure` 并写明原因，需要人看过后 admin 越过规则合并（或在 PR 上手动触发一次 claude-review：人触发时有密钥，会正常审查）。
+  没有选择「把 `CLAUDE_CODE_OAUTH_TOKEN` 也配成 Dependabot secret」：那样任何能改 Dependabot 分支内容的依赖更新都会在带 token 的 job 里运行，
+  而依赖升级的风险本来就主要靠 CI 发现，审查收益小。
+- **auto-merge**：pr-gate 对 Dependabot PR 不做特殊处理。只改 `go.mod` / `go.sum` 的 PR 没有 `risk:high`，CI（含 `integration`）全绿后自动合并到 develop；
+  Actions 版本 PR 改的是 `.github/**`，会被打 `risk:high`，要维护者 `/approve <head-sha>` 后手动合并。不想自动合并某个依赖 PR 时打 `hold`。
+- **安全更新提到 main**：Dependabot 的安全更新（Settings → Code security → Dependabot security updates）固定提到默认分支 `main`，
+  `target-branch` 改不了它。这类 PR **不要合并**（会绕过 develop 的全部闸口，且 develop → main 只由人发版）。二选一：
+  - 关闭（默认）：每周的分组版本更新会把同一依赖升到最新，等它合入 develop 再发版，alert 随之关闭。
+  - 急需时改目标分支，然后关闭再打开一次（改 base 不会触发 `pull_request` / `pull_request_target`，reopen 会）：
+
+    ```bash
+    gh pr edit <PR> --base develop
+    gh pr close <PR> && gh pr reopen <PR>
+    ```
+
+    分支是从 main 切的，落后 develop，靠 `gh pr update-branch <PR>`（或开了 auto-merge 后由 pr-sync）更新；不要再用 `@dependabot rebase / recreate`，它可能按 main 重建分支。
+    如果 main 上有 develop 没有的非合并提交，claude-review 的提交检查不通过，需要人处理。
+  - 也可以关掉安全更新 PR、只保留 alert，全部依赖更新都走 develop：更干净，但修复要等每周的版本更新（或手动触发 Dependabot）。
+
 ## 仓库设置
 
 ```bash

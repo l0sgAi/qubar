@@ -50,6 +50,9 @@ make dev-psql q="select ..."   # 查开发库；make dev-reset 清空数据卷�
 - `agent-fix`：`agent/` 分支 CI 失败 / 审查有阻塞问题 / 更新冲突时自动修复，每个 PR 最多 3 次，超过打 `hold`。
 - `pr-gate`：打 `risk:high`、写 `risk-gate` 状态、给同仓库非草稿且无 `risk:high` / `hold` 的 PR 开 auto-merge。
 - `pr-sync`：开了 auto-merge 但落后于 develop 的 PR 自动更新并补跑检查。
+- Dependabot（`.github/dependabot.yml`）：gomod / github-actions 每周向 `develop` 提分组 PR。它拿不到密钥，`claude-review` 对只改依赖版本的
+  Dependabot PR 直接记 success（CI 是闸口）；只改 `go.mod` / `go.sum` 的自动合并，Actions 版本 PR 是 `risk:high`。
+  安全更新 PR 固定提到 `main`：不要合并，关闭或改 base 到 `develop`（见 `.github/rulesets/README.md`）。不要往 Dependabot 分支推提交。
 - `claude`：有写权限的人在 issue / PR 里 `@claude` 让它答疑或改代码。
 
 ## 需要人工审核的改动（高风险）

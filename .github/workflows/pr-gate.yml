@@ -5,6 +5,9 @@
 #          - 没有 risk:high → success；
 #          - 有 risk:high → 需要有写权限的人（非 bot）评论 `/approve <head-sha>`（至少 7 位），
 #            新的 push 会改变 head sha，之前的 /approve 自动失效。
+#   automerge：同仓库、非草稿、目标 develop、无 risk:high / hold 的 PR 开 auto-merge，必需检查全绿后合并。
+#          Dependabot PR 不做特殊处理（有意为之）：只改 go.mod / go.sum 的会自动合并；改 .github/** 的 Actions 版本 PR
+#          有 risk:high，要 /approve 后手动合并。不想自动合并某个依赖 PR 时打 hold。
 # pull_request_target / issue_comment 都从默认分支（main）取本文件，PR 无法改它来放行自己；不 checkout、不执行 PR 代码。
 # 因此合并到 develop 后要等发版到 main 才生效。
 # 已知限制：在本机以你的账号运行的 agent 理论上也能以你的身份评论 /approve（.claude/settings.json 已禁止 agent 评论）；
