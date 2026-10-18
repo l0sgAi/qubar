@@ -17,34 +17,22 @@ jobs:
           fetch-depth: 0
       - run: curl -fsSL https://claude.ai/install.sh | bash
       - run: mkdir -p tmp
-      - name: Review like claude-review
+      - name: Bash rule forms
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GH_TOKEN: ${{ github.token }}
-          PROMPT: |
-            REPO: ${{ github.repository }}
-            PR NUMBER: ${{ github.event.pull_request.number }}
-            HEAD: ${{ github.event.pull_request.head.sha }}
-
-            审查这个合入 develop 的 PR。先读 CLAUDE.md 和 .agents/skills/qubar-skill/SKILL.md，用 `gh pr view` / `gh pr diff` 看改动。
-            只报真实问题，不要风格偏好或泛泛建议。重点：
-            1. 正确性：逻辑错误、边界、错误处理（不吞错误）、并发 / 事务、缓存与 DB 一致性、分页。
-            2. qubar 规则：分层与跨域只走 Facade（业务层不 import 兄弟域或 hertz）；插入显式 `sharedomain.NewID()`；
-               不用 AutoMigrate；迁移 forward-only 且兼容旧版本应用（expand / contract），新表登记 CDC 或 `-- cdc: none`；
-               新配置同步 config.example.yaml 与 config.dev.yaml；不提交密钥。
-            3. 安全：鉴权 / 越权、SSRF（netguard）、注入、敏感数据进日志。
-            4. 测试：改了 infrastructure / SQL / Lua / Redpanda 是否补了集成测试；PR 描述是否写了验证与未验证部分。
-            5. 范围：是否与关联 issue 一致、有没有顺手改无关代码、业务代码是否明显超过 ~500 行。
-
-            具体代码问题用 `mcp__github_inline_comment__create_inline_comment`（confirmed: true）标在对应行，每条写清问题、影响、修法。
-            最后发一条中文总结（结论 + 阻塞问题列表），第一行写 `<!-- claude-review:${{ github.event.pull_request.head.sha }} -->`：
-            先用 Write 工具把总结写到 `tmp/claude-review-summary.md`，再执行
-            `gh pr comment ${{ github.event.pull_request.number }} --body-file tmp/claude-review-summary.md`
-            （命令里不要用 heredoc、`$(...)`、管道或 `&&`，这些会被权限规则拦下）。
-            阻塞问题 = 会导致 bug、数据问题、安全问题或违反上面 qubar 规则的问题；其他都是非阻塞建议。
+          PR: ${{ github.event.pull_request.number }}
         run: |
           set +e
-          out=$("$HOME/.local/bin/claude" -p "$PROMPT" --max-turns 40 --allowedTools 'Read,Glob,Grep,Edit(/tmp/claude-review-summary.md),mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*)' --output-format json 2>&1)
-          echo "RAW: $(tail -c 1500 <<< "$out")"
-          echo "DENIALS: $(jq -c '[.permission_denials[] | {tool: .tool_name, input: .tool_input}]' <<< "$out" 2>/dev/null)"
-          echo "RESULT: $(jq -r '.result' <<< "$out" 2>/dev/null | head -c 800)"
+          printf 'diag: bash rule test\n' > tmp/body.md
+          try() {
+            rule="$1"; cmd="$2"
+            out=$("$HOME/.local/bin/claude" -p "Run exactly this shell command once with the Bash tool and nothing else: $cmd" \
+              --allowedTools "$rule" --max-turns 3 --output-format json 2>&1)
+            echo "RESULT rule=[$rule] cmd=[$cmd] denials=$(jq -c '[.permission_denials[] | .tool_input.command]' <<< "$out" 2>/dev/null)"
+          }
+          try 'Bash(gh pr view:*)' "gh pr view $PR --json number"
+          try 'Bash(gh pr comment:*)' "gh pr comment $PR --body-file tmp/body.md"
+          try 'Bash(gh pr comment *)' "gh pr comment $PR --body-file tmp/body.md"
+          try 'Bash(gh:*)' "gh pr comment $PR --body-file tmp/body.md"
+          try 'Read,Bash(gh pr comment:*)' "gh pr comment $PR --body-file tmp/body.md"
