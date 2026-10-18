@@ -44,5 +44,6 @@ jobs:
         run: |
           set +e
           out=$("$HOME/.local/bin/claude" -p "$PROMPT" --max-turns 40 --allowedTools 'Read,Glob,Grep,Edit(//tmp/claude-review-summary.md),mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*)' --output-format json 2>&1)
+          echo "RAW: $(tail -c 1500 <<< "$out")"
           echo "DENIALS: $(jq -c '[.permission_denials[] | {tool: .tool_name, input: .tool_input}]' <<< "$out" 2>/dev/null)"
           echo "RESULT: $(jq -r '.result' <<< "$out" 2>/dev/null | head -c 800)"
