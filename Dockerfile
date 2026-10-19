@@ -10,7 +10,7 @@
 # 配置：挂载 /etc/qubar/config.yaml（模板见 configs/config.example.yaml），
 # 密钥用 QUBAR_* 环境变量注入（见 pkg/conf/env.go）。镜像内不含任何配置/密钥。
 
-FROM --platform=$BUILDPLATFORM golang:1.25 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26 AS build
 ARG TARGETOS TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
