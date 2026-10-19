@@ -64,8 +64,9 @@ type SaTokenSession interface {
 	LogoutByToken(token string) error
 	// Logout 注销 loginID 在指定设备上的登录。
 	Logout(loginID, device string) error
-	// Kickout 踢下线 loginID 的所有会话（所有设备）。
+	// Kickout 踢下线 loginID 的所有会话（所有设备，不依赖枚举 device 名）。
 	// 用于找回密码成功后强制吊销旧 token，防止旧会话残留。
+	// 逐个 token 注销，部分失败时继续处理其余 token 并汇总返回错误；没有任何会话时返回 nil。
 	Kickout(loginID string) error
 	// SetSessionUser 把用户信息写入 loginID 的会话。
 	SetSessionUser(loginID string, user SessionUser) error
