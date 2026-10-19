@@ -24,6 +24,9 @@ func NewHandler(svc application.PostService) *Handler {
 }
 
 // CreatePostRequest 创建帖子请求。
+//
+// 不含 status：帖子状态由服务端决定（#110）。旧前端照传 status 不报错——
+// JSON 绑定忽略未知字段，该值不会进入应用层。
 type CreatePostRequest struct {
 	CircleID       uuid.UUID `json:"circle_id" binding:"required"`
 	Title          string    `json:"title" binding:"required,min=1,max=200"`
@@ -31,7 +34,6 @@ type CreatePostRequest struct {
 	Summary        string    `json:"summary" binding:"omitempty,max=500"`
 	Type           int16     `json:"type" binding:"omitempty,min=1,max=3"`
 	MediaExtra     []string  `json:"media_extra" binding:"omitempty"`
-	Status         int16     `json:"status" binding:"omitempty,min=0,max=4"`
 	MentionUserIDs []string  `json:"mention_user_ids" binding:"omitempty,max=50"` // @提及用户ID(uuid 字符串)
 }
 
@@ -55,7 +57,7 @@ func (h *Handler) CreatePost(c appctx.AppContext) {
 
 	postID, err := h.svc.CreatePost(c, userID, application.CreatePostInput{
 		CircleID: req.CircleID, Title: req.Title, Content: req.Content,
-		Summary: req.Summary, Type: req.Type, MediaExtra: req.MediaExtra, Status: req.Status,
+		Summary: req.Summary, Type: req.Type, MediaExtra: req.MediaExtra,
 		MentionUserIDs: mentionIDs,
 	})
 	if err != nil {
