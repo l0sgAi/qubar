@@ -110,9 +110,11 @@ test:
 test-integration:
 	go test -tags integration -count=1 ./pkg/...
 
+# golangci-lint 自身要求的 Go 版本可能高于 go.mod：显式 GOTOOLCHAIN=auto 让 go install 按需下载工具链。
+# setup-go v6+ 在 CI 里导出 GOTOOLCHAIN=local，不加这一项会报 "requires go >= ..."（#84）。
 $(GOLANGCI_LINT):
 	@mkdir -p $(BIN)
-	GOBIN=$(BIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	GOTOOLCHAIN=auto GOBIN=$(BIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	mv $(BIN)/golangci-lint $@
 
 $(SQUAWK):
