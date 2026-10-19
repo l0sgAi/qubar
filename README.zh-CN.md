@@ -191,7 +191,7 @@ make test-integration  # 对开发栈（PG / Redis / Redpanda）跑集成测试�
 
 ### 环境要求
 
-- Go 1.25.4+
+- Go 1.26+
 - PostgreSQL 18（需启用 `uuidv7()` 函数）
 - Redis 7+
 - Elasticsearch 8.x（可选，无则降级为 DB 搜索）
