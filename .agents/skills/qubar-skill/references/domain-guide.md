@@ -77,7 +77,7 @@
 - errors：join/leave 哨兵 + `mapJoinLeaveError`（`:38`）。
 
 ### post ⭐（`Post`，`domains.post`，含 `Hot int`）
-- Service（`application/service.go:193`）：`CreatePost(成员+状态校验,sanitize,摘要,incr圈子post_count;帖子状态服务端定为已发布,不读客户端 status)/
+- Service（`application/service.go:193`）：`CreatePost(成员+状态校验,sanitize,摘要,incr圈子post_count)/
   GetPostDetail(异步浏览+RestoreStats+is_liked/is_collected)/SearchPosts/GetMyPosts/GetUserPosts(ES)/
   GetPostsByIDs/SearchPostsByIDs/SearchPostsByIDsAndKeyword(跨域给 collect/history)/
   ListCircleIDsByPostIDs(recommend C3)/GetPostMeta/RestoreStats/RestoreStatsAndIncrCommentCount`。
