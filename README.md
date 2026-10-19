@@ -191,7 +191,7 @@ The dev stack has no CDC (connect / Debezium), so business indices in ES are not
 
 ### Requirements
 
-- Go 1.25.4+
+- Go 1.26+
 - PostgreSQL 18 (with `uuidv7()` function enabled)
 - Redis 7+
 - Elasticsearch 8.x (optional; falls back to DB search without it)

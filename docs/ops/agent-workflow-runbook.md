@@ -57,3 +57,15 @@ gh secret list -R l0sgAi/qubar
 - `pull_request_target`（`pr-gate`）、`issues` / `issue_comment`（`agent-dispatch`、`claude`、`/approve`）、`schedule`（`pr-sync`、`agent-dispatch` 补位）、`workflow_run`（`agent-fix`）都只按 **main** 上的工作流运行。
 - 用 `GITHUB_TOKEN` 推的提交 / 打的标签 / 触发的合并不会再触发别的工作流（`workflow_dispatch` 除外）；claude[bot] 用 App token 推的会触发。
 - 所以：改了工作流 → 合并到 develop → **发版到 main** 才生效。
+
+## 验证记录（2026-10-18 ~ 19 激活时）
+
+| 行为 | 验证于 |
+|---|---|
+| 低风险 PR：`risk-gate` 成功 → 开启 auto-merge → 检查通过后自动合并 | #75、#86、#90 |
+| 高风险路径：自动打 `risk:high`、`risk-gate` 等待、不开 auto-merge | #76、#80、#81、#88、#94 |
+| 维护者评论 `/approve <sha>` → `risk-gate` 秒级变绿；新提交使批准失效 | #80、#81、#94 |
+| `claude-review` 真实审查并给出结论（OAuth token 有效） | #76、#86、#90 |
+| OAuth token 无效时的报错（401）及诊断方法 | #77 |
+| `--allowedTools` 写法、`gh pr comment` 在 Actions 里一律被拒 | #87、#91 |
+| Dependabot 只改依赖的 PR 不依赖密钥通过 `claude-review` | #81（逻辑审阅；待真实 Dependabot PR 验证） |
