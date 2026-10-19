@@ -158,7 +158,7 @@ handler 需要 userID 但仅用于**个性化标记**（is_liked / is_collected 
 |---|---|
 | `GET /user/get` / `PUT /user/update` | 个人资料读写 |
 | `POST /circle/create` / `join` / `leave` / `GET /circle/my` | 写成员关系 / 个人列表 |
-| `POST /post/create` / `GET /post/my` | 发帖（含草稿）/ 个人列表 |
+| `POST /post/create` / `GET /post/my` | 发帖（状态由服务端决定，暂不支持草稿）/ 个人列表 |
 | `POST /comment/create` | 写评论 |
 | `POST /like/toggle` / `POST /collect/toggle` / `GET /collect/posts` | 写交互状态 / 个人收藏 |
 | `GET /history/posts` | 个人浏览历史 |
