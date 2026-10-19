@@ -153,14 +153,12 @@ jobs:
             5. 范围：是否与关联 issue 一致、有没有顺手改无关代码、业务代码是否明显超过 ~500 行。
 
             具体代码问题用 `mcp__github_inline_comment__create_inline_comment`（confirmed: true）标在对应行，每条写清问题、影响、修法。
-            最后发一条中文总结（结论 + 阻塞问题列表），第一行写 `<!-- claude-review:${{ needs.prepare.outputs.sha }} -->`：
-            先用 Write 工具把总结写到 `/tmp/claude-review-summary.md`，再执行
-            `gh pr comment ${{ needs.prepare.outputs.number }} --body-file /tmp/claude-review-summary.md`
-            （命令里不要用 heredoc、`$(...)`、管道或 `&&`，这些会被权限规则拦下）。
+            不要自己发 PR 评论（Actions 里 `gh pr comment` 一律被拒）：把中文总结（结论 + 阻塞问题列表，Markdown）
+            放进结构化输出的 `summary` 字段，工作流会替你发成 PR 评论。
             阻塞问题 = 会导致 bug、数据问题、安全问题或违反上面 qubar 规则的问题；其他都是非阻塞建议。
           claude_args: >-
             --max-turns 40
-            --allowedTools "Read,Glob,Grep,Edit(//tmp/claude-review-summary.md),mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*)"
+            --allowedTools "Read,Glob,Grep,mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*)"
             --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["pass","changes_requested"]},"blocking":{"type":"integer"},"summary":{"type":"string"}},"required":["verdict","blocking","summary"]}'
 
       - name: Report status
@@ -207,8 +205,20 @@ jobs:
               core.warning(`claude-review: ${description}`);
             }
             description = description.slice(0, 140);
-            await github.rest.repos.createCommitStatus({ owner, repo, sha, state, context: 'claude-review', description,
-              target_url: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}` });
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            await github.rest.repos.createCommitStatus({ owner, repo, sha, state, context: 'claude-review', description, target_url: runUrl });
+
+            // 总结评论由工作流发（Claude 在 Actions 里不能用 gh pr comment）。同一个 head sha 只发一次。
+            if (out.verdict && (out.summary || '').trim()) {
+              const marker = `<!-- claude-review:${sha} -->`;
+              const issue_number = Number(process.env.NUMBER);
+              const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });
+              if (!comments.some(c => (c.body || '').includes(marker))) {
+                const head = ok ? '✅ **Claude 审查：没有阻塞问题**' : `❌ **Claude 审查：${out.blocking} 个阻塞问题**`;
+                await github.rest.issues.createComment({ owner, repo, issue_number,
+                  body: `${marker}\n${head}（\`${sha.slice(0, 7)}\`，[run](${runUrl})）\n\n${out.summary.trim()}`.slice(0, 65000) });
+              }
+            }
             if (out.verdict === 'changes_requested' && process.env.REF.startsWith('agent/')) {
               await github.rest.actions.createWorkflowDispatch({ owner, repo, workflow_id: 'agent-fix.yml', ref: 'develop',
                 inputs: { pr: String(process.env.NUMBER), reason: 'review' } });

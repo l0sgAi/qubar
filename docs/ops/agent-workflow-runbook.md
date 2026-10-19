@@ -35,6 +35,10 @@ claude-code-action 默认隐藏完整输出，而改 Claude 工作流本身又�
 - `Write(<路径>)` **永远不匹配**；写文件用不带路径的 `Write`，或 `Edit(tmp/**)`、`Edit(//绝对路径)`。
 - `Edit(/路径)`（单斜杠）是相对项目根，不是绝对路径。
 - Bash 里用 heredoc / `$(...)` / 管道 / `&&` 拼多行正文会被拒：先写文件，再 `--body-file` / `git commit -F`。
+- **`gh pr comment` 在 Actions 里任何写法都被拒**（`--body`、`-F`、`--body-file`、精确匹配规则都不行）；
+  `gh pr create`、`gh pr edit`、`gh issue comment`、`gh issue create`、`gh issue edit` 可以用。
+  所以 PR 评论一律让 Claude 放进结构化输出（`--json-schema`），由工作流的 github-script 步骤代发：
+  `claude-review` 的 `summary`、`agent-fix` 的 `note`。
 
 ## 轮换 `CLAUDE_CODE_OAUTH_TOKEN`
 
