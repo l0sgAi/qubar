@@ -215,8 +215,8 @@ type CreatePostInput struct {
 	Summary        string
 	Type           int16
 	MediaExtra     []string
-	Status         int16
 	MentionUserIDs []uuid.UUID // @提及用户（前端选人传入；后端校验存在性/去自/截断）
+	// 不含状态字段：新帖状态完全由服务端决定（见 CreatePost）。
 }
 
 // PostService 是 post 领域的应用服务接口。
@@ -357,9 +357,9 @@ func (s *postServiceImpl) SetAgentTrigger(t AgentPostTrigger)          { s.agent
 
 // CreatePost 创建帖子。
 //
-// 与旧 controller.CreatePost 行为一致（除默认状态外）：
-//  1. 默认 type=1(图文)；默认 status=1(已发布)，原为 2(审核中)——见下方 TODO；
-//  2. 非草稿校验 circle_id/title 非空；
+// 与旧 controller.CreatePost 行为一致（除状态外）：
+//  1. 默认 type=1(图文)；状态由服务端决定（客户端无法指定，#110），见下方 TODO；
+//  2. 校验 circle_id/title 非空；
 //  3. 校验成员身份与状态（pending/muted/banned）；
 //  4. 校验圈子可用性；
 //  5. 清洗 content + 生成 summary；
@@ -370,25 +370,19 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 	if postType == 0 {
 		postType = domain.PostTypeTextImage
 	}
-	postStatus := input.Status
-	if postStatus == 0 {
-		// TODO(review-flow): 审核流未上线，新帖暂直接置为已发布；
-		// 审核能力就绪后恢复为 domain.PostStatusReviewing。
-		postStatus = domain.PostStatusPublished
+	// TODO(review-flow): 审核流未上线，新帖一律直接置为已发布；
+	// 审核能力就绪后改为 domain.PostStatusReviewing（审核通过再转已发布）。
+	postStatus := int16(domain.PostStatusPublished)
+
+	if input.CircleID == uuid.Nil {
+		return uuid.Nil, errCircleIDRequired
+	}
+	if input.Title == "" {
+		return uuid.Nil, errTitleRequired
 	}
 
-	// 非草稿校验
-	if postStatus != domain.PostStatusDraft {
-		if input.CircleID == uuid.Nil {
-			return uuid.Nil, errCircleIDRequired
-		}
-		if input.Title == "" {
-			return uuid.Nil, errTitleRequired
-		}
-	}
-
-	// 校验成员身份（仅在非草稿时）
-	if postStatus != domain.PostStatusDraft && s.memberCheck != nil {
+	// 校验成员身份
+	if s.memberCheck != nil {
 		member, err := s.memberCheck.GetMember(ctx, input.CircleID, userID)
 		if err != nil {
 			return uuid.Nil, err
@@ -403,7 +397,7 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 	}
 
 	// 校验圈子可用性
-	if postStatus != domain.PostStatusDraft && s.statusCheck != nil {
+	if s.statusCheck != nil {
 		available, err := s.statusCheck.IsCircleAvailable(ctx, input.CircleID)
 		if err != nil {
 			return uuid.Nil, err
@@ -453,8 +447,8 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 		}
 	}
 
-	// @提及：校验一次得到最终名单 → 落库（不区分状态，草稿正文同样含提及）→
-	// 仅已发布按同一名单发通知（草稿/审核中帖子不应对外产生通知）。
+	// @提及：校验一次得到最终名单 → 落库（不区分状态，审核中帖子正文同样含提及）→
+	// 仅已发布按同一名单发通知（审核中帖子不应对外产生通知）。
 	// 落库/通知均为 best-effort，不阻断发帖；通知名单 == 落库名单。
 	if mentionIDs := s.filterMentionUserIDs(ctx, userID, input.MentionUserIDs, input.CircleID); len(mentionIDs) > 0 {
 		if err := s.repo.CreateMentions(ctx, post.ID, mentionIDs); err != nil {
