@@ -226,3 +226,19 @@ security:
   # 各环境使用独立密钥，禁止复用开发密钥。
   data_key: "dev" # 仅开发栈使用；生产必须用 openssl rand -base64 32 生成的独立密钥
 
+# 帖子 AI 审核（TypeSafe Jev，#45 / #116）。数值字段 <=0 时用代码内默认值；enabled=false 或 api_key 为空时不调用
+moderation:
+  enabled: false                 # 总开关，默认 false
+  api_key: ""                    # 开发栈占位；本机冒烟用环境变量 QUBAR_MODERATION_API_KEY 注入，勿写真实 key
+  base_url: "https://api.typesafe.ai"
+  model: "jev-1.13.0"            # 固定版本号，不要用 jev-latest 等别名（换模型需重调阈值）
+  timeout_sec: 10                # 单次请求超时(秒)，默认 10
+  max_retries: 2                 # 超时 / 5xx / 429 / 529 最大重试次数（指数退避，遵守 retry-after），默认 2
+  fail_open: true                # 审核服务不可用时放行（false = 转人工），默认 true
+  content_max_runes: 8000        # 正文截断长度(字符)，超长保留首尾，默认 8000
+  # 分流阈值（#117 使用；#45 用 12 条样本定的初始值，上线前用真实帖子重调）
+  review_threshold: 0.35         # 任一风险概率 >= 此值转人工
+  action_threshold: 0.70         # 风险概率 >= 此值且 severity >= severity_block 才驳回
+  severity_block: 1.5            # 驳回所需最低 severity（0–3）
+  low_confidence: 0.5            # severity 置信度低于此值视为不确定
+  low_confidence_severity: 1.0   # severity >= 此值且置信度低时转人工

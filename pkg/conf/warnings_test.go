@@ -44,3 +44,22 @@ func TestSecurityWarnings_EmptyDataKeyAndLocalDB(t *testing.T) {
 		t.Fatalf("want only empty data_key warning (local sslmode=disable is fine), got %v", w)
 	}
 }
+
+func TestSecurityWarnings_Moderation(t *testing.T) {
+	c := &AppConfig{}
+	c.Security.DataKey = strings.Repeat("k", 44)
+	c.Moderation.Enabled = true
+	c.Moderation.Model = "jev-latest"
+	w := strings.Join(c.SecurityWarnings(), "\n")
+	for _, want := range []string{"moderation.api_key is empty", "is an alias"} {
+		if !strings.Contains(w, want) {
+			t.Errorf("missing warning %q in:\n%s", want, w)
+		}
+	}
+
+	c.Moderation.APIKey = "<moderation-api-key>"
+	c.Moderation.Model = DefaultModerationModel
+	if w := c.SecurityWarnings(); len(w) != 0 {
+		t.Fatalf("want no warnings, got %v", w)
+	}
+}

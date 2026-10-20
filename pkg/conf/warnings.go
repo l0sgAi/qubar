@@ -34,6 +34,12 @@ func (c *AppConfig) SecurityWarnings() []string {
 			out = append(out, fmt.Sprintf("cors.allowed_origins contains local origin %q; remove it in production", o))
 		}
 	}
+	if c.Moderation.Enabled && c.Moderation.APIKey == "" {
+		out = append(out, "moderation.enabled=true but moderation.api_key is empty: post AI moderation is disabled")
+	}
+	if m := c.Moderation.Model; strings.HasSuffix(m, "-latest") || strings.HasSuffix(m, "-preview") {
+		out = append(out, fmt.Sprintf("moderation.model=%q is an alias; pin a version such as %s so thresholds stay valid", m, DefaultModerationModel))
+	}
 	return out
 }
 
