@@ -131,3 +131,43 @@ func TestSaTokenSession_KickoutWithoutSession(t *testing.T) {
 		t.Errorf("token still logged in after Kickout")
 	}
 }
+
+// IsTokenAlive：有效 token 为 true；注销、被踢、从未存在的 token 为 false。KickoutByToken 只影响给定 token。
+func TestSaTokenSession_IsTokenAliveAndKickoutByToken(t *testing.T) {
+	t.Parallel()
+	initSaToken(t)
+	sess := infrastructure.NewSaTokenSession()
+	loginID := sharedomain.NewID().String()
+
+	a := login(t, sess, loginID, domain.TerminalDevice("web", sharedomain.NewID().String()))
+	b := login(t, sess, loginID, domain.TerminalDevice("web", sharedomain.NewID().String()))
+	c := login(t, sess, loginID, domain.TerminalDevice("mobile", sharedomain.NewID().String()))
+	for _, tk := range []string{a, b, c} {
+		if !sess.IsTokenAlive(tk) {
+			t.Fatalf("fresh token should be alive")
+		}
+	}
+	if sess.IsTokenAlive("") || sess.IsTokenAlive("never-issued-"+sharedomain.NewID().String()) {
+		t.Fatal("unknown token should not be alive")
+	}
+
+	if err := sess.KickoutByToken(a); err != nil {
+		t.Fatalf("KickoutByToken: %v", err)
+	}
+	if err := sess.LogoutByToken(b); err != nil {
+		t.Fatalf("LogoutByToken: %v", err)
+	}
+	if sess.IsTokenAlive(a) || sess.IsTokenAlive(b) {
+		t.Error("kicked / logged-out token should not be alive")
+	}
+	if !sess.IsTokenAlive(c) {
+		t.Error("untouched token should stay alive")
+	}
+	// 被踢的 token 保留 KICK_OUT 标记，校验时得到"被踢下线"状态
+	if _, err := stputil.GetManager().CheckLoginWithState(a); err == nil {
+		t.Error("kicked token should report a kicked-out state")
+	}
+	if err := sess.KickoutByToken(a); err == nil {
+		t.Error("kicking an already kicked token should return an error")
+	}
+}

@@ -55,7 +55,8 @@
 ### auth（无聚合根，编排登录/注册/OAuth）
 - Service（`auth/application/service.go:66`）：`Login/SendCode/VerifyCode/Register/OAuthLoginURL/OAuthCallback/LogoutByToken`。
 - 公开组 `/auth`（OAuth + register + login）；登出子组挂 authCheck。
-- Infra：`sa_token_session.go`、`verification_store_redis.go`（`register:code:{email}` 5min）、`email_sender.go`（Mailtrap）、`oauth_provider_adapter.go`。
+- Infra：`sa_token_session.go`、`session_index_redis.go`（在线终端索引 `auth:sessions:{uid}` ZSET + `auth:session_meta:{uid}` HASH，TTL=`sa_token.timeout`）、`verification_store_redis.go`（`register:code:{email}` 5min）、`email_sender.go`（Mailtrap）、`oauth_provider_adapter.go`。
+- 多端同时在线：sa-token device = `<type>:<device_id>`（`domain.TerminalDevice`），终端上限 `sa_token.max_login_count`（sa-token 自带上限关闭为 -1），重置密码走 `kickoutAllTerminals`；见 `docs/multi-device-frontend-api.md`。
 - OAuth provider 注册名 `google/github/azure`（⚠️ config key 是 microsoft，provider 是 azure）。
 - 错误：`errInvalidCredentials`/`errRateLimitExceeded`/`errOAuthProviderUnavailable`→503。
 

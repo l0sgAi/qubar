@@ -74,6 +74,8 @@ func (s *fakeSession) Login(loginID, device string) (string, error) { return "to
 func (s *fakeSession) LogoutByToken(token string) error             { return nil }
 func (s *fakeSession) Logout(loginID, device string) error          { return nil }
 func (s *fakeSession) Kickout(loginID string) error                 { return nil }
+func (s *fakeSession) KickoutByToken(token string) error            { return nil }
+func (s *fakeSession) IsTokenAlive(token string) bool               { return true }
 func (s *fakeSession) SetSessionUser(loginID string, user domain.SessionUser) error {
 	return nil
 }
@@ -100,7 +102,7 @@ func newTestService(p domain.OAuthProvider, session domain.SaTokenSession) AuthS
 	if p != nil {
 		reg.providers[p.Name()] = p
 	}
-	return NewAuthService(session, &fakeUserStore{}, nil, nil, reg, nil)
+	return NewAuthService(session, &fakeUserStore{}, nil, nil, reg, nil, newMemIndex())
 }
 
 // ============ buildOAuthRedirectURL ============
@@ -111,17 +113,19 @@ func TestBuildOAuthRedirectURL(t *testing.T) {
 		base     string
 		code     string
 		device   string
+		deviceID string
 		provider string
 		expected string
 	}{
-		{"plain", "https://app.com/success", "abc", "web", "google", "https://app.com/success?code=abc&device=web&provider=google"},
-		{"base has query", "https://app.com/success?from=oauth", "abc", "web", "github", "https://app.com/success?from=oauth&code=abc&device=web&provider=github"},
-		{"hash route", "https://app.com/#/success", "abc", "web", "azure", "https://app.com/?code=abc&device=web&provider=azure#/success"},
-		{"code escaped", "https://app.com/success", "a/b+c=d", "mobile", "google", "https://app.com/success?code=a%2Fb%2Bc%3Dd&device=mobile&provider=google"},
+		{"plain", "https://app.com/success", "abc", "web", "", "google", "https://app.com/success?code=abc&device=web&provider=google"},
+		{"base has query", "https://app.com/success?from=oauth", "abc", "web", "", "github", "https://app.com/success?from=oauth&code=abc&device=web&provider=github"},
+		{"hash route", "https://app.com/#/success", "abc", "web", "", "azure", "https://app.com/?code=abc&device=web&provider=azure#/success"},
+		{"code escaped", "https://app.com/success", "a/b+c=d", "mobile", "", "google", "https://app.com/success?code=a%2Fb%2Bc%3Dd&device=mobile&provider=google"},
+		{"with device id", "https://app.com/success", "abc", "web", testDeviceA, "google", "https://app.com/success?code=abc&device=web&device_id=" + testDeviceA + "&provider=google"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := buildOAuthRedirectURL(tc.base, tc.code, tc.device, tc.provider)
+			got := buildOAuthRedirectURL(tc.base, tc.code, tc.device, tc.deviceID, tc.provider)
 			if got != tc.expected {
 				t.Fatalf("got %q, want %q", got, tc.expected)
 			}
@@ -135,7 +139,7 @@ func TestOAuthCallbackPassthrough(t *testing.T) {
 	p := &fakeOAuthProvider{frontendURL: "https://app.com/success"}
 	svc := newTestService(p, &fakeSession{})
 
-	u, err := svc.OAuthCallback(context.Background(), "google", "one-time-code", "web")
+	u, err := svc.OAuthCallback(context.Background(), "google", "one-time-code", "web", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -150,7 +154,7 @@ func TestOAuthCallbackPassthrough(t *testing.T) {
 
 func TestOAuthCallbackUnknownProvider(t *testing.T) {
 	svc := newTestService(nil, &fakeSession{})
-	if _, err := svc.OAuthCallback(context.Background(), "noop", "c", "web"); !IsUnknownOAuthProviderErr(err) {
+	if _, err := svc.OAuthCallback(context.Background(), "noop", "c", "web", ""); !IsUnknownOAuthProviderErr(err) {
 		t.Fatalf("want unknown provider err, got %v", err)
 	}
 }
@@ -158,7 +162,7 @@ func TestOAuthCallbackUnknownProvider(t *testing.T) {
 func TestOAuthCallbackRedirectNotConfigured(t *testing.T) {
 	p := &fakeOAuthProvider{frontendURL: ""}
 	svc := newTestService(p, &fakeSession{})
-	if _, err := svc.OAuthCallback(context.Background(), "google", "c", "web"); !IsFrontendRedirectNotConfiguredErr(err) {
+	if _, err := svc.OAuthCallback(context.Background(), "google", "c", "web", ""); !IsFrontendRedirectNotConfiguredErr(err) {
 		t.Fatalf("want redirect-not-configured err, got %v", err)
 	}
 }
@@ -169,7 +173,7 @@ func TestOAuthExchangeHappyPath(t *testing.T) {
 	p := &fakeOAuthProvider{frontendURL: "https://app.com/success"}
 	svc := newTestService(p, &fakeSession{})
 
-	res, err := svc.OAuthExchange(context.Background(), "google", "one-time-code", "")
+	res, err := svc.OAuthExchange(context.Background(), "google", "one-time-code", TerminalInput{DeviceID: testDeviceA})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -181,6 +185,9 @@ func TestOAuthExchangeHappyPath(t *testing.T) {
 	}
 	if res.Email != "u@example.com" {
 		t.Fatalf("email = %q", res.Email)
+	}
+	if res.DeviceID != testDeviceA {
+		t.Fatalf("device_id = %q, want %q", res.DeviceID, testDeviceA)
 	}
 	if !p.exchangeCalled {
 		t.Fatal("POST exchange must consume the code")
@@ -194,7 +201,7 @@ func TestOAuthExchangeInvalidGrant(t *testing.T) {
 	}
 	svc := newTestService(p, &fakeSession{})
 
-	_, err := svc.OAuthExchange(context.Background(), "google", "used-code", "web")
+	_, err := svc.OAuthExchange(context.Background(), "google", "used-code", TerminalInput{})
 	if !IsOAuthInvalidGrantErr(err) {
 		t.Fatalf("want invalid grant err, got %v", err)
 	}
@@ -207,7 +214,7 @@ func TestOAuthExchangeProviderUnavailable(t *testing.T) {
 	}
 	svc := newTestService(p, &fakeSession{})
 
-	_, err := svc.OAuthExchange(context.Background(), "google", "c", "web")
+	_, err := svc.OAuthExchange(context.Background(), "google", "c", TerminalInput{})
 	if !IsOAuthProviderUnavailableErr(err) {
 		t.Fatalf("want provider-unavailable err, got %v", err)
 	}
@@ -217,7 +224,7 @@ func TestOAuthExchangeExpireFallback(t *testing.T) {
 	p := &fakeOAuthProvider{frontendURL: "https://app.com/success"}
 	svc := newTestService(p, &fakeSession{timeoutErr: errors.New("redis down")})
 
-	res, err := svc.OAuthExchange(context.Background(), "google", "c", "web")
+	res, err := svc.OAuthExchange(context.Background(), "google", "c", TerminalInput{})
 	if err != nil {
 		t.Fatalf("expire read failure must not block login: %v", err)
 	}
