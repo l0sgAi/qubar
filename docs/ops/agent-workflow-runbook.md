@@ -40,6 +40,7 @@
 | `skipped: CLAUDE_CODE_OAUTH_TOKEN secret not set` | 仓库没有该 secret，见下文「轮换 token」 |
 | `skipped: claude-review.yml is not on main yet` / `differs from main` | 本 PR 改了 `claude-review.yml`，或 develop 上的版本还没发版到 main。claude-code-action 只运行与 main 完全一致的工作流文件，属预期；规则要求它为必需检查时需要 admin 越过规则合并 |
 | `Claude run failed, see run log` | 打开 run 看 `review` job。动作默认隐藏完整输出，看不到原因时用下文的诊断方法 |
+| `Claude run failed, see run log`，日志里有 `Workflow initiated by non-human actor` | 触发者是 bot、且不在 `allowed_bots` 里（#122）。`claude-review` / `agent-fix` 已放行 `claude`、`github-actions`；出现别的 bot 名字时按需加入，不要用 `'*'`。临时绕过：维护者手动 `gh workflow run claude-review.yml -R l0sgAi/qubar --ref develop -f pr=<N>`（触发者是人） |
 | `N blocking issue(s)` | 真实审查结论。`agent/` 分支会自动交给 `agent-fix`（最多 3 次） |
 
 ### 看不到 Claude 的报错原因

@@ -76,8 +76,20 @@ func StartStatisticsConsumer() error {
 }
 
 // persistCircleStats 成员数与帖子数在同一事务内落库（任一失败整批重试，避免部分重复）。
+// 两条 UPDATE 涉及的圈子先合并按 id 升序一次性取锁，避免分两段取锁与其他批量写入方交叉成环（见 batch_lock.go）。
 func persistCircleStats(b *circleStatsBuf) error {
+	ids := make([]uuid.UUID, 0, b.size())
+	for _, m := range []map[uuid.UUID]int64{b.members, b.posts} {
+		for id, delta := range m {
+			if delta != 0 {
+				ids = append(ids, id)
+			}
+		}
+	}
 	return pgsql.DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockRowsByID(tx, "domains.circle", ids); err != nil {
+			return err
+		}
 		if err := applyCircleCountDeltas(tx, "member_count", b.members); err != nil {
 			return err
 		}
@@ -100,6 +112,7 @@ func applyCircleCountDeltas(tx *gorm.DB, column string, deltas map[uuid.UUID]int
 	if len(rows) == 0 {
 		return nil
 	}
+	sortByID(rows, func(r updateRow) uuid.UUID { return r.CircleID })
 
 	sql := fmt.Sprintf(`
 		UPDATE domains.circle c
@@ -192,36 +205,43 @@ func StartPostStatisticsConsumer() error {
 	return nil
 }
 
-// batchUpdatePostStats 批量更新帖子统计计数到数据库
+// postStatsRow 帖子统计批量更新行（JSON 喂 jsonb_to_recordset）。
+type postStatsRow struct {
+	PostID       uuid.UUID `json:"post_id"`
+	ViewDelta    int64     `json:"view_delta"`
+	CommentDelta int64     `json:"comment_delta"`
+	LikeDelta    int64     `json:"like_delta"`
+	CollectDelta int64     `json:"collect_delta"`
+}
+
+// batchUpdatePostStats 批量更新帖子统计计数到数据库（按 id 升序取锁，见 batch_lock.go）。
 func batchUpdatePostStats(deltas postStatsBuf) error {
-	return pgsql.DB.Transaction(func(tx *gorm.DB) error {
-		type updateRow struct {
-			PostID       uuid.UUID `json:"post_id"`
-			ViewDelta    int64     `json:"view_delta"`
-			CommentDelta int64     `json:"comment_delta"`
-			LikeDelta    int64     `json:"like_delta"`
-			CollectDelta int64     `json:"collect_delta"`
+	rows := make([]postStatsRow, 0, len(deltas))
+	ids := make([]uuid.UUID, 0, len(deltas))
+	for postID, delta := range deltas {
+		if delta.ViewCount != 0 || delta.CommentCount != 0 || delta.LikeCount != 0 || delta.CollectCount != 0 {
+			rows = append(rows, postStatsRow{
+				PostID:       postID,
+				ViewDelta:    delta.ViewCount,
+				CommentDelta: delta.CommentCount,
+				LikeDelta:    delta.LikeCount,
+				CollectDelta: delta.CollectCount,
+			})
+			ids = append(ids, postID)
 		}
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	sortByID(rows, func(r postStatsRow) uuid.UUID { return r.PostID })
 
-		rows := make([]updateRow, 0, len(deltas))
-		for postID, delta := range deltas {
-			if delta.ViewCount != 0 || delta.CommentCount != 0 || delta.LikeCount != 0 || delta.CollectCount != 0 {
-				rows = append(rows, updateRow{
-					PostID:       postID,
-					ViewDelta:    delta.ViewCount,
-					CommentDelta: delta.CommentCount,
-					LikeDelta:    delta.LikeCount,
-					CollectDelta: delta.CollectCount,
-				})
-			}
-		}
+	jsonBytes, err := json.Marshal(rows)
+	if err != nil {
+		return fmt.Errorf("failed to marshal post stats update rows: %w", err)
+	}
 
-		if len(rows) == 0 {
-			return nil
-		}
-
-		// 使用JSON批量更新所有统计字段
-		sql := `
+	// 使用JSON批量更新所有统计字段
+	sql := `
 		UPDATE domains.post p
 		SET view_count = LEAST(GREATEST(p.view_count + v.view_delta, 0), 1000000000),
 		    comment_count = GREATEST(p.comment_count + v.comment_delta, 0),
@@ -235,15 +255,13 @@ func batchUpdatePostStats(deltas postStatsBuf) error {
 		WHERE p.id = v.post_id AND p.deleted = 0
 		`
 
-		jsonBytes, err := json.Marshal(rows)
-		if err != nil {
-			return fmt.Errorf("failed to marshal post stats update rows: %w", err)
+	return pgsql.DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockRowsByID(tx, "domains.post", ids); err != nil {
+			return err
 		}
-
 		if err := tx.Exec(sql, string(jsonBytes)).Error; err != nil {
 			return fmt.Errorf("failed to execute post stats batch update: %w", err)
 		}
-
 		logger.Log.Info(fmt.Sprintf("Successfully updated %d post statistics", len(rows)))
 		return nil
 	})
