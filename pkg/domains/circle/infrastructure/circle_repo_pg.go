@@ -83,14 +83,31 @@ func (r *circleRepoPG) ExistsBySlug(ctx context.Context, slug string) (bool, err
 	return true, nil
 }
 
+// mapCircleUniqueErr 把 name/slug 唯一索引冲突转换为领域哨兵错误，其余原样返回。
+func mapCircleUniqueErr(err error) error {
+	msg := err.Error()
+	if strings.Contains(msg, "idx_circle_name") {
+		return domain.ErrCircleNameExists
+	}
+	if strings.Contains(msg, "idx_circle_slug") {
+		return domain.ErrCircleSlugExists
+	}
+	return err
+}
+
 // Create 创建圈子并自动将创建者设为圈主（事务），与旧 model.CreateCircle 一致。
 func (r *circleRepoPG) Create(ctx context.Context, circle *domain.Circle) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if circle.ID == uuid.Nil {
 			circle.ID = sharedomain.NewID()
 		}
-		if err := tx.Create(circle).Error; err != nil {
-			return err
+		q := tx
+		if circle.Slug == "" {
+			// 未填 slug 不写该列（落 NULL）：空串会撞 idx_circle_slug 唯一索引。
+			q = tx.Omit("slug")
+		}
+		if err := q.Create(circle).Error; err != nil {
+			return mapCircleUniqueErr(err)
 		}
 		member := domain.CircleMember{
 			CircleID:  circle.ID,
@@ -153,14 +170,7 @@ func (r *circleRepoPG) Update(ctx context.Context, circleID uuid.UUID, f domain.
 		Where("id = ? AND deleted = ?", circleID, 0).
 		Updates(updates)
 	if res.Error != nil {
-		msg := res.Error.Error()
-		if strings.Contains(msg, "idx_circle_name") {
-			return domain.ErrCircleNameExists
-		}
-		if strings.Contains(msg, "idx_circle_slug") {
-			return domain.ErrCircleSlugExists
-		}
-		return res.Error
+		return mapCircleUniqueErr(res.Error)
 	}
 	if res.RowsAffected == 0 {
 		return domain.ErrCircleNotFound
