@@ -1,0 +1,3 @@
+# 压测产物：data/ 含 lt_* 账号 token，results/ 为原始时序，均不入库
+data/
+results/
