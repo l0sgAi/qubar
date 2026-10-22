@@ -46,6 +46,7 @@ func (h *hertzAppContext) Param(name string) string    { return h.c.Param(name) 
 func (h *hertzAppContext) Query(name string) string    { return string(h.c.Query(name)) }
 func (h *hertzAppContext) Header(name string) string   { return string(h.c.GetHeader(name)) }
 func (h *hertzAppContext) PostForm(name string) string { return string(h.c.PostForm(name)) }
+func (h *hertzAppContext) ClientIP() string            { return h.c.ClientIP() }
 
 // FormFile 读取 multipart 上传的单个文件，映射到 RequestContext.FormFile。
 func (h *hertzAppContext) FormFile(name string) (*multipart.FileHeader, error) {

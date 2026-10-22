@@ -173,9 +173,9 @@ func (s *collectServiceImpl) rollbackCollect(ctx context.Context, userID, postID
 // isCollected 用户当前是否已收藏（缓存优先，miss 回源 DB，DB 已收藏则回填缓存）。
 // 用户收藏 ZSET 有 TTL 与容量上限，miss 不等于未收藏。缓存故障直接回源 DB；DB 错误原样返回。
 func (s *collectServiceImpl) isCollected(ctx context.Context, userID, postID uuid.UUID) (bool, error) {
-	hits, _, err := s.cache.BatchCheck(ctx, userID, []uuid.UUID{postID})
-	if err == nil && hits[postID] {
-		return true, nil
+	hits, missed, err := s.cache.BatchCheck(ctx, userID, []uuid.UUID{postID})
+	if err == nil && (hits[postID] || len(missed) == 0) {
+		return hits[postID], nil // 命中，或 ZSET 已完整加载（缺失即未收藏，#129）
 	}
 	if err != nil {
 		logger.Log.Error("Failed to check post collected from cache, falling back to DB: " + err.Error())

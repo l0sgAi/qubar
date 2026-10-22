@@ -145,7 +145,7 @@ func (h *Handler) GetPosts(c appctx.AppContext) {
 	result, err := h.svc.SearchPosts(c, req.Keyword, circleID, size, searchAfter)
 	if err != nil {
 		logger.Log.Error("Failed to search posts: " + err.Error())
-		httputil.InternalError(c, "Failed to search posts")
+		httputil.SearchError(c, err, "Failed to search posts")
 		return
 	}
 	httputil.Success(c, result)
@@ -184,7 +184,7 @@ func (h *Handler) GetMyPosts(c appctx.AppContext) {
 	result, err := h.svc.GetMyPosts(c, userID, req.Keyword, size, searchAfter)
 	if err != nil {
 		logger.Log.Error("Failed to search my posts: " + err.Error())
-		httputil.InternalError(c, "Failed to search my posts")
+		httputil.SearchError(c, err, "Failed to search my posts")
 		return
 	}
 	httputil.Success(c, result)
@@ -224,7 +224,7 @@ func (h *Handler) GetUserPosts(c appctx.AppContext) {
 	result, err := h.svc.GetUserPosts(c, targetUserID, req.Keyword, size, searchAfter)
 	if err != nil {
 		logger.Log.Error("Failed to search user posts: " + err.Error())
-		httputil.InternalError(c, "Failed to search user posts")
+		httputil.SearchError(c, err, "Failed to search user posts")
 		return
 	}
 	httputil.Success(c, result)

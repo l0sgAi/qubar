@@ -18,6 +18,7 @@ import (
 const collectSetScript = `
 local statsKey = KEYS[1]
 local zsetKey = KEYS[2]
+local loadedKey = KEYS[3]
 local targetId = ARGV[1]
 local now = tonumber(ARGV[2])
 local maxSize = tonumber(ARGV[3])
@@ -35,6 +36,10 @@ if want == 1 then
         local zsetSize = tonumber(redis.call('ZCARD', zsetKey))
         if zsetSize > maxSize then
             redis.call('ZREMRANGEBYRANK', zsetKey, 0, zsetSize - maxSize - 1)
+            -- 淘汰后 ZSET 不再是全量：完整加载标记降为"超限"，此后 miss 回源 DB（#129）
+            if redis.call('EXISTS', loadedKey) == 1 then
+                redis.call('SET', loadedKey, '0', 'KEEPTTL')
+            end
         end
         result = 1
     end
@@ -49,9 +54,10 @@ else
     end
 end
 
--- Renew TTL on both keys
+-- Renew TTL; 完整加载标记与 ZSET 同一脚本内同 TTL 续期（标记不存在时 no-op）
 redis.call('EXPIRE', statsKey, ttl)
 redis.call('EXPIRE', zsetKey, ttl)
+redis.call('EXPIRE', loadedKey, ttl)
 return result
 `
 
@@ -88,7 +94,7 @@ func SetPostCollect(ctx context.Context, userID, postID uuid.UUID, collected boo
 	if collected {
 		want = 1
 	}
-	keys := []string{GetPostStatsKey(postID), GetUserPostCollectListKey(userID)}
+	keys := []string{GetPostStatsKey(postID), GetUserPostCollectListKey(userID), GetUserPostCollectLoadedKey(userID)}
 	// targetId 以 UUID 字符串形式作为 ARGV 传入(Lua 中 ZADD/ZSCORE 的 member)
 	args := []interface{}{postID.String(), time.Now().UnixMilli(), collectZsetMaxSize, int64(postStatsTTL.Seconds()), want}
 
@@ -104,39 +110,6 @@ func SetPostCollect(ctx context.Context, userID, postID uuid.UUID, collected boo
 		return 0, fmt.Errorf("failed to execute collect set: %w", err)
 	}
 	return CollectSetResult(result), nil
-}
-
-// BatchCheckPostCollected 批量检查用户是否收藏了多个帖子
-// ZMScore 对不存在的成员返回 float64(0)，由于 score 是时间戳(>0)，score==0 等价于不存在
-func BatchCheckPostCollected(userID uuid.UUID, postIDs []uuid.UUID) (map[uuid.UUID]bool, []uuid.UUID, error) {
-	if len(postIDs) == 0 {
-		return make(map[uuid.UUID]bool), nil, nil
-	}
-
-	zsetKey := GetUserPostCollectListKey(userID)
-	members := make([]string, len(postIDs))
-	for i, id := range postIDs {
-		members[i] = id.String()
-	}
-
-	scores, err := Client.ZMScore(ctx, zsetKey, members...).Result()
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to batch check post collected: %w", err)
-	}
-
-	result := make(map[uuid.UUID]bool, len(postIDs))
-	var missIDs []uuid.UUID
-	for i, score := range scores {
-		if score > 0 {
-			result[postIDs[i]] = true
-		} else {
-			result[postIDs[i]] = false
-			missIDs = append(missIDs, postIDs[i])
-		}
-	}
-
-	Client.Expire(ctx, zsetKey, postStatsTTL)
-	return result, missIDs, nil
 }
 
 // BackfillPostCollects 将DB查询确认的帖子收藏状态回填到ZSET

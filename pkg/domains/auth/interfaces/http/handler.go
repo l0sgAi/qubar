@@ -25,7 +25,18 @@ func NewHandler(svc application.AuthService) *Handler {
 type loginReq struct {
 	Email    string `json:"email" binding:"required"`
 	Password string `json:"password" binding:"required"`
-	Device   string `json:"device"`
+	Device   string `json:"device"`    // 终端类型 web / mobile，缺省 web
+	DeviceID string `json:"device_id"` // 终端 UUID，缺省 / 非法时服务端生成并在响应 data.device_id 返回
+}
+
+// terminalInput 从请求里取终端信息（device / device_id 由各接口的请求体或 query 给出）。
+func terminalInput(c appctx.AppContext, device, deviceID string) application.TerminalInput {
+	return application.TerminalInput{
+		Device:    device,
+		DeviceID:  deviceID,
+		IP:        c.ClientIP(),
+		UserAgent: c.Header("User-Agent"),
+	}
 }
 
 // Login POST /auth/login
@@ -39,7 +50,7 @@ func (h *Handler) Login(c appctx.AppContext) {
 	result, err := h.svc.Login(c, application.LoginInput{
 		Email:    req.Email,
 		Password: req.Password,
-		Device:   req.Device,
+		Terminal: terminalInput(c, req.Device, req.DeviceID),
 	})
 	if err != nil {
 		writeAuthError(c, err)
@@ -103,6 +114,7 @@ type completeReq struct {
 	Username string `json:"username" binding:"required"`
 	Password string `json:"password" binding:"required"`
 	Device   string `json:"device"`
+	DeviceID string `json:"device_id"`
 }
 
 // CompleteRegistration POST /auth/register/complete
@@ -117,7 +129,7 @@ func (h *Handler) CompleteRegistration(c appctx.AppContext) {
 		Email:    req.Email,
 		Username: req.Username,
 		Password: req.Password,
-		Device:   req.Device,
+		Terminal: terminalInput(c, req.Device, req.DeviceID),
 	})
 	if err != nil {
 		writeAuthError(c, err)
@@ -199,13 +211,12 @@ func (h *Handler) ResetPassword(c appctx.AppContext) {
 
 // OAuthLogin GET /auth/<provider>/login
 //
-// 生成跳转到 OAuth provider 的 URL 并 307 重定向。
+// 生成跳转到 OAuth provider 的 URL 并 307 重定向。query 可带 device、device_id（编码进 state）。
 // provider 通过闭包绑定（与旧 oauthCtrl.Login("google") 一致），
 // 不从路径参数读取——这样路由可以用静态路径，避免 gin 的参数路由冲突。
 func (h *Handler) OAuthLogin(provider string) func(c appctx.AppContext) {
 	return func(c appctx.AppContext) {
-		device := c.Query("device")
-		out, err := h.svc.OAuthLoginURL(c, provider, device)
+		out, err := h.svc.OAuthLoginURL(c, provider, c.Query("device"), c.Query("device_id"))
 		if err != nil {
 			writeAuthError(c, err)
 			return
@@ -217,20 +228,20 @@ func (h *Handler) OAuthLogin(provider string) func(c appctx.AppContext) {
 // OAuthCallback GET /auth/<provider>/callback
 //
 // 处理 OAuth provider 回调：不消耗 code，302 透传到前端 success 页
-// （URL 携带一次性 code + device），由前端 POST 换 token。
+// （URL 携带一次性 code + device + device_id），由前端 POST 换 token。
 // token 不出现在 URL 中（安全：避免泄漏到浏览器历史/服务端日志）。
 func (h *Handler) OAuthCallback(provider string) func(c appctx.AppContext) {
 	return func(c appctx.AppContext) {
 		code := c.Query("code")
 		state := c.Query("state")
-		device := application.ParseOAuthState(state)
+		device, deviceID := application.ParseOAuthState(state)
 
 		if code == "" {
 			httputil.BadRequest(c, "Code not found")
 			return
 		}
 
-		redirectURL, err := h.svc.OAuthCallback(c, provider, code, device)
+		redirectURL, err := h.svc.OAuthCallback(c, provider, code, device, deviceID)
 		if err != nil {
 			writeAuthError(c, err)
 			return
@@ -241,14 +252,15 @@ func (h *Handler) OAuthCallback(provider string) func(c appctx.AppContext) {
 
 // oauthExchangeReq POST /auth/<provider>/callback 请求体。
 type oauthExchangeReq struct {
-	Code   string `json:"code"`
-	Device string `json:"device"` // 可选，缺省 web
+	Code     string `json:"code"`
+	Device   string `json:"device"`    // 可选，缺省 web
+	DeviceID string `json:"device_id"` // 可选，缺省 / 非法时服务端生成
 }
 
 // OAuthExchange POST /auth/<provider>/callback
 //
 // 前端 success 页拿 URL 中的一次性 code 调本接口换 token。
-// 成功返回 {token, expire, email, user}；code 无效/过期返回 400。
+// 成功返回 {token, expire, email, user, device_id}；code 无效/过期返回 400。
 func (h *Handler) OAuthExchange(provider string) func(c appctx.AppContext) {
 	return func(c appctx.AppContext) {
 		var req oauthExchangeReq
@@ -257,7 +269,7 @@ func (h *Handler) OAuthExchange(provider string) func(c appctx.AppContext) {
 			return
 		}
 
-		result, err := h.svc.OAuthExchange(c, provider, req.Code, req.Device)
+		result, err := h.svc.OAuthExchange(c, provider, req.Code, terminalInput(c, req.Device, req.DeviceID))
 		if err != nil {
 			writeAuthError(c, err)
 			return
@@ -266,7 +278,7 @@ func (h *Handler) OAuthExchange(provider string) func(c appctx.AppContext) {
 	}
 }
 
-// Logout POST /auth/logout —— 按 token 注销。
+// Logout POST /auth/logout —— 只注销当前 token，同账号其他终端不受影响。
 func (h *Handler) Logout(c appctx.AppContext) {
 	tokenName := conf.Config.SaToken.TokenName
 	token := c.Header(tokenName)
@@ -275,7 +287,8 @@ func (h *Handler) Logout(c appctx.AppContext) {
 		return
 	}
 
-	if err := h.svc.LogoutByToken(c, token); err != nil {
+	loginID, _ := c.LoginID()
+	if err := h.svc.LogoutByToken(c, loginID, token); err != nil {
 		httputil.InternalError(c, "Failed to logout")
 		return
 	}

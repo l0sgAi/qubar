@@ -101,6 +101,9 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # 本工作流由 claude[bot]（agent 推的提交）或 github-actions[bot]（GITHUB_TOKEN 派发）触发；
+          # claude-code-action 默认拒绝 bot 触发（#122）。只放行这两个，不用 '*'。
+          allowed_bots: "claude,github-actions"
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ needs.prepare.outputs.number }}

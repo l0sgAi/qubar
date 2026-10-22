@@ -29,13 +29,16 @@ import (
 type LoginInput struct {
 	Email    string
 	Password string
-	Device   string
+	Terminal TerminalInput
 }
 
 // LoginResult 登录成功结果（含 token 与会话用户视图）。
+//
+// DeviceID 是本次登录使用的终端 UUID：客户端没传或传了非法值时由服务端生成，客户端应保存下来，下次登录带上。
 type LoginResult struct {
-	User  domain.SessionUser `json:"user"`
-	Token string             `json:"token"`
+	User     domain.SessionUser `json:"user"`
+	Token    string             `json:"token"`
+	DeviceID string             `json:"device_id"`
 }
 
 // OAuthLoginResult OAuth 授权码换 token 的登录结果。
@@ -44,10 +47,11 @@ type LoginResult struct {
 // Expire 为 token 剩余有效期（秒）；Email 冗余于 User.Email，
 // 供前端免嵌套直读。
 type OAuthLoginResult struct {
-	User   domain.SessionUser `json:"user"`
-	Token  string             `json:"token"`
-	Expire int64              `json:"expire"`
-	Email  string             `json:"email"`
+	User     domain.SessionUser `json:"user"`
+	Token    string             `json:"token"`
+	Expire   int64              `json:"expire"`
+	Email    string             `json:"email"`
+	DeviceID string             `json:"device_id"`
 }
 
 // SendCodeInput 发送验证码入参。
@@ -67,7 +71,7 @@ type RegisterInput struct {
 	Email    string
 	Username string
 	Password string
-	Device   string
+	Terminal TerminalInput
 }
 
 // ResetPasswordInput 找回密码（重置）入参。
@@ -91,27 +95,28 @@ type AuthService interface {
 	VerifyCode(ctx context.Context, input VerifyCodeInput) error
 	// Register 完成注册（创建用户 + 自动登录）。
 	Register(ctx context.Context, input RegisterInput) (*LoginResult, error)
-	// OAuthLoginURL 生成 OAuth 提供方的跳转 URL（带 device 编码到 state）。
-	OAuthLoginURL(ctx context.Context, provider, device string) (*OAuthLoginURLOutput, error)
+	// OAuthLoginURL 生成 OAuth 提供方的跳转 URL（device 与 device_id 编码到 state）。
+	OAuthLoginURL(ctx context.Context, provider, device, deviceID string) (*OAuthLoginURLOutput, error)
 	// OAuthCallback 处理 OAuth 回调（GET）：不消耗 code，302 透传给前端
-	// （URL 携带一次性 code + device），由前端 POST 换回 token。
+	// （URL 携带一次性 code + device + device_id），由前端 POST 换回 token。
 	// 返回前端跳转 URL。
-	OAuthCallback(ctx context.Context, provider, code, device string) (string, error)
+	OAuthCallback(ctx context.Context, provider, code, device, deviceID string) (string, error)
 	// OAuthExchange 用一次性授权 code 完成登录（POST）：
 	// 换 token + 拉用户 + 登录/注册 + 写会话，返回 token 与过期时间。
-	OAuthExchange(ctx context.Context, provider, code, device string) (*OAuthLoginResult, error)
-	// LogoutByToken 按 token 注销登录。
-	LogoutByToken(ctx context.Context, token string) error
+	OAuthExchange(ctx context.Context, provider, code string, terminal TerminalInput) (*OAuthLoginResult, error)
+	// LogoutByToken 注销 loginID 的当前 token，并把它移出会话索引；其他终端不受影响。
+	LogoutByToken(ctx context.Context, loginID, token string) error
 	// SendPasswordResetCode 发送找回密码验证码（邮箱必须已注册）。
 	SendPasswordResetCode(ctx context.Context, input SendCodeInput) error
 	// VerifyPasswordResetCode 校验找回密码验证码。
 	VerifyPasswordResetCode(ctx context.Context, input VerifyCodeInput) error
-	// ResetPassword 重置密码（校验已验证 → 改密码 → 踢下线所有会话）。
+	// ResetPassword 重置密码（校验已验证 → 改密码 → 注销全部终端）。
 	ResetPassword(ctx context.Context, input ResetPasswordInput) error
 }
 
 type authServiceImpl struct {
 	session   domain.SaTokenSession
+	index     domain.SessionIndex
 	userStore domain.UserSessionStore
 	verify    domain.VerificationStore
 	pwdReset  domain.PasswordResetStore
@@ -127,9 +132,11 @@ func NewAuthService(
 	email domain.EmailSender,
 	oauthReg domain.OAuthProviderRegistry,
 	pwdReset domain.PasswordResetStore,
+	index domain.SessionIndex,
 ) AuthService {
 	return &authServiceImpl{
 		session:   session,
+		index:     index,
 		userStore: userStore,
 		verify:    verify,
 		email:     email,
@@ -145,7 +152,7 @@ func NewAuthService(
 //  2. 校验 status（禁用 → Forbidden）；
 //  3. 校验密码（password.Verify 自动识别 Argon2id / 旧 SHA256）；
 //  4. 若旧哈希格式 → 升级为 Argon2id（失败不阻断登录）；
-//  5. 清理同设备旧 token + 登录 + 写会话。
+//  5. 在请求的终端上登录（只替换该终端自己的旧 token）+ 写会话 + 登记会话索引。
 func (s *authServiceImpl) Login(ctx context.Context, input LoginInput) (*LoginResult, error) {
 	user, err := s.userStore.GetByEmail(input.Email)
 	if err != nil {
@@ -180,24 +187,15 @@ func (s *authServiceImpl) Login(ctx context.Context, input LoginInput) (*LoginRe
 		}
 	}
 
-	device := resolveDevice(input.Device)
-	userIDStr := user.ID
-
-	// 清理同设备旧 token
-	_ = s.session.Logout(userIDStr, device)
-
-	authToken, err := s.session.Login(userIDStr, device)
+	authToken, deviceID, err := s.issueToken(ctx, user, input.Terminal)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := s.session.SetSessionUser(userIDStr, user.ToSessionUser()); err != nil {
-		return nil, err
-	}
-
 	return &LoginResult{
-		User:  user.ToSessionUser(),
-		Token: authToken,
+		User:     user.ToSessionUser(),
+		Token:    authToken,
+		DeviceID: deviceID,
 	}, nil
 }
 
@@ -314,34 +312,34 @@ func (s *authServiceImpl) Register(ctx context.Context, input RegisterInput) (*L
 		return nil, err
 	}
 
-	device := resolveDevice(input.Device)
-	userIDStr := user.ID
-
-	authToken, err := s.session.Login(userIDStr, device)
+	authToken, deviceID, err := s.issueToken(ctx, user, input.Terminal)
 	if err != nil {
-		return nil, err
-	}
-	if err := s.session.SetSessionUser(userIDStr, user.ToSessionUser()); err != nil {
 		return nil, err
 	}
 	_ = s.verify.DeleteVerified(input.Email)
 
 	return &LoginResult{
-		User:  user.ToSessionUser(),
-		Token: authToken,
+		User:     user.ToSessionUser(),
+		Token:    authToken,
+		DeviceID: deviceID,
 	}, nil
 }
 
 // OAuthLoginURL 生成 OAuth 提供方的跳转 URL。
 //
-// state 格式与旧 controller 一致："device:<device>:<provider>-token"。
-func (s *authServiceImpl) OAuthLoginURL(ctx context.Context, providerName, device string) (*OAuthLoginURLOutput, error) {
+// state 格式："device:<device>:<provider>-token[:<device_id>]"。
+// device_id 追加在末尾：前三段与旧格式一致，上线前生成、还没回调的 state 照常解析（见 ParseOAuthState）。
+// device_id 不合法时不写入 state，由 OAuthExchange 生成新的。
+func (s *authServiceImpl) OAuthLoginURL(ctx context.Context, providerName, device, deviceID string) (*OAuthLoginURLOutput, error) {
 	p := s.oauthReg.Get(providerName)
 	if p == nil {
 		return nil, errUnknownOAuthProvider
 	}
 	device = resolveDevice(device)
 	state := "device" + oauthStateDelimiter + device + oauthStateDelimiter + providerName + "-token"
+	if id := normalizeDeviceID(deviceID); id != "" {
+		state += oauthStateDelimiter + id
+	}
 	return &OAuthLoginURLOutput{RedirectURL: p.AuthCodeURL(state)}, nil
 }
 
@@ -349,11 +347,11 @@ func (s *authServiceImpl) OAuthLoginURL(ctx context.Context, providerName, devic
 //
 // 安全契约：后端不在 URL 中下发 token（会泄漏到浏览器历史/日志），
 // 只做 code 透传——302 重定向到前端 success 页，URL 携带一次性
-// 授权 code、device 与 provider；前端随后 POST /auth/<provider>/callback 换 token。
+// 授权 code、device、device_id 与 provider；前端随后 POST /auth/<provider>/callback 换 token。
 //
 // 注意：code 必须原样透传，不能在此处 Exchange——授权码一次性，
 // 后端若先消耗，前端 POST 再换必然 invalid_grant。
-func (s *authServiceImpl) OAuthCallback(ctx context.Context, providerName, code, device string) (string, error) {
+func (s *authServiceImpl) OAuthCallback(ctx context.Context, providerName, code, device, deviceID string) (string, error) {
 	p := s.oauthReg.Get(providerName)
 	if p == nil {
 		return "", errUnknownOAuthProvider
@@ -365,17 +363,20 @@ func (s *authServiceImpl) OAuthCallback(ctx context.Context, providerName, code,
 	}
 	// provider 用路由路径值（providerName）而非 p.Name()，
 	// 保证前端按 URL 中的 provider 原样 POST 回 /auth/<provider>/callback。
-	return buildOAuthRedirectURL(frontendURL, code, resolveDevice(device), providerName), nil
+	return buildOAuthRedirectURL(frontendURL, code, resolveDevice(device), normalizeDeviceID(deviceID), providerName), nil
 }
 
-// buildOAuthRedirectURL 拼接前端跳转 URL（携带 code + device + provider）。
+// buildOAuthRedirectURL 拼接前端跳转 URL（携带 code + device + device_id + provider；device_id 为空时省略）。
 //
 // 兼容 frontend_redirect_url 已含 query（补 &）或含 hash 路由片段
 // （query 必须插在 # 之前，否则 location.search 读不到）。
-func buildOAuthRedirectURL(frontendURL, code, device, provider string) string {
+func buildOAuthRedirectURL(frontendURL, code, device, deviceID, provider string) string {
 	query := "code=" + url.QueryEscape(code) +
-		"&device=" + url.QueryEscape(device) +
-		"&provider=" + url.QueryEscape(provider)
+		"&device=" + url.QueryEscape(device)
+	if deviceID != "" {
+		query += "&device_id=" + url.QueryEscape(deviceID)
+	}
+	query += "&provider=" + url.QueryEscape(provider)
 
 	base, fragment, hasFragment := strings.Cut(frontendURL, "#")
 	sep := "?"
@@ -397,9 +398,9 @@ func buildOAuthRedirectURL(frontendURL, code, device, provider string) string {
 //  3. 按 provider ID 或 email 查库；
 //  4. 不存在则创建（含头像）；
 //  5. 若 provider ID 缺失则补写；
-//  6. 清旧 token + 登录 + 写会话；
+//  6. 在请求的终端上登录（只替换该终端自己的旧 token）+ 写会话 + 登记会话索引；
 //  7. 返回 token + 剩余有效期 + 用户信息（JSON，不再走 URL）。
-func (s *authServiceImpl) OAuthExchange(ctx context.Context, providerName, code, device string) (*OAuthLoginResult, error) {
+func (s *authServiceImpl) OAuthExchange(ctx context.Context, providerName, code string, terminal TerminalInput) (*OAuthLoginResult, error) {
 	p := s.oauthReg.Get(providerName)
 	if p == nil {
 		return nil, errUnknownOAuthProvider
@@ -436,15 +437,8 @@ func (s *authServiceImpl) OAuthExchange(ctx context.Context, providerName, code,
 		return nil, err
 	}
 
-	userIDStr := user.ID
-	device = resolveDevice(device)
-
-	_ = s.session.Logout(userIDStr, device)
-	authToken, err := s.session.Login(userIDStr, device)
+	authToken, deviceID, err := s.issueToken(ctx, user, terminal)
 	if err != nil {
-		return nil, err
-	}
-	if err := s.session.SetSessionUser(userIDStr, user.ToSessionUser()); err != nil {
 		return nil, err
 	}
 
@@ -458,10 +452,11 @@ func (s *authServiceImpl) OAuthExchange(ctx context.Context, providerName, code,
 	}
 
 	return &OAuthLoginResult{
-		User:   user.ToSessionUser(),
-		Token:  authToken,
-		Expire: expire,
-		Email:  user.Email,
+		User:     user.ToSessionUser(),
+		Token:    authToken,
+		Expire:   expire,
+		Email:    user.Email,
+		DeviceID: deviceID,
 	}, nil
 }
 
@@ -490,9 +485,17 @@ func (s *authServiceImpl) findOrCreateOAuthUser(p domain.OAuthProvider, info *do
 	return user, nil
 }
 
-// LogoutByToken 按 token 注销。
-func (s *authServiceImpl) LogoutByToken(ctx context.Context, token string) error {
-	return s.session.LogoutByToken(token)
+// LogoutByToken 注销当前 token 并移出会话索引（索引删除 best-effort，残留的失效 token 由下次登录清理）。
+func (s *authServiceImpl) LogoutByToken(ctx context.Context, loginID, token string) error {
+	if err := s.session.LogoutByToken(token); err != nil {
+		return err
+	}
+	if loginID != "" {
+		if err := s.index.Remove(ctx, loginID, token); err != nil {
+			logger.Log.Warn("session index remove on logout failed", zap.String("user_id", loginID), zap.Error(err))
+		}
+	}
+	return nil
 }
 
 // SendPasswordResetCode 发送找回密码验证码。
@@ -569,7 +572,7 @@ func (s *authServiceImpl) VerifyPasswordResetCode(ctx context.Context, input Ver
 //  2. 校验邮箱是否已通过找回密码验证码校验；
 //  3. 查邮箱（不存在 → 404；被禁 → 403）；
 //  4. 更新密码哈希；
-//  5. 踢下线该用户所有会话（best-effort，失败仅记日志）；
+//  5. 注销该用户全部终端（best-effort，失败仅记日志）；
 //  6. 清理已校验标记。
 //
 // 不自动登录：用户用新密码走 /auth/login。
@@ -605,9 +608,9 @@ func (s *authServiceImpl) ResetPassword(ctx context.Context, input ResetPassword
 		return err
 	}
 
-	// 踢下线所有设备会话。密码已更新成功，kickout 失败仅记日志不阻断
-	// （与 Login 的 hash upgrade 失败处理一致）。
-	if kerr := s.session.Kickout(user.ID); kerr != nil {
+	// 注销全部终端（含上线前按 web / mobile 签发的旧 token）。密码已更新成功，
+	// 失败仅记日志不阻断（与 Login 的 hash upgrade 失败处理一致）。
+	if kerr := s.kickoutAllTerminals(ctx, user.ID); kerr != nil {
 		logger.Log.Warn("failed to kickout sessions for user " + user.ID + " after password reset: " + kerr.Error())
 	}
 
@@ -618,7 +621,7 @@ func (s *authServiceImpl) ResetPassword(ctx context.Context, input ResetPassword
 // oauthCallTimeout 限制单次 OAuth 回调中出站调用（换 token + 拉用户信息）的总耗时。
 const oauthCallTimeout = 15 * time.Second
 
-// oauthStateDelimiter 用于 OAuth state 中编码 device 的分隔符（与旧 controller 一致）。
+// oauthStateDelimiter 用于 OAuth state 中编码 device / device_id 的分隔符（与旧 controller 一致）。
 const oauthStateDelimiter = ":"
 
 // classifyOAuthError 把 OAuth provider 的底层网络/超时错误归一为
@@ -646,27 +649,25 @@ func classifyOAuthError(err error) error {
 	return err
 }
 
-// resolveDevice 返回有效 device 值，空值/非法值默认为 web。
+// resolveDevice 返回有效终端类型，空值/非法值默认为 web。
 func resolveDevice(device string) string {
-	const (
-		deviceMobile = "mobile"
-		deviceWeb    = "web"
-	)
-	if device == deviceMobile || device == deviceWeb {
+	if device == domain.DeviceTypeMobile || device == domain.DeviceTypeWeb {
 		return device
 	}
-	return deviceWeb
+	return domain.DeviceTypeWeb
 }
 
-// ParseOAuthState 从 OAuth state 中解析 device（供 handler 调用）。
+// ParseOAuthState 从 OAuth state 中解析 device 与 device_id（供 handler 调用）。
 //
-// 与旧 controller.Callback 中的解析逻辑一致：
-//
-//	parts := strings.SplitN(state, ":", 3)
-//	device = parts[1]
-func ParseOAuthState(state string) string {
-	if parts := strings.SplitN(state, oauthStateDelimiter, 3); len(parts) >= 2 {
-		return resolveDevice(parts[1])
+// state 格式见 OAuthLoginURL："device:<device>:<provider>-token[:<device_id>]"。
+// 旧格式（没有第 4 段）或 device_id 不合法时 deviceID 返回空串，由 OAuthExchange 生成新的。
+func ParseOAuthState(state string) (device, deviceID string) {
+	parts := strings.SplitN(state, oauthStateDelimiter, 4)
+	if len(parts) >= 2 {
+		device = parts[1]
 	}
-	return resolveDevice("")
+	if len(parts) == 4 {
+		deviceID = normalizeDeviceID(parts[3])
+	}
+	return resolveDevice(device), deviceID
 }

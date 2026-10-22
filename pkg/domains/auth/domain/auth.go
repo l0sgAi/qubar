@@ -68,6 +68,11 @@ type SaTokenSession interface {
 	// 用于找回密码成功后强制吊销旧 token，防止旧会话残留。
 	// 逐个 token 注销，部分失败时继续处理其余 token 并汇总返回错误；没有任何会话时返回 nil。
 	Kickout(loginID string) error
+	// KickoutByToken 踢下线单个 token：之后用它请求会得到"被踢下线"状态。
+	// token 已失效（过期 / 已注销 / 已被踢）时返回错误。
+	KickoutByToken(token string) error
+	// IsTokenAlive 判断 token 是否仍有效（未过期、未注销、未被踢）。只读，不触发自动续期。
+	IsTokenAlive(token string) bool
 	// SetSessionUser 把用户信息写入 loginID 的会话。
 	SetSessionUser(loginID string, user SessionUser) error
 	// GetTokenTimeout 返回 token 的剩余有效期（秒）。

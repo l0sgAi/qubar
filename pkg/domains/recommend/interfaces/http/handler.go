@@ -62,7 +62,7 @@ func (h *Handler) GetHomeFeed(c appctx.AppContext) {
 			return
 		}
 		logger.Log.Error("home feed error: " + err.Error())
-		httputil.InternalError(c, "Failed to get home feed")
+		httputil.SearchError(c, err, "Failed to get home feed")
 		return
 	}
 	httputil.Success(c, result)

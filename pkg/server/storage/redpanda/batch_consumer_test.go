@@ -236,3 +236,13 @@ func TestPostInteractionBuf_DedupesByUserPostKeepingMax(t *testing.T) {
 		t.Fatalf("got %+v, want weight=5 ts=300", got)
 	}
 }
+
+func TestFirstFlushDelayWithinInterval(t *testing.T) {
+	for _, interval := range []time.Duration{time.Nanosecond, time.Second, 15 * time.Minute} {
+		for range 1000 {
+			if d := firstFlushDelay(interval); d <= 0 || d > interval {
+				t.Fatalf("firstFlushDelay(%v) = %v, want (0, %v]", interval, d, interval)
+			}
+		}
+	}
+}

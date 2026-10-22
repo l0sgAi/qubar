@@ -131,7 +131,7 @@ func (h *Handler) SearchUsers(c appctx.AppContext) {
 	result, err := h.svc.Search(c, req.Keyword, size, searchAfter, circleID)
 	if err != nil {
 		logger.Log.Error("Failed to search users: " + err.Error())
-		httputil.InternalError(c, "Failed to search users")
+		httputil.SearchError(c, err, "Failed to search users")
 		return
 	}
 	httputil.Success(c, result)

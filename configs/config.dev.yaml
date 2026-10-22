@@ -64,6 +64,7 @@ sa_token:
   active_timeout: 1800 # 30分钟活跃检测(秒)
   is_concurrent: true # 允许并发登录
   is_share: false # 不共享session
+  max_login_count: 10 # 同一账号同时在线的终端上限，超出时注销最早登录的终端
 
 # AWS S3 对象存储配置
 s3:

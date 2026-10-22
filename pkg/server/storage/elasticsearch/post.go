@@ -166,7 +166,7 @@ func SearchPosts(ctx context.Context, keyword string, circleID uuid.UUID, size i
 	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.IsError() {
-		return nil, fmt.Errorf("elasticsearch search error: %s", res.String())
+		return nil, responseError("elasticsearch search error", res)
 	}
 
 	return parsePostSearchResponse(res, size)
@@ -217,7 +217,7 @@ func SearchPostsByIDs(ctx context.Context, postIDs []string, size int) (*PostLis
 	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.IsError() {
-		return nil, fmt.Errorf("elasticsearch search error: %s", res.String())
+		return nil, responseError("elasticsearch search error", res)
 	}
 
 	return parsePostSearchResponse(res, size)
@@ -283,7 +283,7 @@ func SearchPostsByIDsAndKeyword(ctx context.Context, postIDs []string, keyword s
 	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.IsError() {
-		return nil, fmt.Errorf("elasticsearch search error: %s", res.String())
+		return nil, responseError("elasticsearch search error", res)
 	}
 
 	return parsePostSearchResponse(res, size)
@@ -418,7 +418,7 @@ func searchUserPostsInternal(ctx context.Context, userID uuid.UUID, keyword stri
 	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.IsError() {
-		return nil, fmt.Errorf("elasticsearch search error: %s", res.String())
+		return nil, responseError("elasticsearch search error", res)
 	}
 
 	return parsePostSearchResponse(res, size)
@@ -642,7 +642,7 @@ func AggregateActiveCircles(ctx context.Context, size, offset int) (*ActiveCircl
 	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.IsError() {
-		return nil, fmt.Errorf("elasticsearch aggregate error: %s", res.String())
+		return nil, responseError("elasticsearch aggregate error", res)
 	}
 
 	return parseActiveCirclesResponse(res)
@@ -784,7 +784,7 @@ func SearchHomeFeed(ctx context.Context, sort string, circleIDs []uuid.UUID, siz
 	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.IsError() {
-		return nil, fmt.Errorf("elasticsearch search error: %s", res.String())
+		return nil, responseError("elasticsearch search error", res)
 	}
 
 	return parsePostSearchResponse(res, size)
@@ -876,7 +876,7 @@ func SearchCirclePosts(ctx context.Context, circleID uuid.UUID, sortType int, si
 	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.IsError() {
-		return nil, fmt.Errorf("elasticsearch search error: %s", res.String())
+		return nil, responseError("elasticsearch search error", res)
 	}
 
 	return parsePostSearchResponse(res, size)
