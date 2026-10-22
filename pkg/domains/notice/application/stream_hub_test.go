@@ -34,28 +34,72 @@ func recvEvent(ch <-chan StreamEvent, timeout time.Duration) (StreamEvent, bool)
 	}
 }
 
-func TestStreamHubAddLimit(t *testing.T) {
+// isClosed 判断 Evicted 是否已关闭（不阻塞）。
+func isClosed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
+}
+
+func TestStreamHubAddEvictsOldest(t *testing.T) {
 	var count atomic.Int64
 	h := newTestHub(t, 2, staticReader(&count))
 	uid := uuid.New()
 
-	conn1, _, ok := h.Add(uid)
+	conn1, ok := h.Add(uid)
 	if !ok {
 		t.Fatal("first Add should succeed")
 	}
-	if _, _, ok := h.Add(uid); !ok {
+	conn2, ok := h.Add(uid)
+	if !ok {
 		t.Fatal("second Add should succeed")
 	}
-	if _, _, ok := h.Add(uid); ok {
-		t.Fatal("third Add should be rejected (max 2)")
+
+	// 超限（max 2）：新连接照常建立，最旧的 conn1 被踢，conn2 不受影响。
+	conn3, ok := h.Add(uid)
+	if !ok {
+		t.Fatal("third Add should succeed by evicting the oldest")
+	}
+	if !isClosed(conn1.Evicted) {
+		t.Fatal("oldest connection should be evicted")
+	}
+	if isClosed(conn2.Evicted) || isClosed(conn3.Evicted) {
+		t.Fatal("only the oldest connection should be evicted")
 	}
 
-	// Remove 后名额释放；其他用户不受影响。
-	h.Remove(uid, conn1)
-	if _, _, ok := h.Add(uid); !ok {
+	// 被踢连接的 handler 退出时 Remove 是 no-op，不误删其他连接。
+	h.Remove(uid, conn1.ID)
+	if got := len(h.users[uid].conns); got != 2 {
+		t.Fatalf("conns after removing evicted = %d, want 2", got)
+	}
+
+	// 推送只投递给在册连接，不再投递给被踢连接。
+	count.Store(4)
+	h.Publish(uid)
+	h.sweep()
+	for name, c := range map[string]StreamConn{"conn2": conn2, "conn3": conn3} {
+		if ev, ok := recvEvent(c.Events, time.Second); !ok || ev.Count != 4 {
+			t.Fatalf("%s should receive count 4, got %+v ok=%v", name, ev, ok)
+		}
+	}
+	if _, ok := recvEvent(conn1.Events, 50*time.Millisecond); ok {
+		t.Fatal("evicted connection should not receive events")
+	}
+
+	// Remove 正常释放名额：再加一条不踢人。
+	h.Remove(uid, conn2.ID)
+	if _, ok := h.Add(uid); !ok {
 		t.Fatal("Add after Remove should succeed")
 	}
-	if _, _, ok := h.Add(uuid.New()); !ok {
+	if isClosed(conn3.Evicted) {
+		t.Fatal("Add after Remove should not evict anyone")
+	}
+	// 其他用户不受影响。
+	other, ok := h.Add(uuid.New())
+	if !ok || isClosed(other.Evicted) {
 		t.Fatal("Add for another user should succeed")
 	}
 }
@@ -66,7 +110,7 @@ func TestStreamHubCoalesceAndDedup(t *testing.T) {
 	h := newTestHub(t, 5, staticReader(&count))
 	uid := uuid.New()
 
-	_, ch, ok := h.Add(uid)
+	conn, ok := h.Add(uid)
 	if !ok {
 		t.Fatal("Add should succeed")
 	}
@@ -87,7 +131,7 @@ func TestStreamHubCoalesceAndDedup(t *testing.T) {
 	h.Publish(uid)
 	h.sweep()
 
-	ev, ok := recvEvent(ch, time.Second)
+	ev, ok := recvEvent(conn.Events, time.Second)
 	if !ok {
 		t.Fatal("expected one event after sweep")
 	}
@@ -98,14 +142,14 @@ func TestStreamHubCoalesceAndDedup(t *testing.T) {
 		t.Fatalf("event id should be set and differ from first: %q", ev.ID)
 	}
 	// 无第二条（窗口合并）。
-	if _, ok := recvEvent(ch, 50*time.Millisecond); ok {
+	if _, ok := recvEvent(conn.Events, 50*time.Millisecond); ok {
 		t.Fatal("coalesce window should merge into one event")
 	}
 
 	// lastSent 去重：值未变，Publish 后 sweep 不推。
 	h.Publish(uid)
 	h.sweep()
-	if _, ok := recvEvent(ch, 50*time.Millisecond); ok {
+	if _, ok := recvEvent(conn.Events, 50*time.Millisecond); ok {
 		t.Fatal("unchanged count should not be pushed (lastSent dedup)")
 	}
 
@@ -113,7 +157,7 @@ func TestStreamHubCoalesceAndDedup(t *testing.T) {
 	count.Store(2)
 	h.Publish(uid)
 	h.sweep()
-	ev2, ok := recvEvent(ch, time.Second)
+	ev2, ok := recvEvent(conn.Events, time.Second)
 	if !ok {
 		t.Fatal("expected event after count change")
 	}
@@ -135,7 +179,7 @@ func TestStreamHubPublishWithoutConn(t *testing.T) {
 	h.Publish(uid)
 	h.sweep()
 
-	_, ch, _ := h.Add(uid)
+	conn, _ := h.Add(uid)
 	first, err := h.Snapshot(context.Background(), uid)
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +189,7 @@ func TestStreamHubPublishWithoutConn(t *testing.T) {
 	}
 	// sweep 不应再向新连接补推同值。
 	h.sweep()
-	if _, ok := recvEvent(ch, 50*time.Millisecond); ok {
+	if _, ok := recvEvent(conn.Events, 50*time.Millisecond); ok {
 		t.Fatal("no event expected without new change")
 	}
 }
@@ -157,7 +201,7 @@ func TestStreamHubStopIdempotent(t *testing.T) {
 	h.Stop()
 	h.Stop() // 二次调用不 panic
 	// Stop 后 Add 拒绝。
-	if _, _, ok := h.Add(uuid.New()); ok {
+	if _, ok := h.Add(uuid.New()); ok {
 		t.Fatal("Add after Stop should be rejected")
 	}
 }

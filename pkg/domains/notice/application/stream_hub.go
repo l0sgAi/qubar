@@ -29,6 +29,13 @@ type StreamEvent struct {
 	Count int64  // 未读数全量（与 GET /notice/unread-count 同源）
 }
 
+// StreamConn 一条已注册的推送连接。
+type StreamConn struct {
+	ID      uint64
+	Events  <-chan StreamEvent // 未读数事件
+	Evicted <-chan struct{}    // 超限时被同用户新连接挤掉（踢最旧）后关闭，handler 收到即通知客户端并断连
+}
+
 // CountReader 读取用户当前未读数全量。注入值 = NoticeService.GetUnreadCount（缓存优先，
 // miss 回源 DB 回填），推送值与轮询接口语义完全一致。
 type CountReader func(ctx context.Context, userID uuid.UUID) (int64, error)
@@ -37,9 +44,10 @@ type CountReader func(ctx context.Context, userID uuid.UUID) (int64, error)
 type StreamHub interface {
 	// SetCountReader 注入未读数读取器（composition 装配时调用）。
 	SetCountReader(f CountReader)
-	// Add 注册一条连接。超过 per-user 上限返回 ok=false（调用方拒新 429）。
-	Add(userID uuid.UUID) (connID uint64, ch <-chan StreamEvent, ok bool)
-	// Remove 注销连接（handler 退出时调用）。不 close channel：
+	// Add 注册一条连接。达到 per-user 上限时踢掉该用户最旧的连接（关闭其 Evicted）腾出名额，
+	// 新连接总能建立；仅 hub 已停止时返回 ok=false。
+	Add(userID uuid.UUID) (conn StreamConn, ok bool)
+	// Remove 注销连接（handler 退出时调用；已被踢的连接为 no-op）。不 close 事件 channel：
 	// sweeper 投递快照 channel 列表后在锁外发送，close 会与投递产生 send-on-closed 竞态；
 	// channel 无引用后由 GC 回收。
 	Remove(userID uuid.UUID, connID uint64)
@@ -57,13 +65,19 @@ type StreamHub interface {
 // connChanCap 单连接事件缓冲。推送值是全量（新值取代旧值），满时丢最旧即可。
 const connChanCap = 4
 
+// hubConn hub 内单连接状态。
+type hubConn struct {
+	ch      chan StreamEvent
+	evicted chan struct{} // 仅在锁内、从 conns 摘除时关闭一次（无人向其发送，close 无竞态）
+}
+
 // userEntry 单用户推送状态。
 type userEntry struct {
-	conns    map[uint64]chan StreamEvent
-	dirty    bool   // 未读数已变更、待 sweeper 推送
-	lastSent int64  // 最近一次推送值（去重：未变不推）
-	hasSent  bool   // 是否已推过（区分 lastSent 零值与真实 0）
-	seq      uint64 // 事件序号（事件 id 第二段，per 用户单调递增）
+	conns    map[uint64]*hubConn // connID 全局单调递增：最小者即最旧连接
+	dirty    bool                // 未读数已变更、待 sweeper 推送
+	lastSent int64               // 最近一次推送值（去重：未变不推）
+	hasSent  bool                // 是否已推过（区分 lastSent 零值与真实 0）
+	seq      uint64              // 事件序号（事件 id 第二段，per 用户单调递增）
 }
 
 type streamHub struct {
@@ -103,24 +117,41 @@ func (h *streamHub) SetCountReader(f CountReader) {
 	h.mu.Unlock()
 }
 
-func (h *streamHub) Add(userID uuid.UUID) (uint64, <-chan StreamEvent, bool) {
+func (h *streamHub) Add(userID uuid.UUID) (StreamConn, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.stopped {
-		return 0, nil, false
+		return StreamConn{}, false
 	}
 	e := h.users[userID]
 	if e == nil {
-		e = &userEntry{conns: make(map[uint64]chan StreamEvent)}
+		e = &userEntry{conns: make(map[uint64]*hubConn)}
 		h.users[userID] = e
 	}
-	if len(e.conns) >= h.maxConns {
-		return 0, nil, false
+	// 超限踢最旧（#127）：最旧连接最可能是已断开但未被感知的僵尸（半开 TCP / 代理未透传断开），
+	// 拒新会让浏览器 EventSource 遇非 200 永久放弃重连。
+	for len(e.conns) >= h.maxConns {
+		h.evictOldestLocked(e)
 	}
 	connID := h.connSeq.Add(1)
-	ch := make(chan StreamEvent, connChanCap)
-	e.conns[connID] = ch
-	return connID, ch, true
+	c := &hubConn{
+		ch:      make(chan StreamEvent, connChanCap),
+		evicted: make(chan struct{}),
+	}
+	e.conns[connID] = c
+	return StreamConn{ID: connID, Events: c.ch, Evicted: c.evicted}, true
+}
+
+// evictOldestLocked 摘除并通知该用户 connID 最小（最旧）的连接。调用方持锁且 conns 非空。
+func (h *streamHub) evictOldestLocked(e *userEntry) {
+	var oldest uint64
+	for id := range e.conns {
+		if oldest == 0 || id < oldest {
+			oldest = id
+		}
+	}
+	close(e.conns[oldest].evicted)
+	delete(e.conns, oldest)
 }
 
 func (h *streamHub) Remove(userID uuid.UUID, connID uint64) {
@@ -170,7 +201,7 @@ func (h *streamHub) Snapshot(ctx context.Context, userID uuid.UUID) (StreamEvent
 	defer h.mu.Unlock()
 	e := h.users[userID]
 	if e == nil {
-		e = &userEntry{conns: make(map[uint64]chan StreamEvent)}
+		e = &userEntry{conns: make(map[uint64]*hubConn)}
 		h.users[userID] = e
 	}
 	e.seq++
@@ -250,8 +281,8 @@ func (h *streamHub) deliver(uid uuid.UUID, count int64) {
 	e.hasSent = true
 	ev := StreamEvent{ID: streamEventID(e.seq), Count: count}
 	conns := make([]chan StreamEvent, 0, len(e.conns))
-	for _, ch := range e.conns {
-		conns = append(conns, ch)
+	for _, c := range e.conns {
+		conns = append(conns, c.ch)
 	}
 	h.mu.Unlock()
 
