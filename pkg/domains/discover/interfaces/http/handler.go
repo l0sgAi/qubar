@@ -78,6 +78,6 @@ func writeDiscoverError(c appctx.AppContext, err error) {
 		httputil.BadRequest(c, err.Error())
 	default:
 		logger.Log.Error("discover error: " + err.Error())
-		httputil.InternalError(c, "Failed to get discover board")
+		httputil.SearchError(c, err, "Failed to get discover board")
 	}
 }

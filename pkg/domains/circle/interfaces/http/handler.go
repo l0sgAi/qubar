@@ -88,7 +88,7 @@ func (h *Handler) GetCircles(c appctx.AppContext) {
 	result, err := h.svc.SearchCircles(c, req.Keyword, size, searchAfter)
 	if err != nil {
 		logger.Log.Error("Failed to search circles: " + err.Error())
-		httputil.InternalError(c, "Failed to search circles")
+		httputil.SearchError(c, err, "Failed to search circles")
 		return
 	}
 	httputil.Success(c, result)
@@ -273,7 +273,7 @@ func (h *Handler) GetCirclePosts(c appctx.AppContext) {
 	result, err := h.svc.GetCirclePosts(c, circleID, req.Type, size, searchAfter)
 	if err != nil {
 		logger.Log.Error("Failed to search circle posts: " + err.Error())
-		httputil.InternalError(c, "Failed to search circle posts")
+		httputil.SearchError(c, err, "Failed to search circle posts")
 		return
 	}
 	httputil.Success(c, result)
@@ -303,7 +303,7 @@ func (h *Handler) GetActiveCircles(c appctx.AppContext) {
 	result, err := h.svc.ListActiveCircles(c, size, offset)
 	if err != nil {
 		logger.Log.Error("Failed to list active circles: " + err.Error())
-		httputil.InternalError(c, "Failed to list active circles")
+		httputil.SearchError(c, err, "Failed to list active circles")
 		return
 	}
 	httputil.Success(c, result)
@@ -328,7 +328,7 @@ func (h *Handler) GetRandomCircles(c appctx.AppContext) {
 	result, err := h.svc.ListRandomCircles(c, size)
 	if err != nil {
 		logger.Log.Error("Failed to list random circles: " + err.Error())
-		httputil.InternalError(c, "Failed to list random circles")
+		httputil.SearchError(c, err, "Failed to list random circles")
 		return
 	}
 	httputil.Success(c, result)
