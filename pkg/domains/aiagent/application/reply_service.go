@@ -654,6 +654,7 @@ func (s *replyServiceImpl) runClassifier(
 	promptTokens, completionTokens *int,
 ) error {
 	judgeParams := copyLLMParams(agent.LLMParams)
+	// 不接受采样参数的模型（如 anthropic 新一代）由 infrastructure 丢弃该覆盖（#140）。
 	judgeParams["temperature"] = float64(0)
 	judgeParams["max_tokens"] = float64(judgeMaxTokens)
 	judgeCtx, judgeCancel := context.WithTimeout(ctx, replyTimeout())

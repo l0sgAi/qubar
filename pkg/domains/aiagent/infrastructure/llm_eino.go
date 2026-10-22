@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"interestBar/pkg/conf"
@@ -119,13 +122,50 @@ func (l *llmEino) newClaudeModel(req agentapp.LLMRequest, httpClient *http.Clien
 	if v, ok := paramInt(req.Params, "max_tokens"); ok {
 		cfg.MaxTokens = v
 	}
-	if v, ok := paramFloat(req.Params, "temperature"); ok {
-		cfg.Temperature = float32Ptr(v)
-	}
-	if v, ok := paramFloat(req.Params, "top_p"); ok {
-		cfg.TopP = float32Ptr(v)
-	}
+	cfg.Temperature, cfg.TopP = claudeSampling(req.Model, req.Params)
 	return claude.NewChatModel(context.Background(), cfg)
+}
+
+// claudeGenRe 从模型名提取 Claude 家族与版本号：claude-haiku-5-5 → (5, 5)、
+// claude-opus-4-1-20250805 → (4, 1)、claude-sonnet-4-20250514 → (4, 无)。
+// 未锚定开头，兼容 anthropic/claude-xxx 这类中转站前缀。
+var claudeGenRe = regexp.MustCompile(`claude-(?:opus|sonnet|haiku)-(\d+)(?:-(\d{1,2}))?(?:$|[^0-9])`)
+
+// claudeSampling 按模型代际决定发送的采样参数（#140）：
+//   - 新一代（Opus 4.7+ / Sonnet、Haiku 5+ / Fable / Mythos）不接受 temperature、top_p，
+//     传了即 400，一律不发；分类器覆盖的 temperature=0 也在此被丢弃；
+//   - 旧一代不允许同时传两者（Opus 4.1 起），两者都配时只保留 temperature；
+//   - 非 claude-* 模型名（第三方 Anthropic 兼容端点）同样适用上一条，其余原样透传。
+func claudeSampling(modelName string, params map[string]interface{}) (temperature, topP *float32) {
+	if !claudeAcceptsSampling(modelName) {
+		return nil, nil
+	}
+	if v, ok := paramFloat(params, "temperature"); ok {
+		return float32Ptr(v), nil
+	}
+	if v, ok := paramFloat(params, "top_p"); ok {
+		return nil, float32Ptr(v)
+	}
+	return nil, nil
+}
+
+// claudeAcceptsSampling 模型是否仍接受 temperature / top_p。无法识别的模型名按接受处理
+// （第三方兼容端点的自有模型），只拦截可确定不接受的 Claude 新一代模型。
+func claudeAcceptsSampling(modelName string) bool {
+	name := strings.ToLower(modelName)
+	if strings.Contains(name, "claude-fable") || strings.Contains(name, "claude-mythos") {
+		return false
+	}
+	m := claudeGenRe.FindStringSubmatch(name)
+	if m == nil {
+		return true
+	}
+	major, _ := strconv.Atoi(m[1])
+	minor := 0
+	if m[2] != "" {
+		minor, _ = strconv.Atoi(m[2])
+	}
+	return major < 4 || (major == 4 && minor < 7)
 }
 
 // llmTimeout 单次 LLM 调用超时（配置兜底，与 application.replyTimeout 同源）。
