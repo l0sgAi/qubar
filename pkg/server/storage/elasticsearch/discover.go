@@ -136,7 +136,7 @@ func sampleIDs(ctx context.Context, searchQuery map[string]interface{}, indexNam
 	defer func() { _ = res.Body.Close() }() // best-effort：关闭响应体失败不影响结果
 
 	if res.IsError() {
-		return nil, fmt.Errorf("elasticsearch discover sample error: %s", res.String())
+		return nil, responseError("elasticsearch discover sample error", res)
 	}
 
 	var searchResult map[string]interface{}
