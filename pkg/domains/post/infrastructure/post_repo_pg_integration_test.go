@@ -209,6 +209,19 @@ func TestPostRepo_LikeAndCollectLookups(t *testing.T) {
 		t.Fatalf("BatchIsCollected = %v, want only %s", collectedSet, collected)
 	}
 
+	// 全量装载（#129）：只列有效行，带交互时间，受 limit 约束
+	likes, err := repo.ListActiveLikes(ctx, user, 10)
+	if err != nil || len(likes) != 1 || likes[0].ID != liked || likes[0].At.IsZero() {
+		t.Fatalf("ListActiveLikes = %+v, %v; want only %s", likes, err, liked)
+	}
+	collects, err := repo.ListActiveCollects(ctx, user, 10)
+	if err != nil || len(collects) != 1 || collects[0].ID != collected {
+		t.Fatalf("ListActiveCollects = %+v, %v; want only %s", collects, err, collected)
+	}
+	if none, err := repo.ListActiveLikes(ctx, user, 0); err != nil || len(none) != 0 {
+		t.Fatalf("ListActiveLikes(limit 0) = %+v, %v", none, err)
+	}
+
 	// 其他用户看不到
 	if ok, err := repo.IsLiked(ctx, sharedomain.NewID(), liked); err != nil || ok {
 		t.Fatalf("IsLiked(other user) = %v, %v; want false", ok, err)

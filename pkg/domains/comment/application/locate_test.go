@@ -64,6 +64,10 @@ func (f *fakeLocateRepo) BatchCheckLiked(ctx context.Context, userID uuid.UUID, 
 	return map[uuid.UUID]bool{}, nil
 }
 
+func (f *fakeLocateRepo) ListActiveLikes(ctx context.Context, userID uuid.UUID, limit int) ([]domain.CommentLike, error) {
+	return nil, nil
+}
+
 func (f *fakeLocateRepo) CreateMentions(ctx context.Context, commentID uuid.UUID, userIDs []uuid.UUID) error {
 	return nil
 }

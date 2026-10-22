@@ -3,6 +3,7 @@ package domain
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -27,6 +28,10 @@ type PostRepository interface {
 	// BatchIsCollected 批量检查用户收藏了哪些帖子（DB 回源用，信息流 is_collected 缓存 miss 时调用）。
 	// 返回已收藏 postID 集合（未收藏的不在 map 中）。
 	BatchIsCollected(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (map[uuid.UUID]bool, error)
+	// ListActiveLikes 列出用户的有效点赞（最多 limit 条，新→旧），供点赞 ZSET 首次全量装载（#129）。
+	ListActiveLikes(ctx context.Context, userID uuid.UUID, limit int) ([]InteractionEntry, error)
+	// ListActiveCollects 列出用户的有效收藏（最多 limit 条，新→旧），供收藏 ZSET 首次全量装载（#129）。
+	ListActiveCollects(ctx context.Context, userID uuid.UUID, limit int) ([]InteractionEntry, error)
 	// IncrCommentCount 同步递增帖子评论计数（DB UPDATE comment_count + 1）。
 	// 供 comment 领域发评论后调用，替代旧的 Redpanda 异步聚合。
 	IncrCommentCount(ctx context.Context, postID uuid.UUID) error
@@ -59,24 +64,43 @@ type PostStatsCache interface {
 	IncrCommentCount(ctx context.Context, postID uuid.UUID) error
 }
 
-// PostLikeCache 帖子点赞状态缓存（Redis ZSET）。
-type PostLikeCache interface {
-	// BatchCheck 批量检查用户是否点赞了多个帖子。
-	// 返回：已点赞的 map、未命中的 postID 列表、error。
-	BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (liked map[uuid.UUID]bool, missed []uuid.UUID, err error)
-	// Backfill 回填 DB 查询确认的点赞状态到 ZSET。
-	Backfill(ctx context.Context, userID uuid.UUID, likedPostIDs []uuid.UUID) error
+// InteractionCheck 用户点赞 / 收藏 ZSET 批查结果。
+type InteractionCheck struct {
+	// Hits 每个查询 postID → 是否命中缓存（已赞 / 已藏）；未命中为 false。
+	Hits map[uuid.UUID]bool
+	// Missed 缓存无法判定、需回源 DB 的 postID；ZSET 已完整加载时为空（缺失即 false）。
+	Missed []uuid.UUID
+	// Loadable 完整加载标记不存在：调用方可一次性全量装载该用户的记录（#129）。
+	// 记录数超过装载上限的用户标记为"超限"，Loadable=false，只能逐批回源。
+	Loadable bool
 }
 
-// PostCollectCache 帖子收藏状态缓存（Redis ZSET，只读）。
-// post 领域仅读取它来判断"当前用户是否收藏"（详情页 is_collected 回显）；
+// InteractionEntry 一条有效的点赞 / 收藏记录（全量装载用）。
+type InteractionEntry struct {
+	ID uuid.UUID // postID
+	At time.Time // 交互时间（ZSET score）
+}
+
+// PostLikeCache 帖子点赞状态缓存（Redis ZSET + 完整加载标记）。
+type PostLikeCache interface {
+	// BatchCheck 批量检查用户是否点赞了多个帖子。
+	BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (InteractionCheck, error)
+	// Backfill 回填 DB 查询确认的点赞状态到 ZSET。
+	Backfill(ctx context.Context, userID uuid.UUID, likedPostIDs []uuid.UUID) error
+	// LoadAll 全量装载用户的点赞并写完整加载标记；complete=false（超过装载上限）只写超限标记。
+	LoadAll(ctx context.Context, userID uuid.UUID, entries []InteractionEntry, complete bool) error
+}
+
+// PostCollectCache 帖子收藏状态缓存（Redis ZSET + 完整加载标记，只读）。
+// post 领域仅读取它来判断"当前用户是否收藏"（详情页 / 信息流 is_collected 回显）；
 // 收藏的原子切换由 collect 领域负责。
 type PostCollectCache interface {
 	// BatchCheck 批量检查用户是否收藏了多个帖子。
-	// 返回：已收藏的 map、未命中的 postID 列表、error。
-	BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (collected map[uuid.UUID]bool, missed []uuid.UUID, err error)
+	BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (InteractionCheck, error)
 	// Backfill 回填 DB 查询确认的收藏状态到 ZSET。
 	Backfill(ctx context.Context, userID uuid.UUID, collectedPostIDs []uuid.UUID) error
+	// LoadAll 全量装载用户的收藏并写完整加载标记；complete=false（超过装载上限）只写超限标记。
+	LoadAll(ctx context.Context, userID uuid.UUID, entries []InteractionEntry, complete bool) error
 }
 
 // PostEventPublisher 帖子事件发布（异步持久化统计到 DB）。

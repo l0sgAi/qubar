@@ -19,6 +19,7 @@ import (
 const likeSetScript = `
 local statsKey = KEYS[1]
 local zsetKey = KEYS[2]
+local loadedKey = KEYS[3]
 local targetId = ARGV[1]
 local now = tonumber(ARGV[2])
 local maxSize = tonumber(ARGV[3])
@@ -36,6 +37,10 @@ if want == 1 then
         local zsetSize = tonumber(redis.call('ZCARD', zsetKey))
         if zsetSize > maxSize then
             redis.call('ZREMRANGEBYRANK', zsetKey, 0, zsetSize - maxSize - 1)
+            -- 淘汰后 ZSET 不再是全量：完整加载标记降为"超限"，此后 miss 回源 DB（#129）
+            if redis.call('EXISTS', loadedKey) == 1 then
+                redis.call('SET', loadedKey, '0', 'KEEPTTL')
+            end
         end
         result = 1
     end
@@ -50,9 +55,10 @@ else
     end
 end
 
--- Renew TTL on both keys
+-- Renew TTL; 完整加载标记与 ZSET 同一脚本内同 TTL 续期（标记不存在时 no-op）
 redis.call('EXPIRE', statsKey, ttl)
 redis.call('EXPIRE', zsetKey, ttl)
+redis.call('EXPIRE', loadedKey, ttl)
 return result
 `
 
@@ -85,20 +91,20 @@ func InitLikeLuaScripts() error {
 
 // SetCommentLike 原子设置评论点赞状态（liked=true 赞 / false 取消）。
 func SetCommentLike(ctx context.Context, userID, commentID uuid.UUID, liked bool) (LikeSetResult, error) {
-	return executeLikeSet(ctx, GetCommentStatsKey(commentID), GetUserCommentLikeListKey(userID), commentID, liked)
+	return executeLikeSet(ctx, GetCommentStatsKey(commentID), GetUserCommentLikeListKey(userID), GetUserCommentLikeLoadedKey(userID), commentID, liked)
 }
 
 // SetPostLike 原子设置帖子点赞状态（liked=true 赞 / false 取消）。
 func SetPostLike(ctx context.Context, userID, postID uuid.UUID, liked bool) (LikeSetResult, error) {
-	return executeLikeSet(ctx, GetPostStatsKey(postID), GetUserPostLikeListKey(userID), postID, liked)
+	return executeLikeSet(ctx, GetPostStatsKey(postID), GetUserPostLikeListKey(userID), GetUserPostLikeLoadedKey(userID), postID, liked)
 }
 
-func executeLikeSet(ctx context.Context, statsKey, zsetKey string, targetID uuid.UUID, liked bool) (LikeSetResult, error) {
+func executeLikeSet(ctx context.Context, statsKey, zsetKey, loadedKey string, targetID uuid.UUID, liked bool) (LikeSetResult, error) {
 	want := 0
 	if liked {
 		want = 1
 	}
-	keys := []string{statsKey, zsetKey}
+	keys := []string{statsKey, zsetKey, loadedKey}
 	// targetId 以 UUID 字符串形式作为 ARGV 传入(Lua 中 ZADD/ZSCORE 的 member)
 	args := []interface{}{targetID.String(), time.Now().UnixMilli(), likeZsetMaxSize, int64(postStatsTTL.Seconds()), want}
 
@@ -114,79 +120,6 @@ func executeLikeSet(ctx context.Context, statsKey, zsetKey string, targetID uuid
 		return 0, fmt.Errorf("failed to execute like set: %w", err)
 	}
 	return LikeSetResult(result), nil
-}
-
-// BatchCheckCommentLiked 批量检查用户是否点赞了多条评论
-// ZMScore 对不存在的成员返回 float64(0)，由于我们的 score 是时间戳(>0)，score==0 等价于不存在
-// ctx 由调用方传入，使超时/取消得以传播（覆盖包级 background ctx）。
-func BatchCheckCommentLiked(ctx context.Context, userID uuid.UUID, commentIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
-	if len(commentIDs) == 0 {
-		return make(map[uuid.UUID]bool), nil
-	}
-
-	zsetKey := GetUserCommentLikeListKey(userID)
-	members := make([]string, len(commentIDs))
-	for i, id := range commentIDs {
-		members[i] = id.String()
-	}
-
-	scores, err := Client.ZMScore(ctx, zsetKey, members...).Result()
-	if err != nil {
-		return nil, fmt.Errorf("failed to batch check comment liked: %w", err)
-	}
-
-	result := make(map[uuid.UUID]bool, len(commentIDs))
-	for i, score := range scores {
-		result[commentIDs[i]] = score > 0
-	}
-
-	// Renew TTL on the ZSET since we accessed it
-	Client.Expire(ctx, zsetKey, postStatsTTL)
-
-	return result, nil
-}
-
-// GetCommentLikedMissIDs 从 BatchCheckCommentLiked 结果中提取缓存未命中的ID列表
-func GetCommentLikedMissIDs(commentIDs []uuid.UUID, likedMap map[uuid.UUID]bool) []uuid.UUID {
-	var missIDs []uuid.UUID
-	for _, id := range commentIDs {
-		if !likedMap[id] {
-			missIDs = append(missIDs, id)
-		}
-	}
-	return missIDs
-}
-
-// BatchCheckPostLiked 批量检查用户是否点赞了多个帖子
-func BatchCheckPostLiked(userID uuid.UUID, postIDs []uuid.UUID) (map[uuid.UUID]bool, []uuid.UUID, error) {
-	if len(postIDs) == 0 {
-		return make(map[uuid.UUID]bool), nil, nil
-	}
-
-	zsetKey := GetUserPostLikeListKey(userID)
-	members := make([]string, len(postIDs))
-	for i, id := range postIDs {
-		members[i] = id.String()
-	}
-
-	scores, err := Client.ZMScore(ctx, zsetKey, members...).Result()
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to batch check post liked: %w", err)
-	}
-
-	result := make(map[uuid.UUID]bool, len(postIDs))
-	var missIDs []uuid.UUID
-	for i, score := range scores {
-		if score > 0 {
-			result[postIDs[i]] = true
-		} else {
-			result[postIDs[i]] = false
-			missIDs = append(missIDs, postIDs[i])
-		}
-	}
-
-	Client.Expire(ctx, zsetKey, postStatsTTL)
-	return result, missIDs, nil
 }
 
 // BackfillCommentLikes 将DB查询确认的点赞状态回填到ZSET
