@@ -32,6 +32,8 @@ type CommentRepository interface {
 	IsLiked(ctx context.Context, userID, commentID uuid.UUID) (bool, error)
 	// BatchCheckLiked 批量检查用户是否点赞了多条评论（DB 回源用）。
 	BatchCheckLiked(ctx context.Context, userID uuid.UUID, commentIDs []uuid.UUID) (map[uuid.UUID]bool, error)
+	// ListActiveLikes 列出用户的有效评论点赞（最多 limit 条，新→旧），供点赞 ZSET 首次全量装载（#129）。
+	ListActiveLikes(ctx context.Context, userID uuid.UUID, limit int) ([]CommentLike, error)
 	// CreateMentions 批量写入评论 @提及 名单（发评论时的最终落库名单）。
 	// 名单须先经 application 层校验（存在/去自/截断）；重复行幂等忽略。
 	CreateMentions(ctx context.Context, commentID uuid.UUID, userIDs []uuid.UUID) error
@@ -48,13 +50,24 @@ type CommentStatsCache interface {
 	Set(ctx context.Context, commentID uuid.UUID, likeCount int) error
 }
 
-// CommentLikeCache 评论点赞状态缓存（Redis ZSET）。
+// LikeCheck 用户评论点赞 ZSET 批查结果。
+type LikeCheck struct {
+	// Hits 每个查询 commentID → 是否命中缓存（已赞）；未命中为 false。
+	Hits map[uuid.UUID]bool
+	// Missed 缓存无法判定、需回源 DB 的 commentID；ZSET 已完整加载时为空（缺失即未赞）。
+	Missed []uuid.UUID
+	// Loadable 完整加载标记不存在：调用方可一次性全量装载该用户的评论点赞（#129）。
+	Loadable bool
+}
+
+// CommentLikeCache 评论点赞状态缓存（Redis ZSET + 完整加载标记）。
 type CommentLikeCache interface {
 	// BatchCheck 批量检查用户是否点赞了多条评论。
-	// 返回：已点赞的 map（未命中的 key 值为 false）、error。
-	BatchCheck(ctx context.Context, userID uuid.UUID, commentIDs []uuid.UUID) (map[uuid.UUID]bool, error)
+	BatchCheck(ctx context.Context, userID uuid.UUID, commentIDs []uuid.UUID) (LikeCheck, error)
 	// Backfill 回填 DB 查询确认的点赞状态到 ZSET。
 	Backfill(ctx context.Context, userID uuid.UUID, likedCommentIDs []uuid.UUID) error
+	// LoadAll 全量装载用户的评论点赞并写完整加载标记；complete=false（超过装载上限）只写超限标记。
+	LoadAll(ctx context.Context, userID uuid.UUID, likes []CommentLike, complete bool) error
 }
 
 // CommentEventPublisher 评论事件发布（异步累积帖子热度 + CF 互动）。

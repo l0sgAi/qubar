@@ -1,5 +1,5 @@
 // notice_stream.go GET /notice/stream 的裸 hertz SSE handler
-// （设计 docs/design/sse-notification-design.md §四#4，决策 D1 拒新 / D2a 心跳复检 / D3a 裸 handler）。
+// （设计 docs/design/sse-notification-design.md §四#4，决策 D1 踢最旧 / D2a 心跳复检 / D3a 裸 handler）。
 //
 // 为何不走 AppContext 路由抽象：SSE 需 hijack response writer 做长连接推送，
 // AppContext 无流式写能力，为其加 SSEWriter() 会污染框架无关抽象（单端点不值得）。
@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"interestBar/pkg/composition/middleware"
 	"interestBar/pkg/conf"
 	noticeapp "interestBar/pkg/domains/notice/application"
 	"interestBar/pkg/logger"
@@ -26,8 +27,9 @@ import (
 
 // ServeNoticeStream 构造 GET /notice/stream handler。
 //
-// 流程：auth（header→query 兜底）→ 429 超限 → 连接建立即推全量（首事件带 retry）
-// → 泵循环（conn chan 推 unread-count / 25s 心跳 + token 复检 → auth-expired）。
+// 流程：auth（header→query 兜底）→ 注册连接（超限踢该用户最旧连接）→ 连接建立即推全量（首事件带 retry）
+// → 泵循环（conn chan 推 unread-count / 25s 心跳 + token 复检 → auth-expired /
+// 被踢 → conn-evicted / 客户端断开即退出释放名额）。
 // 重连带 Last-Event-ID 一律忽略：连接建立即推当前全量，不补历史。
 func ServeNoticeStream(hub noticeapp.StreamHub) app.HandlerFunc {
 	cfg := conf.Config.NoticeStream
@@ -69,13 +71,16 @@ func ServeNoticeStream(hub noticeapp.StreamHub) app.HandlerFunc {
 			return
 		}
 
-		connID, ch, ok := hub.Add(userID)
+		// D1 踢最旧（#127）：超限由 hub 挤掉该用户最旧连接，新连接总能建立；仅 hub 已停止（关停中）失败。
+		conn, ok := hub.Add(userID)
 		if !ok {
-			// D1 拒新：429 JSON 信封，前端自动回落轮询。
-			httputil.TooManyRequests(ac, httputil.MsgTooManyRequests)
+			httputil.ServiceUnavailable(ac)
 			return
 		}
-		defer hub.Remove(userID, connID)
+		defer hub.Remove(userID, conn.ID)
+		// 客户端断开信号（netpoll hup，见 middleware.DetachClientCancel）：断开即退出、释放名额，
+		// 不再等下一次写失败（最长一个心跳周期）。
+		gone := middleware.ClientGone(ctx)
 
 		// 首事件数据在 hijack 前备好，失败仍可返回 JSON 错误。
 		first, err := hub.Snapshot(ctx, userID)
@@ -99,7 +104,13 @@ func ServeNoticeStream(hub noticeapp.StreamHub) app.HandlerFunc {
 		defer ticker.Stop()
 		for {
 			select {
-			case ev := <-ch:
+			case <-gone:
+				return
+			case <-conn.Evicted:
+				// 被同用户新连接挤掉：通知客户端主动 close（不再自动重连，避免互踢），随后断连。
+				_ = w.WriteEvent("", "conn-evicted", nil)
+				return
+			case ev := <-conn.Events:
 				// 与 Snapshot/首事件竞态的重复值兜底去重（hub 内 lastSent 已挡大部分）。
 				if ev.Count == lastSent {
 					continue

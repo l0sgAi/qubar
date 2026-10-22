@@ -71,12 +71,12 @@ func TestPostLikeCache_SetIsIdempotent(t *testing.T) {
 		}
 	}
 
-	liked, missed, err := redispkg.BatchCheckPostLiked(user, []uuid.UUID{postID, sharedomain.NewID()})
+	chk, err := redispkg.BatchCheckPostLiked(ctx, user, []uuid.UUID{postID, sharedomain.NewID()})
 	if err != nil {
 		t.Fatalf("BatchCheckPostLiked: %v", err)
 	}
-	if !liked[postID] || len(missed) != 1 {
-		t.Fatalf("BatchCheckPostLiked = %v missed %v", liked, missed)
+	if !chk.Hits[postID] || len(chk.Missed) != 1 {
+		t.Fatalf("BatchCheckPostLiked = %v missed %v", chk.Hits, chk.Missed)
 	}
 	for _, key := range []string{statsKey, zsetKey} {
 		if ttl := redispkg.Client.TTL(ctx, key).Val(); ttl <= 0 {
@@ -183,7 +183,7 @@ func TestCommentLikeCache_SetIsIdempotent(t *testing.T) {
 		}
 	}
 	checked, err := redispkg.BatchCheckCommentLiked(ctx, user, []uuid.UUID{commentID})
-	if err != nil || checked[commentID] {
-		t.Fatalf("BatchCheckCommentLiked after unlike = %v, %v; want not liked", checked, err)
+	if err != nil || checked.Hits[commentID] {
+		t.Fatalf("BatchCheckCommentLiked after unlike = %v, %v; want not liked", checked.Hits, err)
 	}
 }

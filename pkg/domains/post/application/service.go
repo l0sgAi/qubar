@@ -722,9 +722,9 @@ func (s *postServiceImpl) checkLiked(ctx context.Context, userID, postID uuid.UU
 // 用户点赞 ZSET 有 TTL 与容量上限，miss 既可能是"未赞"也可能是"缓存已丢"，必须回源 DB 区分。
 // 缓存故障直接回源 DB；DB 错误原样返回。
 func (s *postServiceImpl) IsLikedByUser(ctx context.Context, userID, postID uuid.UUID) (bool, error) {
-	likedMap, _, err := s.likeCache.BatchCheck(ctx, userID, []uuid.UUID{postID})
-	if err == nil && likedMap[postID] {
-		return true, nil
+	chk, err := s.likeCache.BatchCheck(ctx, userID, []uuid.UUID{postID})
+	if err == nil && (chk.Hits[postID] || len(chk.Missed) == 0) {
+		return chk.Hits[postID], nil // 命中，或 ZSET 已完整加载（缺失即未赞）
 	}
 	if err != nil {
 		logger.Log.Error("Failed to check post liked from cache, falling back to DB: " + err.Error())
@@ -744,28 +744,34 @@ func (s *postServiceImpl) IsLikedByUser(ctx context.Context, userID, postID uuid
 
 // BatchCheckInteractions 批量查当前用户对帖子的 is_liked / is_collected。
 //
-// 用户 like/collect ZSET 有 TTL 与容量上限，miss 不等于"未赞/未藏"，必须回源 DB 区分；
-// 否则信息流把已赞帖显示为未赞，诱发重复点赞（#46）。best-effort：出错只记日志。
+// 用户 like/collect ZSET 有 TTL 与容量上限，单看 ZSET 时 miss 不等于"未赞/未藏"，必须回源 DB 区分；
+// 否则信息流把已赞帖显示为未赞，诱发重复点赞（#46）。首次回源时全量装载并写完整加载标记，
+// 此后 miss 即 false 不再查 PG（#129）。best-effort：出错只记日志。
 func (s *postServiceImpl) BatchCheckInteractions(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (liked, collected map[uuid.UUID]bool, err error) {
 	if userID == uuid.Nil || len(postIDs) == 0 {
 		return make(map[uuid.UUID]bool), make(map[uuid.UUID]bool), nil
 	}
-	liked = resolveInteraction(ctx, "like", userID, postIDs, s.likeCache, s.repo.BatchIsLiked)
+	liked = resolveInteraction(ctx, "like", userID, postIDs, s.likeCache, s.repo.BatchIsLiked, s.repo.ListActiveLikes)
 	var collectCache interactionCache
 	if s.collectCache != nil {
 		collectCache = s.collectCache
 	}
-	collected = resolveInteraction(ctx, "collect", userID, postIDs, collectCache, s.repo.BatchIsCollected)
+	collected = resolveInteraction(ctx, "collect", userID, postIDs, collectCache, s.repo.BatchIsCollected, s.repo.ListActiveCollects)
 	return liked, collected, nil
 }
 
-// interactionCache PostLikeCache / PostCollectCache 的共同形状（ZSET 批查 + 回填）。
+// interactionFullLoadLimit 首次回源全量装载的上限（#129）。用户有效点赞 / 收藏数 ≤ 该值时一次装入 ZSET
+// 并写完整加载标记；超过则写超限标记，退回逐批 IN 回源。须小于 ZSET 容量（2000），给后续新赞留出淘汰余量。
+const interactionFullLoadLimit = 1000
+
+// interactionCache PostLikeCache / PostCollectCache 的共同形状（ZSET 批查 + 回填 + 全量装载）。
 type interactionCache interface {
-	BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (map[uuid.UUID]bool, []uuid.UUID, error)
+	BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (domain.InteractionCheck, error)
 	Backfill(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) error
+	LoadAll(ctx context.Context, userID uuid.UUID, entries []domain.InteractionEntry, complete bool) error
 }
 
-// resolveInteraction 缓存批查 → miss 批量回源 DB → 回填 DB 确认的记录。cache 为 nil 时全部走 DB。
+// resolveInteraction 缓存批查 →（标记缺失时）全量装载 → 否则 miss 批量回源 DB 并回填。cache 为 nil 时全部走 DB。
 func resolveInteraction(
 	ctx context.Context,
 	kind string,
@@ -773,18 +779,27 @@ func resolveInteraction(
 	postIDs []uuid.UUID,
 	cache interactionCache,
 	dbCheck func(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (map[uuid.UUID]bool, error),
+	listAll func(ctx context.Context, userID uuid.UUID, limit int) ([]domain.InteractionEntry, error),
 ) map[uuid.UUID]bool {
 	result := make(map[uuid.UUID]bool, len(postIDs))
 	missed := postIDs
 	if cache != nil {
-		hits, cacheMissed, err := cache.BatchCheck(ctx, userID, postIDs)
+		chk, err := cache.BatchCheck(ctx, userID, postIDs)
 		if err != nil {
 			logger.Log.Error(fmt.Sprintf("Failed to batch check post %s from cache, falling back to DB: %s", kind, err.Error()))
 		} else {
-			for id, v := range hits {
+			for id, v := range chk.Hits {
 				result[id] = v
 			}
-			missed = cacheMissed
+			missed = chk.Missed
+			if len(missed) > 0 && chk.Loadable {
+				if all, ok := loadAllInteractions(ctx, kind, userID, cache, listAll); ok {
+					for _, id := range missed {
+						result[id] = all[id]
+					}
+					return result
+				}
+			}
 		}
 	}
 	if len(missed) == 0 {
@@ -811,18 +826,49 @@ func resolveInteraction(
 	return result
 }
 
+// loadAllInteractions 查用户全部有效点赞 / 收藏并装入缓存。返回 (全量集合, true)；
+// 超过装载上限或 DB 出错返回 false，调用方退回逐批回源。缓存写失败不影响本次结果（DB 即权威）。
+func loadAllInteractions(
+	ctx context.Context,
+	kind string,
+	userID uuid.UUID,
+	cache interactionCache,
+	listAll func(ctx context.Context, userID uuid.UUID, limit int) ([]domain.InteractionEntry, error),
+) (map[uuid.UUID]bool, bool) {
+	entries, err := listAll(ctx, userID, interactionFullLoadLimit+1)
+	if err != nil {
+		logger.Log.Error(fmt.Sprintf("Failed to list post %s for full load: %s", kind, err.Error()))
+		return nil, false
+	}
+	complete := len(entries) <= interactionFullLoadLimit
+	if !complete {
+		entries = nil
+	}
+	if err := cache.LoadAll(ctx, userID, entries, complete); err != nil {
+		logger.Log.Error(fmt.Sprintf("Failed to load post %s cache: %s", kind, err.Error()))
+	}
+	if !complete {
+		return nil, false
+	}
+	all := make(map[uuid.UUID]bool, len(entries))
+	for _, e := range entries {
+		all[e.ID] = true
+	}
+	return all, true
+}
+
 // checkCollected 检查收藏状态（缓存优先，miss 回源 DB + 回填）。
 // 未注入 collectCache 时（向后兼容）直接返回 false。
 func (s *postServiceImpl) checkCollected(ctx context.Context, userID, postID uuid.UUID) bool {
 	if s.collectCache == nil {
 		return false
 	}
-	collectedMap, missed, err := s.collectCache.BatchCheck(ctx, userID, []uuid.UUID{postID})
+	chk, err := s.collectCache.BatchCheck(ctx, userID, []uuid.UUID{postID})
 	if err == nil {
-		if collectedMap[postID] {
+		if chk.Hits[postID] {
 			return true
 		}
-		if len(missed) > 0 {
+		if len(chk.Missed) > 0 {
 			isCollected, dbErr := s.repo.IsCollected(ctx, userID, postID)
 			if dbErr != nil {
 				return false
