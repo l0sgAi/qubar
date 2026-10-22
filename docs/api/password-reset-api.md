@@ -231,7 +231,7 @@ Content-Type: application/json
 
 成功后后端做了三件事：
 1. **更新密码哈希**（Argon2id）到数据库
-2. **踢下线该用户所有设备的会话**（`stputil.Kickout`）——所有旧 token 立即失效
+2. **注销该用户全部终端**——所有旧 token 立即失效（包括多端同时在线前按 `web` / `mobile` 签发的旧 token，见 `docs/multi-device-frontend-api.md`）
 3. **清除已验证标记**（`pwd_reset:verified`）
 
 > **不会返回 token**，前端需引导用户重新登录。
@@ -384,7 +384,8 @@ Content-Type: application/json
 {
   "email":    "user@example.com",
   "password": "newSecret123",
-  "device":   "web"            // 可选，"web" | "mobile"，默认 "web"
+  "device":   "web",           // 可选，"web" | "mobile"，默认 "web"
+  "device_id": "0192..."       // 可选，终端 UUID，见 docs/multi-device-frontend-api.md
 }
 ```
 
@@ -407,7 +408,8 @@ Content-Type: application/json
       "avatar_url":   "https://...",
       "gender":       0
     },
-    "token": "xxxx-xxxx-xxxx"              // 后续请求作为 satoken 头
+    "token": "xxxx-xxxx-xxxx",             // 后续请求作为 satoken 头
+    "device_id": "0192..."                 // 本终端 UUID，前端持久化保存
   }
 }
 ```

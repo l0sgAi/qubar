@@ -44,7 +44,7 @@ func (h *Handler) GetTrending(c appctx.AppContext) {
 	result, err := h.svc.GetTrending(c, userID, req.Window, req.Section, req.Size, req.Offset)
 	if err != nil {
 		logger.Log.Error("trending error: " + err.Error())
-		httputil.InternalError(c, "Failed to get trending board")
+		httputil.SearchError(c, err, "Failed to get trending board")
 		return
 	}
 	httputil.Success(c, result)

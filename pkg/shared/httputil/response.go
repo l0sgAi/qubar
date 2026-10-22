@@ -7,9 +7,11 @@
 package httputil
 
 import (
+	"errors"
 	"net/http"
 
 	"interestBar/pkg/shared/appctx"
+	sharedomain "interestBar/pkg/shared/domain"
 )
 
 // ResponseCode 定义业务响应码（与原 response.ResponseCode 一致）。
@@ -267,6 +269,15 @@ func InternalError(c appctx.AppContext, message ...string) {
 		msg = message[0]
 	}
 	ErrorWithMessage(c, CodeInternalError, msg)
+}
+
+// SearchError 搜索类接口的统一错误出口：搜索后端过载（暂时错误）返回 503，其余 500。
+func SearchError(c appctx.AppContext, err error, internalMsg string) {
+	if errors.Is(err, sharedomain.ErrSearchOverloaded) {
+		ServiceUnavailable(c, "Search service is busy, please retry later")
+		return
+	}
+	InternalError(c, internalMsg)
 }
 
 // ServiceUnavailable 发送 503 Service Unavailable 响应。

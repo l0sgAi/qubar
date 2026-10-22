@@ -35,6 +35,7 @@ type AppConfig struct {
 	NoticeStream  NoticeStream  `mapstructure:"notice_stream" json:"notice_stream" yaml:"notice_stream"`
 	Mailtrap      Mailtrap      `mapstructure:"mailtrap" json:"mailtrap" yaml:"mailtrap"`
 	Security      Security      `mapstructure:"security" json:"security" yaml:"security"`
+	Moderation    Moderation    `mapstructure:"moderation" json:"moderation" yaml:"moderation"`
 }
 
 // InitConfig 是配置加载入口。

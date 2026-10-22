@@ -87,3 +87,21 @@ func TestConfigKeys_CoversNestedLeaves(t *testing.T) {
 }
 
 func reflectTypeOfAppConfig() reflect.Type { return reflect.TypeOf(AppConfig{}) }
+
+func TestEnvOverride_ModerationFailOpen(t *testing.T) {
+	c := loadWithEnv(t, nil)
+	if c.Moderation.FailOpen != nil || !c.Moderation.FailOpenEnabled() {
+		t.Fatalf("fail_open absent must default to true, got %v", c.Moderation.FailOpen)
+	}
+
+	c = loadWithEnv(t, map[string]string{
+		"QUBAR_MODERATION_FAIL_OPEN": "false",
+		"QUBAR_MODERATION_API_KEY":   "<key-from-env>",
+	})
+	if c.Moderation.FailOpenEnabled() {
+		t.Error("moderation.fail_open not overridden to false")
+	}
+	if c.Moderation.APIKey != "<key-from-env>" {
+		t.Errorf("moderation.api_key = %q", c.Moderation.APIKey)
+	}
+}
