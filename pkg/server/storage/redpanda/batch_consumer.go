@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -50,6 +51,7 @@ type batchConsumer[T any, B any] struct {
 	count   int                   // 自上次 flush 累计消息数（计数触发用）
 	stopped bool
 
+	interval time.Duration // 固定 flush 周期；首个周期见 firstFlushDelay
 	ticker   *time.Ticker
 	flushNow chan struct{} // 计数阈值触发的即时 flush 信号（缓冲 1，不阻塞读循环）
 	stopChan chan struct{}
@@ -64,7 +66,8 @@ func newBatchConsumer[T any, B any](spec batchConsumerSpec[T, B], committer mess
 		committer: committer,
 		buf:       spec.newBuf(),
 		offsets:   make(map[int]kafka.Message),
-		ticker:    time.NewTicker(interval),
+		interval:  interval,
+		ticker:    time.NewTicker(firstFlushDelay(interval)),
 		flushNow:  make(chan struct{}, 1),
 		stopChan:  make(chan struct{}),
 		done:      make(chan struct{}),
@@ -158,11 +161,24 @@ func (c *batchConsumer[T, B]) trackOffset(km kafka.Message) {
 	}
 }
 
+// firstFlushDelay 首个 flush 周期取 (0, interval] 内的随机值，之后恢复固定周期（l0sgAi/qubar#124）。
+//
+// 各消费者同时启动、周期又互为整数倍（如帖子统计 15min、热度 3min）时，固定相位会让 flush 每轮落在同一毫秒，
+// 批量 UPDATE 同一批帖子行互相等锁；随机相位把它们错开。首次 flush 只会提前、不会推迟。
+func firstFlushDelay(interval time.Duration) time.Duration {
+	return rand.N(interval) + 1 // rand.N 返回 [0, interval)；+1 保证 > 0（NewTicker 要求）
+}
+
 func (c *batchConsumer[T, B]) run() {
 	defer close(c.done)
+	phased := false
 	for {
 		select {
 		case <-c.ticker.C:
+			if !phased { // 首个随机周期已过，恢复固定周期（相位保持随机）
+				c.ticker.Reset(c.interval)
+				phased = true
+			}
 			c.flush()
 		case <-c.flushNow:
 			c.flush()

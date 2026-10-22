@@ -61,8 +61,9 @@ gh api -X PATCH repos/l0sgAi/qubar -F allow_auto_merge=true -F delete_branch_on_
 | 标签 | 含义 |
 |---|---|
 | `agent:triage` | 新 issue，spec 待人审核（issue 模板默认带上） |
-| `agent:ready` | spec 已审核，agent 可以认领 |
-| `agent:wip` | agent 开发中 |
+| `agent:ready` | spec 已审核，由 Actions 的 `agent-dispatch` 认领 |
+| `agent:local` | spec 已审核，由本地 Claude Code session 实现；不被 `agent-dispatch` 认领，不打 `agent:wip` |
+| `agent:wip` | Actions agent 开发中（只用于 `agent:ready` 模式） |
 | `agent:review` | PR 已开，等 CI / review |
 | `agent:found` | AI 巡检发现的问题，待人筛选 |
 | `risk:high` | 触及高风险路径：不开 auto-merge，`risk-gate` 等 `/approve <head-sha>`（`pr-gate` 按 `.github/labeler.yml` 自动打） |
@@ -71,6 +72,7 @@ gh api -X PATCH repos/l0sgAi/qubar -F allow_auto_merge=true -F delete_branch_on_
 ```bash
 gh label create agent:triage --color FBCA04 --description "新 issue，spec 待人审核" --force
 gh label create agent:ready  --color 0E8A16 --description "spec 已审核，agent 可认领" --force
+gh label create agent:local  --color 0E8A16 --description "由本地 session 实现（不被 agent-dispatch 认领）" --force
 gh label create agent:wip    --color 1D76DB --description "agent 开发中" --force
 gh label create agent:review --color 5319E7 --description "PR 已开，等 CI / review" --force
 gh label create agent:found  --color C5DEF5 --description "AI 巡检发现，待人筛选" --force

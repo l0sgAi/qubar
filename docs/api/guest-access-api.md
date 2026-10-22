@@ -127,7 +127,7 @@ satoken: <登录成功后返回的 token 字符串>
 | 接口 | 原因 |
 |---|---|
 | `GET /user/get`、`PUT /user/update` | 个人资料读写 |
-| `POST /post/create`、`GET /post/my` | 发帖（含草稿）、个人帖子列表 |
+| `POST /post/create`、`GET /post/my` | 发帖（状态由服务端决定，暂不支持草稿）、个人帖子列表 |
 | `POST /circle/create`、`/join`、`/leave`、`GET /circle/my` | 圈子写操作、我的圈子 |
 | `POST /comment/create` | 发评论 |
 | `POST /like/toggle`、`POST /collect/toggle`、`GET /collect/posts` | 点赞/收藏写操作、我的收藏 |

@@ -141,21 +141,28 @@ func (s *CircleHotSyncer) collectDeltas() (map[uuid.UUID]int64, error) {
 	return deltas, nil
 }
 
-// batchUpdateCircleHot 批量更新 domains.circle.hot。
+// batchUpdateCircleHot 批量更新 domains.circle.hot（按 id 升序取锁，见 batch_lock.go）。
 func (s *CircleHotSyncer) batchUpdateCircleHot(deltas map[uuid.UUID]int64) error {
+	type updateRow struct {
+		CircleID uuid.UUID `json:"circle_id"`
+		Delta    int64     `json:"delta"`
+	}
+	rows := make([]updateRow, 0, len(deltas))
+	ids := make([]uuid.UUID, 0, len(deltas))
+	for circleID, delta := range deltas {
+		if delta != 0 {
+			rows = append(rows, updateRow{CircleID: circleID, Delta: delta})
+			ids = append(ids, circleID)
+		}
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	sortByID(rows, func(r updateRow) uuid.UUID { return r.CircleID })
+
 	return pgsql.DB.Transaction(func(tx *gorm.DB) error {
-		type updateRow struct {
-			CircleID uuid.UUID `json:"circle_id"`
-			Delta    int64     `json:"delta"`
-		}
-		rows := make([]updateRow, 0, len(deltas))
-		for circleID, delta := range deltas {
-			if delta != 0 {
-				rows = append(rows, updateRow{CircleID: circleID, Delta: delta})
-			}
-		}
-		if len(rows) == 0 {
-			return nil
+		if err := lockRowsByID(tx, "domains.circle", ids); err != nil {
+			return err
 		}
 		sql := `
 		UPDATE domains.circle c

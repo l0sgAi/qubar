@@ -7,11 +7,27 @@
 
 | 要做的事 | 怎么做 |
 |---|---|
-| 让 agent 开工 | issue 写清背景 / 验收标准后，把 `agent:triage` 改成 `agent:ready`；`agent-dispatch` 会在打标签时或每小时第 17 分钟认领（同时最多 3 个 `agent:wip`） |
+| 交给 Actions agent | issue 写清背景 / 验收标准后，把 `agent:triage` 改成 `agent:ready`；`agent-dispatch` 会在打标签时或每小时第 17 分钟认领（同时最多 3 个 `agent:wip`） |
+| 交给本地 session | 把 `agent:triage` 改成 `agent:local`，在 app 里为它开一个独立 worktree 的 session（brief 写明 issue 号、验收标准、禁止 `make dev-reset` / `dev-down`）；PR 开出后 issue 改 `agent:review`，并给 PR 打开 Auto-fix |
 | 批准高风险 PR | 在 PR 的 Conversation 底部发**普通评论** `/approve <head-sha 前 7 位>`，或在终端：`gh pr comment <PR> -R l0sgAi/qubar --body "/approve <sha>"`。不是 Review changes → Approve |
 | 批准后又有新提交 | head sha 变了，之前的 `/approve` 自动失效，要对新 sha 再发一次 |
 | 暂停某个 PR 的自动合并 | 打 `hold` 标签；去掉后 `pr-gate` 会重新评估 |
 | 发版 | 合并 `develop → main` 的 PR（merge commit）。只改工作流 / 文档时 release 只跑 `changes`，线上不变 |
+
+### 选哪种模式
+
+| 用 `agent:ready`（Actions） | 用 `agent:local`（本地 session） |
+|---|---|
+| 改动小、需求清楚 | 触及高风险路径（鉴权、迁移、部署、CI、配置） |
+| 低风险、单领域 | 跨领域，或需要先讨论 / 做决策 |
+| 不需要额外上下文 | 需要本地记忆或 codegraph |
+| | 在 Actions 里失败过 |
+
+注意：
+
+- 已经是 `agent:wip`（Actions 认领了）的 issue 不要改成 `agent:local`；先等它退回 `agent:triage`，或关掉它的 PR。
+- 两种模式的 PR 闸口完全相同；区别只在谁写代码、出错谁修（Actions：`agent-fix`；本地：app 的 PR Auto-fix）。
+- **开发栈 `qubar-dev` 是共享的**：多个 session 并行时，任何 session 都不能 `make dev-reset` / `make dev-down`。
 
 ## 排障
 
@@ -24,6 +40,7 @@
 | `skipped: CLAUDE_CODE_OAUTH_TOKEN secret not set` | 仓库没有该 secret，见下文「轮换 token」 |
 | `skipped: claude-review.yml is not on main yet` / `differs from main` | 本 PR 改了 `claude-review.yml`，或 develop 上的版本还没发版到 main。claude-code-action 只运行与 main 完全一致的工作流文件，属预期；规则要求它为必需检查时需要 admin 越过规则合并 |
 | `Claude run failed, see run log` | 打开 run 看 `review` job。动作默认隐藏完整输出，看不到原因时用下文的诊断方法 |
+| `Claude run failed, see run log`，日志里有 `Workflow initiated by non-human actor` | 触发者是 bot、且不在 `allowed_bots` 里（#122）。`claude-review` / `agent-fix` 已放行 `claude`、`github-actions`；出现别的 bot 名字时按需加入，不要用 `'*'`。临时绕过：维护者手动 `gh workflow run claude-review.yml -R l0sgAi/qubar --ref develop -f pr=<N>`（触发者是人） |
 | `N blocking issue(s)` | 真实审查结论。`agent/` 分支会自动交给 `agent-fix`（最多 3 次） |
 
 ### 看不到 Claude 的报错原因

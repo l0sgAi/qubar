@@ -215,8 +215,8 @@ type CreatePostInput struct {
 	Summary        string
 	Type           int16
 	MediaExtra     []string
-	Status         int16
 	MentionUserIDs []uuid.UUID // @提及用户（前端选人传入；后端校验存在性/去自/截断）
+	// 不含状态字段：新帖状态完全由服务端决定（见 CreatePost）。
 }
 
 // PostService 是 post 领域的应用服务接口。
@@ -357,9 +357,9 @@ func (s *postServiceImpl) SetAgentTrigger(t AgentPostTrigger)          { s.agent
 
 // CreatePost 创建帖子。
 //
-// 与旧 controller.CreatePost 行为一致（除默认状态外）：
-//  1. 默认 type=1(图文)；默认 status=1(已发布)，原为 2(审核中)——见下方 TODO；
-//  2. 非草稿校验 circle_id/title 非空；
+// 与旧 controller.CreatePost 行为一致（除状态外）：
+//  1. 默认 type=1(图文)；状态由服务端决定（客户端无法指定，#110），见下方 TODO；
+//  2. 校验 circle_id/title 非空；
 //  3. 校验成员身份与状态（pending/muted/banned）；
 //  4. 校验圈子可用性；
 //  5. 清洗 content + 生成 summary；
@@ -370,25 +370,19 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 	if postType == 0 {
 		postType = domain.PostTypeTextImage
 	}
-	postStatus := input.Status
-	if postStatus == 0 {
-		// TODO(review-flow): 审核流未上线，新帖暂直接置为已发布；
-		// 审核能力就绪后恢复为 domain.PostStatusReviewing。
-		postStatus = domain.PostStatusPublished
+	// TODO(review-flow): 审核流未上线，新帖一律直接置为已发布；
+	// 审核能力就绪后改为 domain.PostStatusReviewing（审核通过再转已发布）。
+	postStatus := int16(domain.PostStatusPublished)
+
+	if input.CircleID == uuid.Nil {
+		return uuid.Nil, errCircleIDRequired
+	}
+	if input.Title == "" {
+		return uuid.Nil, errTitleRequired
 	}
 
-	// 非草稿校验
-	if postStatus != domain.PostStatusDraft {
-		if input.CircleID == uuid.Nil {
-			return uuid.Nil, errCircleIDRequired
-		}
-		if input.Title == "" {
-			return uuid.Nil, errTitleRequired
-		}
-	}
-
-	// 校验成员身份（仅在非草稿时）
-	if postStatus != domain.PostStatusDraft && s.memberCheck != nil {
+	// 校验成员身份
+	if s.memberCheck != nil {
 		member, err := s.memberCheck.GetMember(ctx, input.CircleID, userID)
 		if err != nil {
 			return uuid.Nil, err
@@ -403,7 +397,7 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 	}
 
 	// 校验圈子可用性
-	if postStatus != domain.PostStatusDraft && s.statusCheck != nil {
+	if s.statusCheck != nil {
 		available, err := s.statusCheck.IsCircleAvailable(ctx, input.CircleID)
 		if err != nil {
 			return uuid.Nil, err
@@ -446,6 +440,29 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 		return uuid.Nil, err
 	}
 
+	// @提及：校验一次得到最终名单 → 落库（不区分状态，审核中帖子正文同样含提及）。
+	// 落库为 best-effort，不阻断发帖；通知名单 == 落库名单。
+	mentionIDs := s.filterMentionUserIDs(ctx, userID, input.MentionUserIDs, input.CircleID)
+	if len(mentionIDs) > 0 {
+		if err := s.repo.CreateMentions(ctx, post.ID, mentionIDs); err != nil {
+			logger.Log.Error("Failed to save post mentions: " + err.Error())
+		}
+	}
+
+	// 仅已发布才执行发布副作用（圈子计数 / @提及通知 / 机器人触发）。
+	if postStatus == domain.PostStatusPublished {
+		s.onPostPublished(ctx, post, mentionIDs)
+	}
+
+	return post.ID, nil
+}
+
+// onPostPublished 「帖子已发布」副作用入口：圈子帖子计数 +1、@提及通知、AI 机器人触发。
+//
+// 三者均为 best-effort：失败只记日志，互不影响，不向调用方返回错误。
+// mentionIDs 为已落库的最终 @提及 名单；为空则不发通知、不触发机器人。
+// 发帖直接发布与后续审核通过都走这里，避免副作用在审核中提前发生。
+func (s *postServiceImpl) onPostPublished(ctx context.Context, post *domain.Post, mentionIDs []uuid.UUID) {
 	// 递增圈子帖子计数（Redis + Redpanda）
 	if s.postCountPort != nil {
 		if err := s.postCountPort.IncrPostCount(ctx, post.CircleID); err != nil {
@@ -453,27 +470,32 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 		}
 	}
 
-	// @提及：校验一次得到最终名单 → 落库（不区分状态，草稿正文同样含提及）→
-	// 仅已发布按同一名单发通知（草稿/审核中帖子不应对外产生通知）。
-	// 落库/通知均为 best-effort，不阻断发帖；通知名单 == 落库名单。
-	if mentionIDs := s.filterMentionUserIDs(ctx, userID, input.MentionUserIDs, input.CircleID); len(mentionIDs) > 0 {
-		if err := s.repo.CreateMentions(ctx, post.ID, mentionIDs); err != nil {
-			logger.Log.Error("Failed to save post mentions: " + err.Error())
-		}
-		if postStatus == domain.PostStatusPublished && s.publisher != nil {
-			if err := s.publisher.PublishMentionNotice(ctx, userID, post.ID, mentionIDs, title); err != nil {
-				logger.Log.Error("Failed to publish post mention notice: " + err.Error())
-			}
-		}
-		// AI 机器人触发：与通知同一门槛（仅已发布）、同一名单；
-		// 帖子圈子随事件透传（圈子级机器人只在同圈帖触发）；
-		// 同步回调立即返回，内部异步执行，不向发帖链路传播错误。
-		if postStatus == domain.PostStatusPublished && s.agentTrigger != nil {
-			s.agentTrigger.OnPostMentioned(post.ID, post.CircleID, userID, mentionIDs)
+	if len(mentionIDs) == 0 {
+		return
+	}
+	if s.publisher != nil {
+		if err := s.publisher.PublishMentionNotice(ctx, post.UserID, post.ID, mentionIDs, post.Title); err != nil {
+			logger.Log.Error("Failed to publish post mention notice: " + err.Error())
 		}
 	}
+	// AI 机器人触发：与通知同一名单；帖子圈子随事件透传（圈子级机器人只在同圈帖触发）；
+	// 同步回调立即返回，内部异步执行。
+	if s.agentTrigger != nil {
+		s.agentTrigger.OnPostMentioned(post.ID, post.CircleID, post.UserID, mentionIDs)
+	}
+}
 
-	return post.ID, nil
+// onPostPublishedByStored 从已落库的 @提及 取名单后执行 onPostPublished，
+// 供审核通过等「帖子已存在」的发布路径使用。读取名单失败按空名单处理（仍执行计数）。
+func (s *postServiceImpl) onPostPublishedByStored(ctx context.Context, post *domain.Post) {
+	var mentionIDs []uuid.UUID
+	m, err := s.repo.GetMentionUserIDsByPostIDs(ctx, []uuid.UUID{post.ID})
+	if err != nil {
+		logger.Log.Error("Failed to load post mentions: " + err.Error())
+	} else {
+		mentionIDs = m[post.ID]
+	}
+	s.onPostPublished(ctx, post, mentionIDs)
 }
 
 // filterMentionUserIDs 校验 @提及 列表：去重 → 去掉自己/Nil → 校验用户存在 →
@@ -700,9 +722,9 @@ func (s *postServiceImpl) checkLiked(ctx context.Context, userID, postID uuid.UU
 // 用户点赞 ZSET 有 TTL 与容量上限，miss 既可能是"未赞"也可能是"缓存已丢"，必须回源 DB 区分。
 // 缓存故障直接回源 DB；DB 错误原样返回。
 func (s *postServiceImpl) IsLikedByUser(ctx context.Context, userID, postID uuid.UUID) (bool, error) {
-	likedMap, _, err := s.likeCache.BatchCheck(ctx, userID, []uuid.UUID{postID})
-	if err == nil && likedMap[postID] {
-		return true, nil
+	chk, err := s.likeCache.BatchCheck(ctx, userID, []uuid.UUID{postID})
+	if err == nil && (chk.Hits[postID] || len(chk.Missed) == 0) {
+		return chk.Hits[postID], nil // 命中，或 ZSET 已完整加载（缺失即未赞）
 	}
 	if err != nil {
 		logger.Log.Error("Failed to check post liked from cache, falling back to DB: " + err.Error())
@@ -722,28 +744,34 @@ func (s *postServiceImpl) IsLikedByUser(ctx context.Context, userID, postID uuid
 
 // BatchCheckInteractions 批量查当前用户对帖子的 is_liked / is_collected。
 //
-// 用户 like/collect ZSET 有 TTL 与容量上限，miss 不等于"未赞/未藏"，必须回源 DB 区分；
-// 否则信息流把已赞帖显示为未赞，诱发重复点赞（#46）。best-effort：出错只记日志。
+// 用户 like/collect ZSET 有 TTL 与容量上限，单看 ZSET 时 miss 不等于"未赞/未藏"，必须回源 DB 区分；
+// 否则信息流把已赞帖显示为未赞，诱发重复点赞（#46）。首次回源时全量装载并写完整加载标记，
+// 此后 miss 即 false 不再查 PG（#129）。best-effort：出错只记日志。
 func (s *postServiceImpl) BatchCheckInteractions(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (liked, collected map[uuid.UUID]bool, err error) {
 	if userID == uuid.Nil || len(postIDs) == 0 {
 		return make(map[uuid.UUID]bool), make(map[uuid.UUID]bool), nil
 	}
-	liked = resolveInteraction(ctx, "like", userID, postIDs, s.likeCache, s.repo.BatchIsLiked)
+	liked = resolveInteraction(ctx, "like", userID, postIDs, s.likeCache, s.repo.BatchIsLiked, s.repo.ListActiveLikes)
 	var collectCache interactionCache
 	if s.collectCache != nil {
 		collectCache = s.collectCache
 	}
-	collected = resolveInteraction(ctx, "collect", userID, postIDs, collectCache, s.repo.BatchIsCollected)
+	collected = resolveInteraction(ctx, "collect", userID, postIDs, collectCache, s.repo.BatchIsCollected, s.repo.ListActiveCollects)
 	return liked, collected, nil
 }
 
-// interactionCache PostLikeCache / PostCollectCache 的共同形状（ZSET 批查 + 回填）。
+// interactionFullLoadLimit 首次回源全量装载的上限（#129）。用户有效点赞 / 收藏数 ≤ 该值时一次装入 ZSET
+// 并写完整加载标记；超过则写超限标记，退回逐批 IN 回源。须小于 ZSET 容量（2000），给后续新赞留出淘汰余量。
+const interactionFullLoadLimit = 1000
+
+// interactionCache PostLikeCache / PostCollectCache 的共同形状（ZSET 批查 + 回填 + 全量装载）。
 type interactionCache interface {
-	BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (map[uuid.UUID]bool, []uuid.UUID, error)
+	BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (domain.InteractionCheck, error)
 	Backfill(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) error
+	LoadAll(ctx context.Context, userID uuid.UUID, entries []domain.InteractionEntry, complete bool) error
 }
 
-// resolveInteraction 缓存批查 → miss 批量回源 DB → 回填 DB 确认的记录。cache 为 nil 时全部走 DB。
+// resolveInteraction 缓存批查 →（标记缺失时）全量装载 → 否则 miss 批量回源 DB 并回填。cache 为 nil 时全部走 DB。
 func resolveInteraction(
 	ctx context.Context,
 	kind string,
@@ -751,18 +779,27 @@ func resolveInteraction(
 	postIDs []uuid.UUID,
 	cache interactionCache,
 	dbCheck func(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (map[uuid.UUID]bool, error),
+	listAll func(ctx context.Context, userID uuid.UUID, limit int) ([]domain.InteractionEntry, error),
 ) map[uuid.UUID]bool {
 	result := make(map[uuid.UUID]bool, len(postIDs))
 	missed := postIDs
 	if cache != nil {
-		hits, cacheMissed, err := cache.BatchCheck(ctx, userID, postIDs)
+		chk, err := cache.BatchCheck(ctx, userID, postIDs)
 		if err != nil {
 			logger.Log.Error(fmt.Sprintf("Failed to batch check post %s from cache, falling back to DB: %s", kind, err.Error()))
 		} else {
-			for id, v := range hits {
+			for id, v := range chk.Hits {
 				result[id] = v
 			}
-			missed = cacheMissed
+			missed = chk.Missed
+			if len(missed) > 0 && chk.Loadable {
+				if all, ok := loadAllInteractions(ctx, kind, userID, cache, listAll); ok {
+					for _, id := range missed {
+						result[id] = all[id]
+					}
+					return result
+				}
+			}
 		}
 	}
 	if len(missed) == 0 {
@@ -789,18 +826,49 @@ func resolveInteraction(
 	return result
 }
 
+// loadAllInteractions 查用户全部有效点赞 / 收藏并装入缓存。返回 (全量集合, true)；
+// 超过装载上限或 DB 出错返回 false，调用方退回逐批回源。缓存写失败不影响本次结果（DB 即权威）。
+func loadAllInteractions(
+	ctx context.Context,
+	kind string,
+	userID uuid.UUID,
+	cache interactionCache,
+	listAll func(ctx context.Context, userID uuid.UUID, limit int) ([]domain.InteractionEntry, error),
+) (map[uuid.UUID]bool, bool) {
+	entries, err := listAll(ctx, userID, interactionFullLoadLimit+1)
+	if err != nil {
+		logger.Log.Error(fmt.Sprintf("Failed to list post %s for full load: %s", kind, err.Error()))
+		return nil, false
+	}
+	complete := len(entries) <= interactionFullLoadLimit
+	if !complete {
+		entries = nil
+	}
+	if err := cache.LoadAll(ctx, userID, entries, complete); err != nil {
+		logger.Log.Error(fmt.Sprintf("Failed to load post %s cache: %s", kind, err.Error()))
+	}
+	if !complete {
+		return nil, false
+	}
+	all := make(map[uuid.UUID]bool, len(entries))
+	for _, e := range entries {
+		all[e.ID] = true
+	}
+	return all, true
+}
+
 // checkCollected 检查收藏状态（缓存优先，miss 回源 DB + 回填）。
 // 未注入 collectCache 时（向后兼容）直接返回 false。
 func (s *postServiceImpl) checkCollected(ctx context.Context, userID, postID uuid.UUID) bool {
 	if s.collectCache == nil {
 		return false
 	}
-	collectedMap, missed, err := s.collectCache.BatchCheck(ctx, userID, []uuid.UUID{postID})
+	chk, err := s.collectCache.BatchCheck(ctx, userID, []uuid.UUID{postID})
 	if err == nil {
-		if collectedMap[postID] {
+		if chk.Hits[postID] {
 			return true
 		}
-		if len(missed) > 0 {
+		if len(chk.Missed) > 0 {
 			isCollected, dbErr := s.repo.IsCollected(ctx, userID, postID)
 			if dbErr != nil {
 				return false
