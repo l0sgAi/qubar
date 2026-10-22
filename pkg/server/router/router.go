@@ -28,9 +28,13 @@ func InitRouter() *server.Hertz {
 		// hertz 默认 MaxRequestBodySize=4MB，会截断图片上传请求体导致 FormFile 报错返 400。
 		// 提到 50MB；具体文件大小仍由 service 层 ValidateFile 兜底校验。
 		server.WithMaxRequestBodySize(50<<20),
+		// 感知客户端断开（netpoll hup 时取消连接 ctx），SSE 断开即释放连接名额（#127）。
+		// 全局生效，由下方 DetachClientCancel 收口：只有 SSE handler 订阅断开信号，其余接口 ctx 不受影响。
+		server.WithSenseClientDisconnection(true),
 	)
 
-	// Middleware
+	// Middleware：DetachClientCancel 必须最先挂，保证后续中间件与 handler 拿到的都是不随断开取消的 ctx。
+	h.Use(middleware.DetachClientCancel())
 	h.Use(middleware.Logger())
 	h.Use(middleware.CORS())
 
