@@ -670,18 +670,25 @@ func (s *commentServiceImpl) batchLikedStatus(ctx context.Context, userID uuid.U
 		return make(map[uuid.UUID]bool)
 	}
 
-	// 1. Batch check from Redis ZSET
-	likedMap, err := s.likeCache.BatchCheck(ctx, userID, commentIDs)
+	// 1. Batch check from Redis ZSET（已完整加载时 Missed 为空）
+	likedMap := make(map[uuid.UUID]bool, len(commentIDs))
+	missIDs := commentIDs
+	chk, err := s.likeCache.BatchCheck(ctx, userID, commentIDs)
 	if err != nil {
 		logger.Log.Error("Failed to batch check comment liked from Redis: " + err.Error())
-		likedMap = make(map[uuid.UUID]bool)
-	}
-
-	// 2. Find cache misses
-	var missIDs []uuid.UUID
-	for _, id := range commentIDs {
-		if !likedMap[id] {
-			missIDs = append(missIDs, id)
+	} else {
+		for id, v := range chk.Hits {
+			likedMap[id] = v
+		}
+		missIDs = chk.Missed
+		// 2. 标记缺失：首次回源全量装载，此后 miss 即未赞不再查 PG（#129）
+		if len(missIDs) > 0 && chk.Loadable {
+			if all, ok := s.loadAllLikes(ctx, userID); ok {
+				for _, id := range missIDs {
+					likedMap[id] = all[id]
+				}
+				return likedMap
+			}
 		}
 	}
 
@@ -713,6 +720,34 @@ func (s *commentServiceImpl) batchLikedStatus(ctx context.Context, userID uuid.U
 	return likedMap
 }
 
+// likeFullLoadLimit 评论点赞首次回源全量装载的上限（#129）：有效评论点赞数 ≤ 该值时一次装入 ZSET
+// 并写完整加载标记；超过则写超限标记，退回逐批 IN 回源。须小于 ZSET 容量（2000），留出淘汰余量。
+const likeFullLoadLimit = 1000
+
+// loadAllLikes 查用户全部有效评论点赞并装入缓存。返回 (全量集合, true)；超过装载上限或 DB 出错返回 false。
+func (s *commentServiceImpl) loadAllLikes(ctx context.Context, userID uuid.UUID) (map[uuid.UUID]bool, bool) {
+	likes, err := s.repo.ListActiveLikes(ctx, userID, likeFullLoadLimit+1)
+	if err != nil {
+		logger.Log.Error("Failed to list comment likes for full load: " + err.Error())
+		return nil, false
+	}
+	complete := len(likes) <= likeFullLoadLimit
+	if !complete {
+		likes = nil
+	}
+	if err := s.likeCache.LoadAll(ctx, userID, likes, complete); err != nil {
+		logger.Log.Error("Failed to load comment like cache: " + err.Error())
+	}
+	if !complete {
+		return nil, false
+	}
+	all := make(map[uuid.UUID]bool, len(likes))
+	for _, l := range likes {
+		all[l.CommentID] = true
+	}
+	return all, true
+}
+
 // checkLiked 检查单条评论的点赞状态（详情回显用，best-effort：出错视为未赞）。
 func (s *commentServiceImpl) checkLiked(ctx context.Context, userID, commentID uuid.UUID) bool {
 	if userID == uuid.Nil {
@@ -731,9 +766,9 @@ func (s *commentServiceImpl) checkLiked(ctx context.Context, userID, commentID u
 // 用户评论点赞 ZSET 有 TTL 与容量上限，miss 不等于未赞，必须回源 DB 区分。
 // 缓存故障直接回源 DB；DB 错误原样返回。
 func (s *commentServiceImpl) IsLikedByUser(ctx context.Context, userID, commentID uuid.UUID) (bool, error) {
-	likedMap, err := s.likeCache.BatchCheck(ctx, userID, []uuid.UUID{commentID})
-	if err == nil && likedMap[commentID] {
-		return true, nil
+	chk, err := s.likeCache.BatchCheck(ctx, userID, []uuid.UUID{commentID})
+	if err == nil && (chk.Hits[commentID] || len(chk.Missed) == 0) {
+		return chk.Hits[commentID], nil // 命中，或 ZSET 已完整加载（缺失即未赞）
 	}
 	if err != nil {
 		logger.Log.Error("Failed to check comment liked from cache, falling back to DB: " + err.Error())

@@ -82,9 +82,17 @@ func persistPostHot(deltas postDeltaBuf) error {
 	return nil
 }
 
-// updatePostHotDB 批量更新 domains.post.hot。
+// updatePostHotDB 批量更新 domains.post.hot（按 id 升序取锁，见 batch_lock.go）。rows 会被原地排序。
 func updatePostHotDB(rows []postHotRow) error {
+	sortByID(rows, func(r postHotRow) uuid.UUID { return r.PostID })
+	ids := make([]uuid.UUID, len(rows))
+	for i, r := range rows {
+		ids[i] = r.PostID
+	}
 	return pgsql.DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockRowsByID(tx, "domains.post", ids); err != nil {
+			return err
+		}
 		sql := `
 		UPDATE domains.post p
 		SET hot = GREATEST(p.hot + v.delta, 0),

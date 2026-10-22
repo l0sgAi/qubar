@@ -22,7 +22,8 @@ const es = new EventSource(`/notice/stream?satoken=${encodeURIComponent(token)}`
 
 - 鉴权：header `satoken` 优先，query `?satoken=` 兜底，二者其一即可。
 - **无 token / token 无效** → 响应 `401 {"code":202,"message":"..."}`，**不是** SSE 流。不要重试，引导重新登录。
-- **连接数超限**（同一账号 >5 个连接，多标签页场景）→ `429 {"code":208,...}`。收到 429 请**回落轮询**，不要立即重连。
+- **连接数超限**（同一账号 >5 个连接，多标签页场景）→ 新连接**照常建立**，该账号**最旧**的连接收到 `conn-evicted` 事件后被服务端断开（见 §3.3）。
+  （旧版超限返回 429，已废弃；服务关停中会返回 503，按建连失败处理。）
 - 浏览器 EventSource 自动重连：服务端首事件已下发 `retry: 5000`，断线后浏览器按 5s 间隔自动重连，无需自己写重连逻辑。
 
 ## 三、事件格式
@@ -66,7 +67,22 @@ es.addEventListener('auth-expired', () => {
 })
 ```
 
-### 3.3 心跳注释行 `: ping`
+### 3.3 `conn-evicted` — 连接被同账号新连接挤掉（服务端主动断连）
+
+```text
+event: conn-evicted
+```
+
+同一账号连接数达到上限（5）时，新连接建立会挤掉最旧的那条；被挤的标签页收到本事件，随后服务端关闭连接。
+
+```js
+es.addEventListener('conn-evicted', () => {
+  es.close()     // 必须主动 close，否则浏览器自动重连又会挤掉别的标签页（互踢）
+  startPolling() // 本标签页回落 30s 轮询（见 §四）
+})
+```
+
+### 3.4 心跳注释行 `: ping`
 
 25s 一帧，EventSource **不会触发任何事件**，仅保活，无需处理。5 分钟无数据属正常。
 
@@ -75,7 +91,7 @@ es.addEventListener('auth-expired', () => {
 | 场景 | 行为 | 前端动作 |
 |---|---|---|
 | 建连 401 | token 失效 | 走登出流程 |
-| 建连 429 | 连接数超限 | 本标签页回落 30s 轮询 |
+| 收到 `conn-evicted` | 本连接被同账号新连接挤掉 | `es.close()`，本标签页回落 30s 轮询 |
 | SSE 断线且 EventSource 重连持续失败 | 网络/服务端不可用 | `es.onerror` 计数兜底，回落 30s 轮询 |
 | 页面隐藏（`visibilitychange`） | 省电可选 | 可 `es.close()`，回前台重连（建连即拿全量，无补偿成本） |
 
@@ -116,6 +132,11 @@ export function connectNoticeStream(token, onUnread) {
     es.close()
     es = null
     handleLogout()
+  })
+  es.addEventListener('conn-evicted', () => {
+    es.close()
+    es = null
+    startPolling() // 见 §四
   })
   es.onerror = () => {
     if (es?.readyState === EventSource.CLOSED) {

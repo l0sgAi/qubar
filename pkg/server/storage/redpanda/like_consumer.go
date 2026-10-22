@@ -430,10 +430,19 @@ FROM d
 WHERE c.id = d.comment_id AND c.deleted = 0 AND d.delta <> 0`
 
 // persistLikeStates 单事务落库：每种目标类型各一条语句，与批大小无关。
+// 帖子行先按 id 升序取锁再改 like_count，与其他批量更新 domains.post 的消费者取锁顺序一致（见 batch_lock.go）。
 func persistLikeStates(states []*likeState) error {
 	posts, comments := buildLikeRows(states)
+	sortByID(posts, func(r postLikeRow) uuid.UUID { return r.PostID })
+	postIDs := make([]uuid.UUID, len(posts))
+	for i, r := range posts {
+		postIDs[i] = r.PostID
+	}
 	return pgsql.DB.Transaction(func(tx *gorm.DB) error {
 		if len(posts) > 0 {
+			if err := lockRowsByID(tx, "domains.post", postIDs); err != nil {
+				return err
+			}
 			payload, err := json.Marshal(posts)
 			if err != nil {
 				return fmt.Errorf("failed to marshal post like rows: %w", err)

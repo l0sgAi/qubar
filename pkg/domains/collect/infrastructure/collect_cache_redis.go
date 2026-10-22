@@ -33,7 +33,8 @@ func (c *postCollectCacheRedis) StatsExists(ctx context.Context, postID uuid.UUI
 }
 
 func (c *postCollectCacheRedis) BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (map[uuid.UUID]bool, []uuid.UUID, error) {
-	return redispkg.BatchCheckPostCollected(userID, postIDs)
+	r, err := redispkg.BatchCheckPostCollected(ctx, userID, postIDs)
+	return r.Hits, r.Missed, err
 }
 
 func (c *postCollectCacheRedis) Backfill(ctx context.Context, userID uuid.UUID, collectedPostIDs []uuid.UUID) error {
