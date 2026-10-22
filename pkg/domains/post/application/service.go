@@ -440,6 +440,29 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 		return uuid.Nil, err
 	}
 
+	// @提及：校验一次得到最终名单 → 落库（不区分状态，审核中帖子正文同样含提及）。
+	// 落库为 best-effort，不阻断发帖；通知名单 == 落库名单。
+	mentionIDs := s.filterMentionUserIDs(ctx, userID, input.MentionUserIDs, input.CircleID)
+	if len(mentionIDs) > 0 {
+		if err := s.repo.CreateMentions(ctx, post.ID, mentionIDs); err != nil {
+			logger.Log.Error("Failed to save post mentions: " + err.Error())
+		}
+	}
+
+	// 仅已发布才执行发布副作用（圈子计数 / @提及通知 / 机器人触发）。
+	if postStatus == domain.PostStatusPublished {
+		s.onPostPublished(ctx, post, mentionIDs)
+	}
+
+	return post.ID, nil
+}
+
+// onPostPublished 「帖子已发布」副作用入口：圈子帖子计数 +1、@提及通知、AI 机器人触发。
+//
+// 三者均为 best-effort：失败只记日志，互不影响，不向调用方返回错误。
+// mentionIDs 为已落库的最终 @提及 名单；为空则不发通知、不触发机器人。
+// 发帖直接发布与后续审核通过都走这里，避免副作用在审核中提前发生。
+func (s *postServiceImpl) onPostPublished(ctx context.Context, post *domain.Post, mentionIDs []uuid.UUID) {
 	// 递增圈子帖子计数（Redis + Redpanda）
 	if s.postCountPort != nil {
 		if err := s.postCountPort.IncrPostCount(ctx, post.CircleID); err != nil {
@@ -447,27 +470,32 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 		}
 	}
 
-	// @提及：校验一次得到最终名单 → 落库（不区分状态，审核中帖子正文同样含提及）→
-	// 仅已发布按同一名单发通知（审核中帖子不应对外产生通知）。
-	// 落库/通知均为 best-effort，不阻断发帖；通知名单 == 落库名单。
-	if mentionIDs := s.filterMentionUserIDs(ctx, userID, input.MentionUserIDs, input.CircleID); len(mentionIDs) > 0 {
-		if err := s.repo.CreateMentions(ctx, post.ID, mentionIDs); err != nil {
-			logger.Log.Error("Failed to save post mentions: " + err.Error())
-		}
-		if postStatus == domain.PostStatusPublished && s.publisher != nil {
-			if err := s.publisher.PublishMentionNotice(ctx, userID, post.ID, mentionIDs, title); err != nil {
-				logger.Log.Error("Failed to publish post mention notice: " + err.Error())
-			}
-		}
-		// AI 机器人触发：与通知同一门槛（仅已发布）、同一名单；
-		// 帖子圈子随事件透传（圈子级机器人只在同圈帖触发）；
-		// 同步回调立即返回，内部异步执行，不向发帖链路传播错误。
-		if postStatus == domain.PostStatusPublished && s.agentTrigger != nil {
-			s.agentTrigger.OnPostMentioned(post.ID, post.CircleID, userID, mentionIDs)
+	if len(mentionIDs) == 0 {
+		return
+	}
+	if s.publisher != nil {
+		if err := s.publisher.PublishMentionNotice(ctx, post.UserID, post.ID, mentionIDs, post.Title); err != nil {
+			logger.Log.Error("Failed to publish post mention notice: " + err.Error())
 		}
 	}
+	// AI 机器人触发：与通知同一名单；帖子圈子随事件透传（圈子级机器人只在同圈帖触发）；
+	// 同步回调立即返回，内部异步执行。
+	if s.agentTrigger != nil {
+		s.agentTrigger.OnPostMentioned(post.ID, post.CircleID, post.UserID, mentionIDs)
+	}
+}
 
-	return post.ID, nil
+// onPostPublishedByStored 从已落库的 @提及 取名单后执行 onPostPublished，
+// 供审核通过等「帖子已存在」的发布路径使用。读取名单失败按空名单处理（仍执行计数）。
+func (s *postServiceImpl) onPostPublishedByStored(ctx context.Context, post *domain.Post) {
+	var mentionIDs []uuid.UUID
+	m, err := s.repo.GetMentionUserIDsByPostIDs(ctx, []uuid.UUID{post.ID})
+	if err != nil {
+		logger.Log.Error("Failed to load post mentions: " + err.Error())
+	} else {
+		mentionIDs = m[post.ID]
+	}
+	s.onPostPublished(ctx, post, mentionIDs)
 }
 
 // filterMentionUserIDs 校验 @提及 列表：去重 → 去掉自己/Nil → 校验用户存在 →
