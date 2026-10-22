@@ -294,6 +294,9 @@ func TestCommentRepo_LikeLookupsAndMentions(t *testing.T) {
 	if ok, err := repo.IsLiked(ctx, user, canceled.ID); err != nil || ok {
 		t.Fatalf("IsLiked(canceled) = %v, %v; want false", ok, err)
 	}
+	if likes, err := repo.ListActiveLikes(ctx, user, 10); err != nil || len(likes) != 1 || likes[0].CommentID != liked.ID || likes[0].UpdateTime.IsZero() {
+		t.Fatalf("ListActiveLikes = %+v, %v; want only %s", likes, err, liked.ID)
+	}
 	set, err := repo.BatchCheckLiked(ctx, user, []uuid.UUID{liked.ID, canceled.ID, other.ID})
 	if err != nil {
 		t.Fatalf("BatchCheckLiked: %v", err)

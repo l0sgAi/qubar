@@ -246,6 +246,18 @@ func (r *commentRepoPG) BatchCheckLiked(ctx context.Context, userID uuid.UUID, c
 	return result, nil
 }
 
+// ListActiveLikes 列出用户的有效评论点赞（走 idx_clike_user_active 部分索引，新→旧，最多 limit 条）。
+func (r *commentRepoPG) ListActiveLikes(ctx context.Context, userID uuid.UUID, limit int) ([]domain.CommentLike, error) {
+	var likes []domain.CommentLike
+	err := r.db.WithContext(ctx).
+		Select("comment_id, update_time").
+		Where("user_id = ? AND deleted = ?", userID, domain.CommentLikeActive).
+		Order("create_time DESC").
+		Limit(limit).
+		Find(&likes).Error
+	return likes, err
+}
+
 // CreateMentions 批量写入评论提及名单（append-only，幂等：重复行忽略）。
 //
 // CommentMention 未内嵌 BaseModel、无 BeforeCreate 钩子，须在此显式预生成 UUIDv7，

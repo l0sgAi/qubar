@@ -88,12 +88,17 @@ func NewPostLikeCache() domain.PostLikeCache {
 	return &postLikeCacheRedis{}
 }
 
-func (c *postLikeCacheRedis) BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (map[uuid.UUID]bool, []uuid.UUID, error) {
-	return redispkg.BatchCheckPostLiked(userID, postIDs)
+func (c *postLikeCacheRedis) BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (domain.InteractionCheck, error) {
+	r, err := redispkg.BatchCheckPostLiked(ctx, userID, postIDs)
+	return toInteractionCheck(r), err
 }
 
 func (c *postLikeCacheRedis) Backfill(ctx context.Context, userID uuid.UUID, likedPostIDs []uuid.UUID) error {
 	return redispkg.BackfillPostLikes(userID, likedPostIDs)
+}
+
+func (c *postLikeCacheRedis) LoadAll(ctx context.Context, userID uuid.UUID, entries []domain.InteractionEntry, complete bool) error {
+	return redispkg.LoadPostLikes(ctx, userID, toRedisEntries(entries), complete)
 }
 
 // postCollectCacheRedis 基于 Redis ZSET 的 PostCollectCache 实现（只读 BatchCheck/Backfill）。
@@ -104,10 +109,27 @@ func NewPostCollectCache() domain.PostCollectCache {
 	return &postCollectCacheRedis{}
 }
 
-func (c *postCollectCacheRedis) BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (map[uuid.UUID]bool, []uuid.UUID, error) {
-	return redispkg.BatchCheckPostCollected(userID, postIDs)
+func (c *postCollectCacheRedis) BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (domain.InteractionCheck, error) {
+	r, err := redispkg.BatchCheckPostCollected(ctx, userID, postIDs)
+	return toInteractionCheck(r), err
 }
 
 func (c *postCollectCacheRedis) Backfill(ctx context.Context, userID uuid.UUID, collectedPostIDs []uuid.UUID) error {
 	return redispkg.BackfillPostCollects(userID, collectedPostIDs)
+}
+
+func (c *postCollectCacheRedis) LoadAll(ctx context.Context, userID uuid.UUID, entries []domain.InteractionEntry, complete bool) error {
+	return redispkg.LoadPostCollects(ctx, userID, toRedisEntries(entries), complete)
+}
+
+func toInteractionCheck(r redispkg.InteractionCheck) domain.InteractionCheck {
+	return domain.InteractionCheck{Hits: r.Hits, Missed: r.Missed, Loadable: r.State == redispkg.InteractionUnloaded}
+}
+
+func toRedisEntries(entries []domain.InteractionEntry) []redispkg.InteractionEntry {
+	out := make([]redispkg.InteractionEntry, len(entries))
+	for i, e := range entries {
+		out[i] = redispkg.InteractionEntry{ID: e.ID, At: e.At}
+	}
+	return out
 }
