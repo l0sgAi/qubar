@@ -34,13 +34,21 @@
 | 3.3 推全量 + 1s 合并 | 计数器真值在 Redis（INCRBY/DECRBY 先行），推送时直接读缓存得全量；hub 内 per-user 合并窗口 | 采纳 |
 | 3.4 重连不补历史、只推当前值 | 连接建立即推全量，`Last-Event-ID` 收到忽略 | 采纳 |
 | 3.4 连接存续期 token 过期 → 推 `auth-expired` 后断 | 见决策 D2：心跳节拍复检 token | 变体实现 |
-| 3.5 每用户连接上限 5 | 见决策 D1：超限拒新（429） | 变体实现 |
+| 3.5 每用户连接上限 5 | 见决策 D1：超限踢最旧（#127 由拒新 429 改） | 变体实现 |
 | 3.5 登出主动断开 | 同 D2，心跳复检覆盖登出（≤25s 延迟） | 变体实现 |
 | 4.2 多实例 Redis pub/sub | 当前单实例。注册表按 `user_id → connections` 设计，P1 接广播层 | P0 预留，P1 实施 |
 
 ### 待用户拍板的决策
 
-- **D1 超限策略**：需求允许「拒新」或「踢最旧」。推荐**拒新**（429 JSON 信封，前端自动回落轮询）：行为可预测，避免多标签页互踢抖动。
+- **D1 超限策略**：需求允许「拒新」或「踢最旧」。~~原选拒新（429）~~，#127 改为**踢最旧**：新连接总能建立，
+  该用户 connID 最小的连接收到 `conn-evicted` 事件后被服务端断开，前端收到即 `es.close()` 回落轮询（不自动重连，避免互踢抖动）。
+  改的理由（2026-10-22 压测发现 6）：浏览器 `EventSource` 遇非 200 永久放弃重连，429 会让页面实时通知静默失效；
+  而超限时最旧的连接最可能是已断开但未被感知的僵尸（半开 TCP 写不报错、代理未透传断开），踢掉它恰好回收名额。
+  「返回可重试响应」不可行：EventSource 只对 200 `text/event-stream` 按 `retry` 重连，名额不释放则只是空转重试。
+- **断开感知（#127）**：`server.WithSenseClientDisconnection(true)` 让 netpoll 在对端断开（hup）时取消连接 ctx，
+  SSE 泵循环 select 该信号即 `hub.Remove`，不再等下次写失败（最长一个心跳周期）。该开关全局生效，
+  由最先挂的 `middleware.DetachClientCancel` 收口：其余接口拿 `context.WithoutCancel`（行为不变），
+  只有 SSE handler 经 `middleware.ClientGone(ctx)` 订阅断开信号。netpoll 的 `CloseCallback` 要等 handler 返回才执行，不可用。
 - **D2 登出/过期断连**：需求要「主动断开」。两案：
   - (a) **心跳节拍复检**（推荐 P0）：连接持有 token 串，每 25s 心跳时 `stputil.IsLogin(token)`，失效则推 `auth-expired` 后关连接。覆盖登出+过期+Kickout，零跨域耦合；代价是最长 25s 延迟。
   - (b) 即时断开：auth 域 Logout/Kickout 后经 composition 桥接调 hub。零延迟但引入 auth→notice 新跨域依赖，且 Kickout 有找回密码等多入口易漏。
@@ -120,7 +128,7 @@ data: {"unread_count": 3}
 | 1 | `pkg/domains/notice/application/stream_hub.go`（新） | `StreamHub` 接口 + impl + `StreamEvent{ID, Count}` + sweeper goroutine + `Stop()` |
 | 2 | `pkg/domains/notice/application/service.go` | `NoticeService` 加 `SetStreamHub(h)`；`MarkRead`/`MarkAllRead` 缓存更新成功后 `hub.Publish(userID)`（hub 为 nil 跳过，保测试兼容） |
 | 3 | `pkg/server/storage/redpanda/notification_consumer.go` | 加包级 `SetNoticeUnreadHook(func([]uuid.UUID))`；`flush()` 在 `incrNoticeUnread` 成功后调 hook（keys of unreadDeltas）；nil 跳过 |
-| 4 | `pkg/composition/notice_stream.go`（新） | 裸 hertz handler `ServeNoticeStream(hub, countReader)`：auth（header→query）、429 超限、SSE 泵循环、心跳+token 复检、auth-expired |
+| 4 | `pkg/composition/notice_stream.go`（新） | 裸 hertz handler `ServeNoticeStream(hub, countReader)`：auth（header→query）、超限踢最旧（conn-evicted）、SSE 泵循环、心跳+token 复检、auth-expired、客户端断开即退出 |
 | 5 | `pkg/composition/server.go` | `newNoticeService` 处构造 hub；`noticeSvc.SetStreamHub(hub)`；`hub.SetCountReader(noticeSvc.GetUnreadCount)`；`redpanda.SetNoticeUnreadHook(hub.PublishBatch)`；返回 hub 供路由层用 |
 | 6 | `pkg/server/router/router.go` | `InitRouter` 内拿 engine 注册 `h.GET("/notice/stream", ...)`（挂全局 CORS 之后；鉴权在 handler 内自做，不走 `RequireLogin` 包装） |
 | 7 | `pkg/conf/conf.go` + `configs/config.yaml` | 新增 `notice_stream` 配置节（见 §五） |
@@ -149,7 +157,8 @@ notice_stream:
 | 场景 | 行为 | 依据 |
 |---|---|---|
 | 未认证/坏 token | handler 内校验失败直接 401 JSON 信封，不建立连接 | 需求 3.1 |
-| 第 6 个标签页 | 429 `{code,message,data}`，前端回落轮询 | D1 |
+| 第 6 个标签页 | 建连成功；最旧连接收到 `conn-evicted` 后被断开，该页前端回落轮询 | D1（#127） |
+| 客户端断开（关页 / 断网重连） | netpoll hup 取消连接 ctx → 泵循环立即退出 `hub.Remove`，名额即时释放 | #127 |
 | 批量已读 100 条 | 1s 合并窗口只推最终值 | 需求 3.3 |
 | 断网重连带 `Last-Event-ID` | 忽略 id，连接建立即推当前全量 | 需求 3.4 |
 | 登出/过期/Kickout | ≤25s 内心跳复检发现 → `auth-expired` → 断连 | D2(a) |
@@ -177,5 +186,6 @@ P0 自验清单：
 - [ ] 心跳 `: ping` ≤30s 一帧，挂 5min 不断
 - [ ] 断网重连带 `Last-Event-ID` → 立即收到最新全量
 - [ ] 登出后 ≤25s 收到 `auth-expired` 并断连
-- [ ] 第 6 个连接 429；前 5 个不受影响
+- [ ] 第 6 个连接建立成功，最旧连接收到 `conn-evicted` 并断开；其余不受影响
+- [ ] 断开后立即重连成功（名额即时释放，不 429、不踢人）
 - [ ] `go build ./... && go vet ./...` 通过；hub 单测（Add 上限/合并去重/lastSent 不重复推）
