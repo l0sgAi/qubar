@@ -16,6 +16,7 @@ func registerAuth(root routing.RouterGroup, deps *Deps, authCheck routing.Handle
 	email := authinfra.NewEmailSender()
 	oauthReg := authinfra.NewOAuthProviderRegistry()
 	pwdReset := authinfra.NewPasswordResetStore()
-	svc := authapp.NewAuthService(session, userStore, verify, email, oauthReg, pwdReset)
+	index := authinfra.NewSessionIndex()
+	svc := authapp.NewAuthService(session, userStore, verify, email, oauthReg, pwdReset, index)
 	authhttp.RegisterRoutes(root, svc, authCheck)
 }

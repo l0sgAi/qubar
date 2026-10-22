@@ -2,6 +2,7 @@
 //
 // 包括：
 //   - saTokenSessionImpl：封装 stputil 调用（登录/登出/会话写入）
+//   - sessionIndexRedis：用户在线终端索引（auth:sessions:<uid>）
 //   - verificationStoreRedis：基于 pkg/server/storage/redis 的验证码存储
 //   - emailSenderImpl：基于 pkg/util/email 的邮件发送
 //   - OAuth provider 适配器（google/github/azure）
@@ -64,6 +65,23 @@ func (s *saTokenSessionImpl) Kickout(loginID string) error {
 		return fmt.Errorf("kickout %d of %d tokens failed: %w", len(errs), len(tokens), errors.Join(errs...))
 	}
 	return nil
+}
+
+// KickoutByToken 踢下线单个 token（sa-token 把它标记为 KICK_OUT 并保留原 TTL）。
+func (s *saTokenSessionImpl) KickoutByToken(token string) error {
+	return stputil.KickoutByToken(token)
+}
+
+// IsTokenAlive 判断 token 是否仍有效。
+//
+// 用 GetTokenInfo 而不是 IsLogin：IsLogin 会触发异步自动续期，核对其他终端的 token 时不应顺带延长它们的有效期。
+// GetTokenInfo 对不存在（过期 / 已注销）的 token 返回 key not found，对被踢 / 被顶的 token 返回状态错误。
+func (s *saTokenSessionImpl) IsTokenAlive(token string) bool {
+	if token == "" {
+		return false
+	}
+	info, err := stputil.GetTokenInfo(token)
+	return err == nil && info != nil
 }
 
 // SetSessionUser 把用户信息写入 loginID 的 sa-token 会话。

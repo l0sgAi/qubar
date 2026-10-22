@@ -66,3 +66,28 @@ func GetPwdResetVerifiedKey(email string) string {
 func GetPwdResetRateKey(email string) string {
 	return PwdResetRatePrefix + email
 }
+
+const (
+	// AuthSessionsPrefix 用户在线终端索引key前缀
+	// 完整key格式: auth:sessions:{user_id}
+	// 存储内容：ZSET，member=sa-token token，score=登录时间（Unix 毫秒），按登录先后排序；
+	// 用于终端上限（sa_token.max_login_count，超出时踢最早登录的）与注销全部终端。
+	// TTL 与 sa_token.timeout 一致，每次登录写入时刷新；登录时顺手清理已失效的 member。
+	AuthSessionsPrefix = "auth:sessions:"
+
+	// AuthSessionMetaPrefix 用户在线终端元数据key前缀
+	// 完整key格式: auth:session_meta:{user_id}
+	// 存储内容：HASH，field=token，value=终端元数据 JSON（type、device_id、登录时间、IP、UA 摘要）；
+	// 与 auth:sessions:{user_id} 成对写入 / 删除，TTL 相同。
+	AuthSessionMetaPrefix = "auth:session_meta:"
+)
+
+// GetAuthSessionsKey 获取用户在线终端索引的完整key
+func GetAuthSessionsKey(userID string) string {
+	return AuthSessionsPrefix + userID
+}
+
+// GetAuthSessionMetaKey 获取用户在线终端元数据的完整key
+func GetAuthSessionMetaKey(userID string) string {
+	return AuthSessionMetaPrefix + userID
+}

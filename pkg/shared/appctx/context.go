@@ -35,6 +35,8 @@ type AppContext interface {
 	Query(name string) string
 	// Header 读取请求头。
 	Header(name string) string
+	// ClientIP 返回客户端 IP（框架按 X-Forwarded-For / X-Real-IP / 远端地址解析）。
+	ClientIP() string
 	// PostForm 读取表单字段（multipart 或 application/x-www-form-urlencoded）。
 	PostForm(name string) string
 	// FormFile 读取 multipart 上传的单个文件。
@@ -76,7 +78,7 @@ type AppContext interface {
 	LoginID() (string, bool)
 	// SetLoginID 由鉴权中间件调用，写入 loginID。
 	SetLoginID(id string)
-	// Device 返回登录设备标识（web/mobile），未设置时返回空串。
+	// Device 返回登录设备标识，未设置时返回空串。
 	Device() string
 	// SetDevice 设置登录设备标识。
 	SetDevice(device string)

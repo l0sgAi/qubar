@@ -49,6 +49,9 @@ func InitSaToken() error {
 	}
 	config.IsConcurrent = conf.Config.SaToken.IsConcurrent
 	config.IsShare = conf.Config.SaToken.IsShare
+	// 终端上限由 auth 领域的会话索引（auth:sessions:<uid>）控制（sa_token.max_login_count）。
+	// 关掉 sa-token 自带的上限：它每次登录都对 account:<uid>:* 做一次全库 SCAN。
+	config.MaxLoginCount = -1
 	config.IsLog = true
 
 	// 创建 Sa-Token 管理器

@@ -8,4 +8,7 @@ type SaToken struct {
 	ActiveTimeout int    `mapstructure:"active_timeout" json:"active_timeout" yaml:"active_timeout"`
 	IsConcurrent  bool   `mapstructure:"is_concurrent" json:"is_concurrent" yaml:"is_concurrent"`
 	IsShare       bool   `mapstructure:"is_share" json:"is_share" yaml:"is_share"`
+	// MaxLoginCount 同一账号同时在线的终端上限，超出时注销最早登录的终端；<=0 时回落默认 10。
+	// 由 auth 领域的会话索引控制，sa-token 自带的 MaxLoginCount 固定关闭（-1）。
+	MaxLoginCount int `mapstructure:"max_login_count" json:"max_login_count" yaml:"max_login_count"`
 }
