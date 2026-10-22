@@ -23,7 +23,7 @@ type PostCollectCache interface {
 	// StatsExists 检查帖子统计 Hash 是否存在（用于恢复缓存）。
 	StatsExists(ctx context.Context, postID uuid.UUID) (bool, error)
 	// BatchCheck 批量检查用户是否收藏了多个帖子（信息流「是否已收藏」回显）。
-	// 返回：已收藏的 map、未命中的 postID 列表、error。
+	// 返回：已收藏的 map、需回源 DB 的 postID 列表（ZSET 已完整加载时为空，缺失即未收藏）、error。
 	BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (collected map[uuid.UUID]bool, missed []uuid.UUID, err error)
 	// Backfill 回填 DB 查询确认的收藏状态到 ZSET。
 	Backfill(ctx context.Context, userID uuid.UUID, collectedPostIDs []uuid.UUID) error

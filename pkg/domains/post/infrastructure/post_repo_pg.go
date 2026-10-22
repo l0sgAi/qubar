@@ -4,6 +4,7 @@ package infrastructure
 import (
 	"context"
 	"errors"
+	"time"
 
 	"interestBar/pkg/domains/post/domain"
 	sharedomain "interestBar/pkg/shared/domain"
@@ -121,6 +122,38 @@ func (r *postRepoPG) batchActivePostIDs(ctx context.Context, table string, userI
 		result[id] = true
 	}
 	return result, nil
+}
+
+// ListActiveLikes 列出用户的有效点赞（走 idx_user_post_active 部分索引，新→旧，最多 limit 条）。
+func (r *postRepoPG) ListActiveLikes(ctx context.Context, userID uuid.UUID, limit int) ([]domain.InteractionEntry, error) {
+	return r.listActiveInteractions(ctx, "domains.post_like", userID, limit)
+}
+
+// ListActiveCollects 列出用户的有效收藏（走 idx_pcollect_user_active 部分索引，新→旧，最多 limit 条）。
+func (r *postRepoPG) ListActiveCollects(ctx context.Context, userID uuid.UUID, limit int) ([]domain.InteractionEntry, error) {
+	return r.listActiveInteractions(ctx, "domains.post_collect", userID, limit)
+}
+
+// listActiveInteractions 列出交互流水表中用户的有效行；At 取 update_time（最近一次进入有效态的时间）。
+func (r *postRepoPG) listActiveInteractions(ctx context.Context, table string, userID uuid.UUID, limit int) ([]domain.InteractionEntry, error) {
+	var rows []struct {
+		PostID     uuid.UUID
+		UpdateTime time.Time
+	}
+	err := r.db.WithContext(ctx).Table(table).
+		Select("post_id, update_time").
+		Where("user_id = ? AND deleted = ?", userID, 0).
+		Order("create_time DESC").
+		Limit(limit).
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]domain.InteractionEntry, len(rows))
+	for i, row := range rows {
+		entries[i] = domain.InteractionEntry{ID: row.PostID, At: row.UpdateTime}
+	}
+	return entries, nil
 }
 
 // IncrCommentCount 同步递增帖子评论计数（comment_count + 1）。
