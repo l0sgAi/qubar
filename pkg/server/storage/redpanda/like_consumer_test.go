@@ -3,20 +3,11 @@ package redpanda
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
-
-	"interestBar/pkg/logger"
 
 	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
-	"go.uber.org/zap"
 )
-
-func TestMain(m *testing.M) {
-	logger.Log = zap.NewNop()
-	os.Exit(m.Run())
-}
 
 func km(partition int, offset int64) kafka.Message {
 	return kafka.Message{Partition: partition, Offset: offset}
