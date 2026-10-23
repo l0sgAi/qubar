@@ -291,6 +291,12 @@ type PostService interface {
 	SetModeration(moderator domain.ContentModerator, logRepo domain.PostModerationLogRepository, cfg conf.Moderation)
 	// SetModerationCircleReader 注入审核用圈子信息读取端口（未注入时审核输入不带圈子语境）。
 	SetModerationCircleReader(r ModerationCircleReader)
+
+	// ListReviewQueue 圈子待审帖子列表（#118，见 moderation_review.go）：操作者须为该圈 admin+，
+	// 每条带最近一条 AI 审核结论；keyset 游标分页，create_time 倒序。
+	ListReviewQueue(ctx context.Context, operatorID, circleID uuid.UUID, size int, cursor string) (*ReviewQueueResult, error)
+	// ReviewPost 人工审核（#118）：通过走发布副作用入口，驳回改为 3；并发时只有一方生效，其余 404。
+	ReviewPost(ctx context.Context, operatorID uuid.UUID, in ReviewPostInput) (*ReviewPostResult, error)
 }
 
 // PostMeta 帖子元信息（供 comment/like 领域校验用）。

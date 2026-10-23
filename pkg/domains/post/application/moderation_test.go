@@ -20,7 +20,8 @@ import (
 type fakeModerationRepo struct {
 	fakeCreatePostRepo
 
-	updates int // UpdateStatusFromReviewing 成功次数
+	updates    int                         // UpdateStatusFromReviewing / ResolveReview 成功次数
+	reviewLogs []*domain.PostModerationLog // ResolveReview 写入的人工审计行
 }
 
 func (r *fakeModerationRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Post, error) {
@@ -58,8 +59,9 @@ func (r *fakeModerationRepo) GetMentionUserIDsByPostIDs(_ context.Context, ids [
 type fakeModerationPublisher struct {
 	fakeMentionPublisher
 
-	moderation []uuid.UUID
-	err        error
+	moderation    []uuid.UUID
+	reviewNotices []reviewNotice
+	err           error
 }
 
 func (p *fakeModerationPublisher) PublishModeration(_ context.Context, postID uuid.UUID) error {
@@ -84,6 +86,18 @@ func (l *fakeModerationLog) ExistsByPostID(_ context.Context, postID uuid.UUID) 
 		}
 	}
 	return false, nil
+}
+
+func (l *fakeModerationLog) LatestAIByPostIDs(_ context.Context, ids []uuid.UUID) (map[uuid.UUID]*domain.PostModerationLog, error) {
+	out := make(map[uuid.UUID]*domain.PostModerationLog)
+	for _, id := range ids {
+		for _, r := range l.rows { // rows 按写入顺序，后写的覆盖先写的
+			if r.PostID == id && r.Source != domain.ModerationSourceManual {
+				out[id] = r
+			}
+		}
+	}
+	return out, nil
 }
 
 type fakeModerator struct {

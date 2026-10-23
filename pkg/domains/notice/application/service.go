@@ -104,7 +104,7 @@ func (s *noticeServiceImpl) SetStreamHub(h StreamHub) { s.hub = h }
 // ListNotifications 获取当前用户通知列表。
 func (s *noticeServiceImpl) ListNotifications(ctx context.Context, userID uuid.UUID, noticeTypes []int16, size int, cursor string) (*NoticeListResult, error) {
 	for _, t := range noticeTypes {
-		if t < domain.NoticeTypeLikePost || t > domain.NoticeTypeMention {
+		if t < domain.NoticeTypeLikePost || t > domain.NoticeTypeMax {
 			return nil, errInvalidNoticeType
 		}
 	}
@@ -134,7 +134,7 @@ func (s *noticeServiceImpl) ListNotifications(ctx context.Context, userID uuid.U
 		if n.CommentID != nil {
 			item.CommentID = n.CommentID.String()
 		}
-		if b, ok := briefs[n.ActorID.String()]; ok {
+		if b, ok := briefs[n.ActorID.String()]; ok && !domain.HidesActor(n.NoticeType) {
 			item.Actor = &ActorBrief{ID: b.ID, Username: b.Username, AvatarURL: b.AvatarURL}
 		}
 		items = append(items, item)

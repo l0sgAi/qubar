@@ -19,7 +19,7 @@ import (
 //	worker → ModeratePost：读帖子（不是审核中就跳过）→ Jev 打分 → domain.RouteModeration 分流
 //	      → 条件更新 UPDATE ... WHERE status = 2 → 写 post_moderation_log → 转为已发布时执行发布副作用（只一次）
 //
-// 人工待审的帖子留在审核中，一直不可见，由 #118 的人工审核处理。
+// 人工待审的帖子留在审核中，一直不可见，由圈主 / 管理员人工审核（#118，见 moderation_review.go）。
 
 // moderationErrMaxRunes error_msg 列上限（VARCHAR(2048)）。
 const moderationErrMaxRunes = 2048
@@ -208,6 +208,7 @@ func buildModerationLog(postID uuid.UUID, decision domain.ModerationDecision, a 
 		Decision:  decision,
 		Hazards:   domain.HazardScores{},
 		LatencyMs: int(latency.Milliseconds()),
+		Source:    domain.ModerationSourceAI,
 	}
 	if a != nil {
 		entry.Hazards = domain.HazardScores(a.Risks)

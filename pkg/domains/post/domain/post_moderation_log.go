@@ -10,9 +10,17 @@ import (
 	"github.com/google/uuid"
 )
 
-// PostModerationLog 帖子 AI 审核日志（domains.post_moderation_log，append-only，#117）。
+// 审核来源（post_moderation_log.source）。
+const (
+	ModerationSourceAI     int16 = 1 // 审核 worker（#117）
+	ModerationSourceManual int16 = 2 // 圈主 / 管理员人工审核（#118）
+)
+
+// PostModerationLog 帖子审核日志（domains.post_moderation_log，append-only，#117 / #118）。
 //
-// 每次审核写一行；审核调用失败时 Hazards 为空、Severity / SeverityConfidence 为 nil、ErrorMsg 非空。
+// AI 审核每次写一行；审核调用失败时 Hazards 为空、Severity / SeverityConfidence 为 nil、ErrorMsg 非空。
+// 人工审核（Source=ModerationSourceManual）写一行 Decision=publish / reject，带处理人 OperatorID 与可选备注 Reason，
+// 不含模型打分。
 type PostModerationLog struct {
 	ID                 uuid.UUID          `gorm:"type:uuid;primaryKey;column:id"`
 	PostID             uuid.UUID          `gorm:"column:post_id;type:uuid;not null"`
@@ -24,6 +32,9 @@ type PostModerationLog struct {
 	InputTokens        int                `gorm:"column:input_tokens"`
 	LatencyMs          int                `gorm:"column:latency_ms"`
 	ErrorMsg           *string            `gorm:"column:error_msg;type:varchar(2048)"`
+	Source             int16              `gorm:"column:source;type:smallint;not null"`
+	OperatorID         *uuid.UUID         `gorm:"column:operator_id;type:uuid"`
+	Reason             *string            `gorm:"column:reason;type:varchar(200)"`
 	CreateTime         time.Time          `gorm:"column:create_time;autoCreateTime"`
 }
 
@@ -60,4 +71,6 @@ type PostModerationLogRepository interface {
 	Create(ctx context.Context, log *PostModerationLog) error
 	// ExistsByPostID 该帖子是否已有审核日志（worker 幂等：人工待审不改状态，靠它识别重复投递）。
 	ExistsByPostID(ctx context.Context, postID uuid.UUID) (bool, error)
+	// LatestAIByPostIDs 批量取每篇帖子最近一条 AI 审核日志（source=1），没有的帖子不在 map 中（人工待审列表用，#118）。
+	LatestAIByPostIDs(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]*PostModerationLog, error)
 }
