@@ -226,3 +226,57 @@ func (b *postAgentTrigger) OnPostMentioned(postID, circleID, authorID uuid.UUID,
 
 // 编译期保证：触发桥接器满足 post 领域端口。
 var _ postapp.AgentPostTrigger = (*postAgentTrigger)(nil)
+
+// agentCandidateReader 桥接 aiagent.AutoReplyCandidateReader -> post / comment 域的自动回复候选 Facade。
+//
+// 候选过滤（已发布未锁定、门槛、时间窗口、作者非机器人账号、圈子范围、排除名单）全部在
+// 各自领域的仓储 SQL 内完成，桥接器只做 DTO 转换。
+type agentCandidateReader struct {
+	post    postapp.PostService
+	comment commentapp.CommentService
+}
+
+// ListHotPosts 自动回复帖子候选（按热度降序 top-N）。
+func (b *agentCandidateReader) ListHotPosts(ctx context.Context, q agentapp.AutoPostQuery) ([]agentapp.AutoPostCandidate, error) {
+	rows, err := b.post.ListAutoReplyCandidates(ctx, postapp.AutoReplyPostQuery{
+		CircleID:   q.CircleID,
+		HotMin:     q.HotMin,
+		Since:      q.Since,
+		ExcludeIDs: q.ExcludeIDs,
+		Limit:      q.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]agentapp.AutoPostCandidate, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, agentapp.AutoPostCandidate{ID: r.ID, CircleID: r.CircleID, AuthorID: r.AuthorID, Hot: r.Hot})
+	}
+	return out, nil
+}
+
+// ListHotComments 自动回复评论候选（按 like_count + reply_count 降序 top-N）。
+func (b *agentCandidateReader) ListHotComments(ctx context.Context, q agentapp.AutoCommentQuery) ([]agentapp.AutoCommentCandidate, error) {
+	rows, err := b.comment.ListAutoReplyCandidates(ctx, commentapp.AutoReplyCommentQuery{
+		CircleID:   q.CircleID,
+		LikeMin:    q.LikeMin,
+		ReplyMin:   q.ReplyMin,
+		Since:      q.Since,
+		ExcludeIDs: q.ExcludeIDs,
+		Limit:      q.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]agentapp.AutoCommentCandidate, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, agentapp.AutoCommentCandidate{
+			ID: r.ID, PostID: r.PostID, PostCircleID: r.PostCircleID,
+			UserID: r.UserID, RootID: r.RootID, Content: r.Content,
+		})
+	}
+	return out, nil
+}
+
+// 编译期保证：候选桥接器满足 aiagent 领域端口。
+var _ agentapp.AutoReplyCandidateReader = (*agentCandidateReader)(nil)

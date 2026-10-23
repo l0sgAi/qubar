@@ -56,6 +56,10 @@ func (f *fakeLocateRepo) LocateReplyCursor(ctx context.Context, rootID uuid.UUID
 	return f.replyCursor, f.replyPage, nil
 }
 
+func (f *fakeLocateRepo) ListHotForAutoReply(ctx context.Context, filter domain.AutoReplyCommentFilter) ([]domain.AutoReplyCommentRow, error) {
+	return nil, nil
+}
+
 func (f *fakeLocateRepo) IsLiked(ctx context.Context, userID, commentID uuid.UUID) (bool, error) {
 	return false, nil
 }
