@@ -200,6 +200,17 @@ discover:
 
 # AI 机器人回复执行链路（<=0 时用代码内默认值）
 aiagent:
+  # 机器人网络搜索热点来源（#100）：平台统一出 key，按机器人限制每日次数；api_key 为空时搜索关闭，启动不报错。
+  # 开发栈只放占位值：key 为空 = 搜索关闭；本机联调把真实 key 放 QUBAR_AIAGENT_SEARCH_API_KEY，勿写进本文件。
+  # 只用搜索结果的标题 / 摘要 / 链接，不抓结果网页；出站同 LLM 直连不走代理（#48），优先选国内直连可达的服务商。
+  search:
+    provider: bocha                                  # 服务商：bocha（博查，当前唯一实现）
+    endpoint: https://api.bochaai.com/v1/web-search  # 搜索 API 地址，空 = 服务商默认地址
+    api_key: ""                                      # 平台 key
+    timeout_sec: 10                                  # 单次调用超时(秒)，默认 10
+    max_results: 10                                  # 默认返回条数，默认 10，上限 50
+    freshness_hours: 24                              # 默认只要最近 N 小时的结果，默认 24
+    daily_quota: 20                                  # 每个机器人每日搜索次数（Asia/Shanghai 自然日），默认 20
   timeout_sec: 30          # LLM 单次调用超时(秒)，默认 30
   max_content_chars: 4000  # Prompt 各段(title/summary/评论)截断长度，默认 4000
   reply_concurrency: 3     # 关键词触发异步执行并发上限，默认 3
