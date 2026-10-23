@@ -531,6 +531,8 @@ go test ./pkg/composition/middleware/...
 
 Issues and Pull Requests are welcome!
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, conventions, testing and the PR workflow.
+
 This repo is developed with agents (l0sgAi/qubar#67); the rules live in [CLAUDE.md](CLAUDE.md):
 
 - **Issues**: use the issue templates (background + acceptance criteria); they start as `agent:triage`. Once a maintainer relabels one `agent:ready`, Claude in GitHub Actions picks it up and opens a PR (at most 3 at a time).

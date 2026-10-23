@@ -6,6 +6,8 @@
 #            （migrate up + 重跑 grants.sql 刷新授权 / dbz_pub）。失败 → 不发布应用。
 #   deploy（needs migrate）：SSH(经 Cloudflare Access) → deploy-app.sh（失败自动回滚）
 #            → register-connectors.sh → 外网冒烟 https://api-next.qubar.site/healthz
+#   github-release（needs deploy；本次发布了新镜像时）：scripts/next-version.sh 算版本号 →
+#            镜像加 :<版本号> 标签 → 打 tag 并发 GitHub Release（说明取发版 PR 描述）。回滚 / 只改 infra、迁移不出版本。
 #
 # 先迁移、后发版：迁移必须兼容正在运行的旧版本应用（expand / contract，见 migrations/README.md）；回滚不回退 schema。
 #
@@ -249,3 +251,66 @@ jobs:
             sleep 5
           done
           echo "smoke failed: $SMOKE_URL"; exit 1
+
+  github-release:
+    needs: [build, deploy]
+    # 只有发布了新镜像才出版本（tag = 生产上实际运行的提交）；回滚、只改 infra / 迁移的发版跳过。
+    if: >-
+      always() && !cancelled() && inputs.rollback != true &&
+      needs.build.result == 'success' && needs.deploy.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 建 tag / Release
+      packages: write # 给 GHCR 镜像加版本标签
+      pull-requests: read # 读发版 PR 描述
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # 版本计算需要全部提交与 tag
+
+      - name: 计算版本号
+        id: v
+        run: scripts/next-version.sh "$GITHUB_SHA" | tee -a "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v4
+        if: steps.v.outputs.next != ''
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 镜像加版本标签（不重新构建）
+        if: steps.v.outputs.next != ''
+        env:
+          NEXT: ${{ steps.v.outputs.next }}
+        run: docker buildx imagetools create -t "$IMAGE:$NEXT" "$IMAGE:$GITHUB_SHA"
+
+      # 放在最后：Release 存在即表示本 job 已完成，失败重跑时 next-version.sh 不会重复出版本。
+      - name: GitHub Release
+        if: steps.v.outputs.next != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREV: ${{ steps.v.outputs.prev }}
+          NEXT: ${{ steps.v.outputs.next }}
+        run: |
+          pr=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
+            --jq '[.[] | select(.base.ref == "main")][0].number // empty')
+          if [ -z "$pr" ]; then
+            echo "未找到合入 main 的发版 PR，使用自动生成的说明"
+            gh release create "$NEXT" --target "$GITHUB_SHA" --title "$NEXT" --latest \
+              --generate-notes ${PREV:+--notes-start-tag "$PREV"}
+            exit 0
+          fi
+          {
+            gh pr view "$pr" --json body --jq .body
+            echo
+            echo "---"
+            echo
+            echo "发版 PR：#$pr"
+            if [ -n "$PREV" ]; then
+              echo
+              echo "**Full Changelog**: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/$PREV...$NEXT"
+            fi
+          } > "$RUNNER_TEMP/release-notes.md"
+          gh release create "$NEXT" --target "$GITHUB_SHA" --title "$NEXT" --latest \
+            --notes-file "$RUNNER_TEMP/release-notes.md"

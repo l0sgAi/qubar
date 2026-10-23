@@ -206,3 +206,61 @@ func (r *postRepoPG) GetMentionUserIDsByPostIDs(ctx context.Context, postIDs []u
 	}
 	return result, nil
 }
+
+// UpdateStatusFromReviewing 条件更新：UPDATE ... SET status = ? WHERE id = ? AND status = 2 AND deleted = 0。
+//
+// 帖子表第一条状态变更路径（#117）：靠 WHERE status = 2 保证同一帖子只会被转出审核中一次，
+// 重复消费 / 并发 worker / 人工审核抢先时更新 0 行，调用方据此跳过发布副作用。
+func (r *postRepoPG) UpdateStatusFromReviewing(ctx context.Context, postID uuid.UUID, status int16) (bool, error) {
+	res := r.db.WithContext(ctx).Model(&domain.Post{}).
+		Where("id = ? AND status = ? AND deleted = ?", postID, domain.PostStatusReviewing, 0).
+		UpdateColumns(map[string]any{"status": status, "update_time": gorm.Expr("CURRENT_TIMESTAMP")})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
+}
+
+// ResolveReview 人工审核（#118）：事务内 UPDATE ... WHERE status = 2 AND deleted = 0，更新 1 行才写审核日志。
+//
+// 与 worker 共用同一条件更新：人工 / worker / 多个管理员并发处理同一帖子时只有一方更新成功；
+// 状态与审计行同生同灭，不会出现「状态已改但没有人工审核记录」。
+func (r *postRepoPG) ResolveReview(ctx context.Context, postID uuid.UUID, status int16, log *domain.PostModerationLog) (bool, error) {
+	updated := false
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		res := tx.Model(&domain.Post{}).
+			Where("id = ? AND status = ? AND deleted = ?", postID, domain.PostStatusReviewing, 0).
+			UpdateColumns(map[string]any{"status": status, "update_time": gorm.Expr("CURRENT_TIMESTAMP")})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected != 1 {
+			return nil
+		}
+		if log.ID == uuid.Nil {
+			log.ID = sharedomain.NewID()
+		}
+		if err := tx.Create(log).Error; err != nil {
+			return err
+		}
+		updated = true
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return updated, nil
+}
+
+// ListReviewingByCircle 圈内审核中帖子，(create_time, id) 倒序 keyset。
+// 审核中的帖子全站很少，走 idx_post_status (status, create_time DESC) 再按 circle_id 过滤即可。
+func (r *postRepoPG) ListReviewingByCircle(ctx context.Context, circleID uuid.UUID, after *domain.PostKeyset, limit int) ([]domain.Post, error) {
+	q := r.db.WithContext(ctx).
+		Where("circle_id = ? AND status = ? AND deleted = ?", circleID, domain.PostStatusReviewing, 0)
+	if after != nil {
+		q = q.Where("(create_time, id) < (?, ?)", after.CreateTime, after.ID)
+	}
+	var posts []domain.Post
+	err := q.Order("create_time DESC, id DESC").Limit(limit).Find(&posts).Error
+	return posts, err
+}

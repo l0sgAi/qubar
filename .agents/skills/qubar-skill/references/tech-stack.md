@@ -246,11 +246,14 @@ struct `{mu sync.Mutex, ticker *time.Ticker, stopChan chan struct{}, stopped boo
 ## 八、鉴权（sa-token-go）
 
 ### 8.1 初始化（`pkg/server/auth/sa_token_init.go`）
-`InitSaToken()`：redis URL → sa-token Redis storage → `sahertz.DefaultConfig()` → 覆盖 `TokenName`/`Timeout`(默认 259200=3d)/`ActiveTimeout`(1800=30min) → `sahertz.NewManager` → `sahertz.SetManager`（全局）。
+`InitSaToken()`：redis URL → sa-token Redis storage → `sahertz.DefaultConfig()` → 覆盖 `TokenName`/`Timeout`(默认 259200=3d)/`ActiveTimeout`(1800=30min)/
+`MaxRefresh`(= `Timeout - sa_token.renew_interval`，默认间隔 600s，`RenewMaxRefresh`) → `sahertz.NewManager` → `sahertz.SetManager`（全局）。
 已从 gin 迁到 hertz（integrations/gin → hertz）；`stputil` API 不变。
 
 ### 8.2 RequireLogin 中间件（`pkg/composition/auth.go:25`）
-框架无关 `routing.HandlerFunc`：读 token header → 空 → 401 → `stputil.IsLogin` → 失败 401 → `stputil.GetLoginID` → `c.SetLoginID`。
+框架无关 `routing.HandlerFunc`：读 token header → 空 → 401 → `authenticate`（`GetTokenInfo` 一次 GET 校验并取 loginID，含被踢 / 被顶检查）→ 失败 401 → `c.SetLoginID`。
+续期节流（#131）：`renewIfDue` 一次 TTL，剩余有效期 ≤ `MaxRefresh` 才 `RenewTimeout`（只 EXPIRE，不回写 token 值）；稳态每请求 2 条 Redis 命令。
+`OptionalLogin` 同用 `authenticate`，失败按匿名放行。**不要**改回 `IsLogin` + `GetLoginID`（GetLoginID 内部再调 IsLogin，各自触发续期）。
 **不解析 userID**（handler 懒解析）。**故意不用** `sagin.CheckLogin`（gin 中间件破坏 `c.Next()` 语义，`:20-24`）。
 
 ### 8.3 handler 取 userID

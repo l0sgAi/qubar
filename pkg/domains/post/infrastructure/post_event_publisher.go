@@ -40,3 +40,25 @@ func (p *postEventPublisherRedpanda) PublishMentionNotice(ctx context.Context, a
 	}
 	return nil
 }
+
+// PublishReviewResultNotice 发布人工审核结果通知事件（消息中心，best-effort 不阻断主流程）。
+func (p *postEventPublisherRedpanda) PublishReviewResultNotice(ctx context.Context, operatorID, postID uuid.UUID, approved bool) error {
+	_ = ctx
+	noticeType := redpanda.NoticeTypePostRejected
+	if approved {
+		noticeType = redpanda.NoticeTypePostApproved
+	}
+	if err := redpanda.PublishNotificationEvent(redpanda.NotificationEventMessage{
+		Type:    noticeType,
+		ActorID: operatorID,
+		PostID:  &postID,
+	}); err != nil {
+		logger.Log.Error("Failed to publish post review result notification: " + err.Error())
+	}
+	return nil
+}
+
+// PublishModeration 发布帖子审核事件（同步写入，失败由调用方按 fail_open 兜底）。
+func (p *postEventPublisherRedpanda) PublishModeration(ctx context.Context, postID uuid.UUID) error {
+	return redpanda.PublishPostModerationEvent(ctx, postID)
+}

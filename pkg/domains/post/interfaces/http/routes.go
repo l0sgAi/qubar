@@ -14,6 +14,8 @@ import (
 //	GET  /post/my            查看自己发的帖（需登录）
 //	GET  /post/user/:user_id 查看任意用户发的帖（访客可读，仅已发布）
 //	GET  /post/detail/:id    获取帖子详情（访客可读；登录时回填 is_liked/is_collected）
+//	GET  /circle/moderation/posts   圈内待审帖子列表（需登录；admin+，service 校验；#118）
+//	POST /circle/moderation/review  人工审核通过 / 驳回（需登录；admin+，service 校验；#118）
 //
 // 访客可读端点（list/user/detail）挂 optionalCheck；写操作与个人列表挂 authCheck。
 func RegisterRoutes(
@@ -37,5 +39,12 @@ func RegisterRoutes(
 	{
 		priv.POST("/create", h.CreatePost)
 		priv.GET("/my", h.GetMyPosts)
+	}
+
+	// 需登录：圈主 / 管理员人工审核（帖子数据归 post 域，路径与 /circle/agent/* 一样挂在圈子管理下）。
+	mod := rg.Group("/circle/moderation", authCheck)
+	{
+		mod.GET("/posts", h.ListReviewQueue)
+		mod.POST("/review", h.ReviewPost)
 	}
 }

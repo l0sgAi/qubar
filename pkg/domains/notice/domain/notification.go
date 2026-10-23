@@ -21,7 +21,17 @@ const (
 	NoticeTypeCommentPost  int16 = 4 // 帖子被评论(顶层) → 帖子作者
 	NoticeTypeReplyComment int16 = 5 // 评论被回复 → 被回复评论作者
 	NoticeTypeMention      int16 = 6 // @提及 → 被提及用户
+	NoticeTypePostApproved int16 = 7 // 帖子人工审核通过 → 帖子作者（#118）
+	NoticeTypePostRejected int16 = 8 // 帖子人工审核驳回 → 帖子作者（#118）
+
+	// NoticeTypeMax 最大合法通知类型（列表 type 过滤校验上限）。
+	NoticeTypeMax = NoticeTypePostRejected
 )
+
+// HidesActor 该类型是否对接收人隐藏 actor：审核结果通知不暴露审核人（actor_id 仍落库供排查）。
+func HidesActor(noticeType int16) bool {
+	return noticeType == NoticeTypePostApproved || noticeType == NoticeTypePostRejected
+}
 
 // 已读状态。
 const (

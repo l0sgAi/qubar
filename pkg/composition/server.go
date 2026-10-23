@@ -5,7 +5,9 @@
 package composition
 
 import (
+	"interestBar/pkg/conf"
 	agentapp "interestBar/pkg/domains/aiagent/application"
+	categoryinfra "interestBar/pkg/domains/category/infrastructure"
 	circleapp "interestBar/pkg/domains/circle/application"
 	noticeapp "interestBar/pkg/domains/notice/application"
 	userapp "interestBar/pkg/domains/user/application"
@@ -51,6 +53,10 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	postSvc.SetMemberChecker(&circleMemberCheckerForPost{memberRepo: memberRepo})
 	postSvc.SetStatusChecker(&circleStatusCheckerForPost{circleRepo: circleRepo})
 	postSvc.SetPostCountPort(&circlePostCountPortForPost{svc: circleSvc})
+	postSvc.SetModerationCircleReader(&postModerationCircleReader{
+		circleRepo:   circleRepo,
+		categoryRepo: categoryinfra.NewCategoryRepository(deps.DB.Get()),
+	})
 
 	// comment 需要 user Facade + post 查询端口（帖子校验 + 评论计数）
 	commentSvc.SetUserFacade(&commentUserFacade{delegate: userFacade})
@@ -143,6 +149,13 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 
 	// 启动 Discover pool syncer（需要 discoverSvc 复用 RebuildPool；其它无依赖 syncer 在 apps/server.go）。
 	go redpanda.StartDiscoverSyncerWithRetry(discoverSvc)
+
+	// 启动帖子 AI 审核 worker（#117）：仅 moderation 启用时；未启用时发帖直接发布，不需要 worker。
+	if conf.Config.Moderation.Active() {
+		redpanda.StartPostModerationConsumer(postSvc.ModeratePost)
+	} else {
+		logger.Log.Info("Post moderation worker disabled (moderation.enabled=false or api_key empty)")
+	}
 
 	return streamHub
 }

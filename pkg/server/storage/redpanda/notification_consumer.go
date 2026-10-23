@@ -27,6 +27,8 @@ var noticeTypeCode = map[string]int16{
 	NoticeTypeCommentPost:  noticedomain.NoticeTypeCommentPost,
 	NoticeTypeReplyComment: noticedomain.NoticeTypeReplyComment,
 	NoticeTypeMention:      noticedomain.NoticeTypeMention,
+	NoticeTypePostApproved: noticedomain.NoticeTypePostApproved,
+	NoticeTypePostRejected: noticedomain.NoticeTypePostRejected,
 }
 
 // noticeSnippetMaxRunes snippet 快照上限（与 VARCHAR(200) 对齐留余量）。
@@ -346,7 +348,8 @@ func buildNotificationRows(events []NotificationEventMessage) ([]noticeRow, map[
 		}
 
 		switch event.Type {
-		case NoticeTypeLikePost, NoticeTypeCollectPost, NoticeTypeCommentPost:
+		case NoticeTypeLikePost, NoticeTypeCollectPost, NoticeTypeCommentPost,
+			NoticeTypePostApproved, NoticeTypePostRejected:
 			if event.PostID == nil {
 				continue
 			}
@@ -356,7 +359,7 @@ func buildNotificationRows(events []NotificationEventMessage) ([]noticeRow, map[
 			}
 			snippet := event.Snippet
 			if event.Type != NoticeTypeCommentPost {
-				snippet = post.Title // like/collect 快照帖子标题（确认项 #4）
+				snippet = post.Title // like/collect/审核结果 快照帖子标题（确认项 #4）
 			}
 			addRow(post.UserID, event, snippet)
 
@@ -408,7 +411,8 @@ func collectLookupIDs(events []NotificationEventMessage) ([]uuid.UUID, []uuid.UU
 	commentSet := make(map[uuid.UUID]struct{})
 	for _, e := range events {
 		switch e.Type {
-		case NoticeTypeLikePost, NoticeTypeCollectPost, NoticeTypeCommentPost:
+		case NoticeTypeLikePost, NoticeTypeCollectPost, NoticeTypeCommentPost,
+			NoticeTypePostApproved, NoticeTypePostRejected:
 			if e.PostID != nil {
 				postSet[*e.PostID] = struct{}{}
 			}

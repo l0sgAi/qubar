@@ -116,7 +116,7 @@ flush 一批事件后：
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/notice/list?type=&cursor=&size=` | keyset 游标（base64 JSON `{id}`，`ORDER BY id DESC`，UUIDv7 序，仿 comment cursor）；type 空/0=全部，支持单值 `1`-`6` 或逗号分隔多值 `1,2`（分类 tab 聚合，`notice_type IN (...)`）；size `normalizeSize` 回落 20 |
+| GET | `/notice/list?type=&cursor=&size=` | keyset 游标（base64 JSON `{id}`，`ORDER BY id DESC`，UUIDv7 序，仿 comment cursor）；type 空/0=全部，支持单值 `1`-`8`（7/8 为帖子人工审核结果，#118）或逗号分隔多值 `1,2`（分类 tab 聚合，`notice_type IN (...)`）；size `normalizeSize` 回落 20 |
 | GET | `/notice/unread-count` | Redis 计数器，miss → DB COUNT 回填 |
 | POST | `/notice/read` | `{ids: []string}` 批量已读（仅本人），DECR 计数器（floor 0） |
 | POST | `/notice/read-all` | 全部已读，计数器 SET 0 |
