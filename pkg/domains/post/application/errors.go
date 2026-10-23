@@ -13,6 +13,12 @@ var (
 	errCircleNotAvailable = errors.New("this circle is not available for posting")
 	errMembershipPending  = errors.New("your membership is still pending approval")
 	errBannedFromCircle   = errors.New("you have been banned from this circle")
+
+	// 人工审核（#118）
+	errNotCircleModerator  = errors.New("only circle owner or admin can review posts")
+	errReviewPostNotFound  = errors.New("post not found or not under review in this circle")
+	errInvalidReviewAction = errors.New("action must be approve or reject")
+	errInvalidReviewCursor = errors.New("invalid cursor")
 )
 
 // errMutedUntil 是带参数的错误（禁言截止时间）。
@@ -41,3 +47,8 @@ func IsNotMemberErr(err error) bool          { return errors.Is(err, errNotMembe
 func IsCircleNotAvailableErr(err error) bool { return errors.Is(err, errCircleNotAvailable) }
 func IsMembershipPendingErr(err error) bool  { return errors.Is(err, errMembershipPending) }
 func IsBannedFromCircleErr(err error) bool   { return errors.Is(err, errBannedFromCircle) }
+
+func IsNotCircleModeratorErr(err error) bool  { return errors.Is(err, errNotCircleModerator) }
+func IsReviewPostNotFoundErr(err error) bool  { return errors.Is(err, errReviewPostNotFound) }
+func IsInvalidReviewActionErr(err error) bool { return errors.Is(err, errInvalidReviewAction) }
+func IsInvalidReviewCursorErr(err error) bool { return errors.Is(err, errInvalidReviewCursor) }

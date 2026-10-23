@@ -31,10 +31,14 @@
 | 4 | 帖子被评论 | 「{actor} 评论了你的帖子：{snippet}」 | `post_id` + `comment_id` |
 | 5 | 评论被回复 | 「{actor} 回复了你的评论：{snippet}」 | `post_id` + `comment_id` |
 | 6 | @提及 | 「{actor} 在帖子/评论中提到了你：{snippet}」 | `post_id`，可能带 `comment_id` |
+| 7 | 帖子审核通过 | 「你的帖子《{snippet}》已通过审核」 | `post_id` |
+| 8 | 帖子审核驳回 | 「你的帖子《{snippet}》未通过审核」 | `post_id` |
 
 字段语义：
-- `snippet`：摘要快照，≤100 字符。like/collect 类为**帖子标题**；comment/reply/mention 类为**评论正文截取**。直接渲染即可，无需再请求详情。
-- `post_id` 一定有值（6 类通知都挂在帖子下），`comment_id` 见上表。
+- `snippet`：摘要快照，≤100 字符。like/collect/审核结果类为**帖子标题**；comment/reply/mention 类为**评论正文截取**。直接渲染即可，无需再请求详情。
+- `post_id` 一定有值（8 类通知都挂在帖子下），`comment_id` 见上表。
+- 类型 7 / 8（圈主 / 管理员人工审核结果，#118）**不返回 `actor`**（不向作者暴露审核人），文案不要依赖 actor。
+  驳回的帖子只有作者自己可见（「我的帖子」里 `status=3`），跳转详情时按帖子不存在兜底。
 - 跳转规则建议：有 `comment_id` → 跳帖子详情并定位该评论；只有 `post_id` → 跳帖子详情。type=6 且只有 `post_id` → 跳帖子详情（提及发生在帖子里）。
 
 ## 三、接口详情
@@ -45,7 +49,7 @@ Query 参数：
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `type` | string | 否 | 空或 `0`=全部（默认）；单值 `1`-`6` 按类型过滤；逗号分隔多值如 `1,2` 按类型集合过滤（`IN`）。含非法值返回 400 |
+| `type` | string | 否 | 空或 `0`=全部（默认）；单值 `1`-`8` 按类型过滤；逗号分隔多值如 `1,2` 按类型集合过滤（`IN`）。含非法值返回 400 |
 | `size` | int | 否 | 每页条数，≤0 或 >100 按 20 处理 |
 | `cursor` | string | 否 | 上一页返回的游标，首页不传 |
 
@@ -97,7 +101,7 @@ GET /notice/list?type=1,2&size=20&cursor=eyJpZCI6IjAxOT...In0=
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `notices[].id` | string | 通知 ID（uuid），已读操作和分页锚点都用它 |
-| `notices[].actor` | object | 触发人。**可能缺省**（omitempty，用户已注销等降级场景），渲染时兜底为"有人" |
+| `notices[].actor` | object | 触发人。**可能缺省**（omitempty，用户已注销等降级场景；类型 7 / 8 恒缺省），渲染时兜底为"有人" |
 | `notices[].post_id` / `comment_id` | string | omitempty，无值时不出现 |
 | `notices[].is_read` | bool | 未读建议高亮样式 |
 | `size` | int | 本页实际条数 |

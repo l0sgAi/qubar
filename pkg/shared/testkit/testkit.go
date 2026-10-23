@@ -395,6 +395,7 @@ func teardown() {
 		redpanda.StopLikeEventConsumerGlobal()
 		redpanda.StopBatchConsumersGlobal()
 		redpanda.StopPostModerationConsumerGlobal()
+		redpanda.StopNotificationEventConsumerGlobal()
 		for _, closeFn := range []func() error{
 			redpanda.CloseRedpandaProducer,
 			redpanda.ClosePostStatsProducer,

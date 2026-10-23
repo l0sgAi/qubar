@@ -113,6 +113,8 @@ const (
 	NoticeTypeCommentPost  = "comment_post"  // 帖子被评论(顶层) → 帖子作者
 	NoticeTypeReplyComment = "reply_comment" // 评论被回复 → 被回复评论作者
 	NoticeTypeMention      = "mention"       // @提及 → 被提及用户
+	NoticeTypePostApproved = "post_approved" // 帖子人工审核通过 → 帖子作者（#118）
+	NoticeTypePostRejected = "post_rejected" // 帖子人工审核驳回 → 帖子作者（#118）
 )
 
 // NotificationEventMessage 通知事件消息（topic: notification_events）。
@@ -123,9 +125,9 @@ const (
 type NotificationEventMessage struct {
 	Type           string      `json:"type"` // NoticeType* 常量
 	ActorID        uuid.UUID   `json:"actor_id"`
-	PostID         *uuid.UUID  `json:"post_id,omitempty"`          // 跳转用；like_post/collect_post/comment_post/mention(post) 必填
+	PostID         *uuid.UUID  `json:"post_id,omitempty"`          // 跳转用；like_post/collect_post/comment_post/mention(post)/post_approved/post_rejected 必填
 	CommentID      *uuid.UUID  `json:"comment_id,omitempty"`       // like_comment/comment_post/reply_comment/mention(comment) 必填
 	MentionUserIDs []uuid.UUID `json:"mention_user_ids,omitempty"` // type=mention 专用（触发端已校验+截断）
-	Snippet        string      `json:"snippet,omitempty"`          // comment 类：正文快照（已 SanitizeForPg）；like/collect 由 consumer 反查帖子标题
+	Snippet        string      `json:"snippet,omitempty"`          // comment 类：正文快照（已 SanitizeForPg）；like/collect/审核结果由 consumer 反查帖子标题
 	Ts             int64       `json:"ts"`                         // 事件时间 Unix 毫秒
 }

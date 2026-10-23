@@ -43,7 +43,7 @@ COMMENT ON TABLE domains.notification IS '站内通知表(消息中心, Redpanda
 COMMENT ON COLUMN domains.notification.id IS '主键ID(UUIDv7,应用层生成,DB默认值仅兜底); 字典序=时间序, keyset 翻页排序键';
 COMMENT ON COLUMN domains.notification.recipient_id IS '接收人ID(UUID): 内容作者/被提及人';
 COMMENT ON COLUMN domains.notification.actor_id IS '触发人ID(UUID)';
-COMMENT ON COLUMN domains.notification.notice_type IS '通知类型: 1=帖子被赞 2=评论被赞 3=帖子被收藏 4=帖子被评论 5=评论被回复 6=@提及';
+COMMENT ON COLUMN domains.notification.notice_type IS '通知类型: 1=帖子被赞 2=评论被赞 3=帖子被收藏 4=帖子被评论 5=评论被回复 6=@提及 7=帖子审核通过 8=帖子审核驳回';
 COMMENT ON COLUMN domains.notification.post_id IS '跳转帖子ID(UUID,可空)';
 COMMENT ON COLUMN domains.notification.comment_id IS '跳转评论ID(UUID,可空)';
 COMMENT ON COLUMN domains.notification.snippet IS '内容快照(评论正文前100字符/帖子标题), 目标删除后通知仍可读';
@@ -71,7 +71,7 @@ CREATE UNIQUE INDEX uk_notice_dedup ON domains.notification(
 
 ## 应用义务（DB 不强制，应用层保证）
 
-- `notice_type` 枚举合法性（1-6）：consumer 按事件 type 映射，非法丢弃。
+- `notice_type` 枚举合法性（1-8；7 / 8 为人工审核结果，#118）：consumer 按事件 type 映射，非法丢弃。
 - `recipient_id != actor_id`：consumer R1 过滤。
 - mention 上限截断（`notice.mention_max`，默认 10）：post/comment application 层。
 - 软删过滤 `deleted = 0`：所有查询手动带。
