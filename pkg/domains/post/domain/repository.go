@@ -41,6 +41,9 @@ type PostRepository interface {
 	// GetMentionUserIDsByPostIDs 批量获取帖子的提及用户ID（按提及写入顺序）。
 	// 返回以 postID 为 key 的映射；无提及的帖子不出现在 map 中。
 	GetMentionUserIDsByPostIDs(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error)
+	// UpdateStatusFromReviewing 条件更新帖子状态：仅当帖子未删除且仍是审核中（status=2）时改为 status。
+	// 返回是否真正更新了一行；false 表示已被其他路径处理（重复投递 / 人工审核 / 删帖），调用方跳过后续副作用。
+	UpdateStatusFromReviewing(ctx context.Context, postID uuid.UUID, status int16) (bool, error)
 }
 
 // PostStatsCache 帖子统计信息缓存（view_count/comment_count/like_count 等）。
@@ -103,13 +106,15 @@ type PostCollectCache interface {
 	LoadAll(ctx context.Context, userID uuid.UUID, entries []InteractionEntry, complete bool) error
 }
 
-// PostEventPublisher 帖子事件发布（异步持久化统计到 DB）。
+// PostEventPublisher 帖子事件发布（异步持久化统计到 DB / 通知 / 审核）。
 type PostEventPublisher interface {
 	// PublishViewCount 发布浏览量变化事件。
 	PublishViewCount(ctx context.Context, postID uuid.UUID) error
 	// PublishMentionNotice 发布 @提及 通知事件（消息中心）。
 	// mentionUserIDs 由调用方校验（存在性/去自/截断）后传入；snippet 为帖子标题。
 	PublishMentionNotice(ctx context.Context, actorID, postID uuid.UUID, mentionUserIDs []uuid.UUID, snippet string) error
+	// PublishModeration 发布帖子审核事件（只带 post_id，worker 回源读库）。同步写入，返回错误表示事件未发出。
+	PublishModeration(ctx context.Context, postID uuid.UUID) error
 }
 
 // PostStatistics 帖子统计信息。

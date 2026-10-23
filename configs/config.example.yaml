@@ -132,6 +132,8 @@ redpanda:
   notice_event_topic: "notification_events" # 通知事件topic（消息中心）
   notice_event_consumer_group: "notification_events_consumer_group" # 通知事件消费者组
   notice_event_flush_interval: 5 # 通知落库间隔(秒)
+  post_moderation_topic: "post_moderation" # 帖子 AI 审核事件topic（仅 moderation 启用时使用）
+  post_moderation_consumer_group: "post_moderation_consumer_group" # 帖子审核 worker 消费者组
 
 # 消息中心配置（设计见 docs/notice-design.md）
 notice:

@@ -119,3 +119,24 @@ CREATE UNIQUE INDEX uk_post_mention_post_user ON domains.post_mention(post_id, u
 -- 2. 【预留】"提及我的" 反查列表
 CREATE INDEX idx_post_mention_user ON domains.post_mention(user_id, create_time DESC);
 ```
+
+## 帖子 AI 审核日志表
+
+> 权威 DDL：`migrations/20261023164208_add_post_moderation_log.up.sql`（#117）。append-only，不进 CDC / ES（`-- cdc: none`）。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | uuid | 主键（UUIDv7，应用层 `sharedomain.NewID()` 生成） |
+| post_id | uuid | 被审核帖子 ID（无 FK，应用层保证） |
+| decision | varchar(16) | `publish` 发布 / `review` 人工待审 / `reject` 驳回 / `fail_open` 审核不可用按 fail_open 放行 |
+| hazards | jsonb | 各风险概率（0–1），key 为 `domain.Hazard`；审核调用失败时为 `{}` |
+| severity | double precision | 危害程度期望分（0–3）；失败时 NULL |
+| severity_confidence | double precision | severity 置信度（0–1）；失败时 NULL |
+| model | varchar(64) | 实际作答的模型版本号（如 `jev-1.13.0`） |
+| input_tokens | integer | 计费输入 token 数 |
+| latency_ms | integer | 审核调用总耗时（含重试等待） |
+| error_msg | varchar(2048) | 审核调用 / 事件投递错误（成功为 NULL；不含 api_key） |
+| create_time | timestamptz | 审核时间 |
+
+- 索引：`idx_post_moderation_log_post (post_id, create_time DESC)`：worker 幂等检查（已有审计行即视为已审核）与按帖子查审核记录。
+- 一帖通常只有一行；状态变更由 `post.status` 条件更新（`WHERE status = 2`）保证只发生一次。

@@ -40,3 +40,8 @@ func (p *postEventPublisherRedpanda) PublishMentionNotice(ctx context.Context, a
 	}
 	return nil
 }
+
+// PublishModeration 发布帖子审核事件（同步写入，失败由调用方按 fail_open 兜底）。
+func (p *postEventPublisherRedpanda) PublishModeration(ctx context.Context, postID uuid.UUID) error {
+	return redpanda.PublishPostModerationEvent(ctx, postID)
+}

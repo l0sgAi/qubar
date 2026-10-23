@@ -5,6 +5,7 @@ import (
 	"context"
 
 	postapp "interestBar/pkg/domains/post/application"
+	postdomain "interestBar/pkg/domains/post/domain"
 
 	"github.com/google/uuid"
 )
@@ -19,12 +20,14 @@ type collectPostTarget struct {
 	delegate postapp.PostService
 }
 
+// Exists 帖子存在且已发布才可操作：审核中 / 驳回 / 屏蔽的帖子对外不可见（#117），
+// 按不存在处理，避免借点赞 / 收藏产生计数、热度与通知。
 func (t *collectPostTarget) Exists(ctx context.Context, postID uuid.UUID) (bool, error) {
 	meta, err := t.delegate.GetPostMeta(ctx, postID)
 	if err != nil || meta == nil {
 		return false, err
 	}
-	return true, nil
+	return meta.Status == postdomain.PostStatusPublished, nil
 }
 
 func (t *collectPostTarget) RestoreStats(ctx context.Context, postID uuid.UUID) error {
