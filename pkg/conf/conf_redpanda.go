@@ -38,4 +38,8 @@ type Redpanda struct {
 	NoticeEventTopic         string `mapstructure:"notice_event_topic" json:"notice_event_topic" yaml:"notice_event_topic"`                            // 通知事件 topic
 	NoticeEventConsumerGroup string `mapstructure:"notice_event_consumer_group" json:"notice_event_consumer_group" yaml:"notice_event_consumer_group"` // 通知事件消费者组
 	NoticeEventFlushInterval int    `mapstructure:"notice_event_flush_interval" json:"notice_event_flush_interval" yaml:"notice_event_flush_interval"` // 通知落库间隔(秒)
+
+	// 帖子 AI 审核事件（#117）：仅 moderation 启用（enabled 且配置了 api_key）时创建生产者 / 消费者。
+	PostModerationTopic         string `mapstructure:"post_moderation_topic" json:"post_moderation_topic" yaml:"post_moderation_topic"`                            // 帖子审核事件 topic
+	PostModerationConsumerGroup string `mapstructure:"post_moderation_consumer_group" json:"post_moderation_consumer_group" yaml:"post_moderation_consumer_group"` // 帖子审核 worker 消费者组
 }

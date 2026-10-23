@@ -206,3 +206,17 @@ func (r *postRepoPG) GetMentionUserIDsByPostIDs(ctx context.Context, postIDs []u
 	}
 	return result, nil
 }
+
+// UpdateStatusFromReviewing 条件更新：UPDATE ... SET status = ? WHERE id = ? AND status = 2 AND deleted = 0。
+//
+// 帖子表第一条状态变更路径（#117）：靠 WHERE status = 2 保证同一帖子只会被转出审核中一次，
+// 重复消费 / 并发 worker / 人工审核抢先时更新 0 行，调用方据此跳过发布副作用。
+func (r *postRepoPG) UpdateStatusFromReviewing(ctx context.Context, postID uuid.UUID, status int16) (bool, error) {
+	res := r.db.WithContext(ctx).Model(&domain.Post{}).
+		Where("id = ? AND status = ? AND deleted = ?", postID, domain.PostStatusReviewing, 0).
+		UpdateColumns(map[string]any{"status": status, "update_time": gorm.Expr("CURRENT_TIMESTAMP")})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
+}

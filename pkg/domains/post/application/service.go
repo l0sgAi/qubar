@@ -283,6 +283,14 @@ type PostService interface {
 	SetHistoryRecorder(r domain.HistoryRecorder)
 	// SetAgentTrigger 注入 AI 机器人回复触发端口（未注入则发帖 @机器人 不触发回复）。
 	SetAgentTrigger(t AgentPostTrigger)
+
+	// ModeratePost 审核 worker 处理一条帖子审核事件（#117），见 moderation.go。
+	// 返回错误表示需要重试（不提交 offset）；帖子不存在 / 已处理返回 nil。
+	ModeratePost(ctx context.Context, postID uuid.UUID) error
+	// SetModeration 注入 AI 审核依赖与配置（未注入或配置未启用时发帖直接发布，行为与审核流上线前一致）。
+	SetModeration(moderator domain.ContentModerator, logRepo domain.PostModerationLogRepository, cfg conf.Moderation)
+	// SetModerationCircleReader 注入审核用圈子信息读取端口（未注入时审核输入不带圈子语境）。
+	SetModerationCircleReader(r ModerationCircleReader)
 }
 
 // PostMeta 帖子元信息（供 comment/like 领域校验用）。
@@ -321,6 +329,12 @@ type postServiceImpl struct {
 	postCountPort CirclePostCountPort
 	historyRec    domain.HistoryRecorder
 	agentTrigger  AgentPostTrigger
+
+	// AI 审核（#117），见 moderation.go
+	moderator     domain.ContentModerator
+	moderationLog domain.PostModerationLogRepository
+	moderationCfg conf.Moderation // 已填默认值
+	modCircle     ModerationCircleReader
 }
 
 // NewPostService 构造 PostService。
@@ -358,7 +372,8 @@ func (s *postServiceImpl) SetAgentTrigger(t AgentPostTrigger)          { s.agent
 // CreatePost 创建帖子。
 //
 // 与旧 controller.CreatePost 行为一致（除状态外）：
-//  1. 默认 type=1(图文)；状态由服务端决定（客户端无法指定，#110），见下方 TODO；
+//  1. 默认 type=1(图文)；状态由服务端决定（客户端无法指定，#110）：
+//     moderation 未启用 → 已发布；启用 → 审核中，发审核事件后立即返回（#117）；
 //  2. 校验 circle_id/title 非空；
 //  3. 校验成员身份与状态（pending/muted/banned）；
 //  4. 校验圈子可用性；
@@ -370,9 +385,11 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 	if postType == 0 {
 		postType = domain.PostTypeTextImage
 	}
-	// TODO(review-flow): 审核流未上线，新帖一律直接置为已发布；
-	// 审核能力就绪后改为 domain.PostStatusReviewing（审核通过再转已发布）。
 	postStatus := int16(domain.PostStatusPublished)
+	moderated := s.moderationActive()
+	if moderated {
+		postStatus = domain.PostStatusReviewing
+	}
 
 	if input.CircleID == uuid.Nil {
 		return uuid.Nil, errCircleIDRequired
@@ -449,9 +466,12 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 		}
 	}
 
-	// 仅已发布才执行发布副作用（圈子计数 / @提及通知 / 机器人触发）。
+	// 仅已发布才执行发布副作用（圈子计数 / @提及通知 / 机器人触发）；
+	// 审核中的帖子发审核事件，由 worker 审核通过后再执行。
 	if postStatus == domain.PostStatusPublished {
 		s.onPostPublished(ctx, post, mentionIDs)
+	} else if moderated {
+		s.enqueueModeration(ctx, post, mentionIDs)
 	}
 
 	return post.ID, nil
@@ -624,15 +644,18 @@ func (s *postServiceImpl) GetPostDetail(ctx context.Context, userID, postID uuid
 		// 收藏状态（缓存优先，miss 回源 DB）
 		isCollected = s.checkCollected(ctx, userID, postID)
 
-		// 异步增加浏览量（独立 goroutine，需自带 panic 恢复，避免拖垮服务）
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					logger.Log.Error(fmt.Sprintf("Panic in asyncIncrementView: %v", r))
-				}
+		// 异步增加浏览量（独立 goroutine，需自带 panic 恢复，避免拖垮服务）。
+		// 只统计已发布帖子：作者查看自己审核中 / 驳回的帖子不计浏览、热度与浏览历史（#117）。
+		if post.Status == domain.PostStatusPublished {
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Log.Error(fmt.Sprintf("Panic in asyncIncrementView: %v", r))
+					}
+				}()
+				s.asyncIncrementView(postID, userID)
 			}()
-			s.asyncIncrementView(postID, userID)
-		}()
+		}
 	}
 
 	// 查发帖人信息

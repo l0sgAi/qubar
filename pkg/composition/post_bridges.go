@@ -1,9 +1,11 @@
-// Package composition 的 post_bridges.go：注入 post 领域的跨域桥接器（user / circle / history → post）。
+// Package composition 的 post_bridges.go：注入 post 领域的跨域桥接器（user / circle / category / history → post）。
 package composition
 
 import (
 	"context"
+	"errors"
 
+	categorydomain "interestBar/pkg/domains/category/domain"
 	circleapp "interestBar/pkg/domains/circle/application"
 	circledomain "interestBar/pkg/domains/circle/domain"
 	historyapp "interestBar/pkg/domains/history/application"
@@ -113,6 +115,40 @@ type circlePostCountPortForPost struct {
 
 func (p *circlePostCountPortForPost) IncrPostCount(ctx context.Context, circleID uuid.UUID) error {
 	return p.svc.IncrPostCount(ctx, circleID)
+}
+
+// ===== circle / category → post（审核输入的圈子语境，#117）=====
+
+// postModerationCircleReader 读取圈子名称 + 分类名，供帖子 AI 审核判断语境（如同人圈的虚构暴力）。
+// 分类表很小（几十行），每次审核查一次全部启用分类即可。
+type postModerationCircleReader struct {
+	circleRepo   circledomain.CircleRepository
+	categoryRepo categorydomain.CategoryRepository
+}
+
+func (r *postModerationCircleReader) GetModerationCircle(ctx context.Context, circleID uuid.UUID) (*postapp.ModerationCircle, error) {
+	circle, err := r.circleRepo.GetByID(ctx, circleID)
+	if err != nil {
+		if errors.Is(err, circledomain.ErrCircleNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	out := &postapp.ModerationCircle{Name: circle.Name}
+	if circle.CategoryID == nil {
+		return out, nil
+	}
+	categories, err := r.categoryRepo.GetAllActiveCategories(ctx)
+	if err != nil {
+		return out, nil // 分类只是辅助语境，查不到不影响审核
+	}
+	for _, c := range categories {
+		if c.ID == *circle.CategoryID {
+			out.Category = c.Name
+			break
+		}
+	}
+	return out, nil
 }
 
 // ===== history → post =====
