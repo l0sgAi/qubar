@@ -531,6 +531,8 @@ go test ./pkg/composition/middleware/...
 
 欢迎提交 Issue 和 Pull Request！
 
+本地环境、代码约定、测试和 PR 流程见 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md)。
+
 本仓库用 agent 协作开发（l0sgAi/qubar#67），规则写在 [CLAUDE.md](CLAUDE.md)：
 
 - **Issue**：用 issue 模板写清背景和验收标准，默认带 `agent:triage`；维护者审核后改成 `agent:ready`，Actions 里的 Claude 会自动认领并开 PR（同时最多 3 个）。
