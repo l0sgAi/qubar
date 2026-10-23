@@ -7,6 +7,7 @@ import (
 	"interestBar/pkg/conf"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/storage/db/pgsql"
+	redispkg "interestBar/pkg/server/storage/redis"
 	sharedomain "interestBar/pkg/shared/domain"
 	"sync"
 	"time"
@@ -438,7 +439,7 @@ func persistLikeStates(states []*likeState) error {
 	for i, r := range posts {
 		postIDs[i] = r.PostID
 	}
-	return pgsql.DB.Transaction(func(tx *gorm.DB) error {
+	err := pgsql.DB.Transaction(func(tx *gorm.DB) error {
 		if len(posts) > 0 {
 			if err := lockRowsByID(tx, "domains.post", postIDs); err != nil {
 				return err
@@ -462,6 +463,41 @@ func persistLikeStates(states []*likeState) error {
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	reconcilePostLikeCounts(postIDs)
+	return nil
+}
+
+// reconcilePostLikeCounts 落库提交后把 Redis post:stats 中低于 PG 的 like_count 抬回 PG 值。
+// 缓存过期后由 PG 回填时，窗口内点赞尚未落库，回填值偏低且之后不会自愈（#128）。
+// best-effort：失败只记日志，不影响落库与 offset 提交。
+func reconcilePostLikeCounts(postIDs []uuid.UUID) {
+	ids := sortedIDs(postIDs)
+	if len(ids) == 0 {
+		return
+	}
+	var rows []struct {
+		ID        uuid.UUID
+		LikeCount int64
+	}
+	if err := pgsql.DB.Table("domains.post").Select("id, like_count").
+		Where("id IN ? AND deleted = 0", ids).Scan(&rows).Error; err != nil {
+		logger.Log.Warn("Failed to load post like_count for cache reconcile: " + err.Error())
+		return
+	}
+	counts := make(map[uuid.UUID]int64, len(rows))
+	for _, r := range rows {
+		counts[r.ID] = r.LikeCount
+	}
+	fixed, err := redispkg.ReconcilePostLikeCounts(counts)
+	if err != nil {
+		logger.Log.Warn("Failed to reconcile post stats like_count: " + err.Error())
+	}
+	if fixed > 0 {
+		logger.Log.Info(fmt.Sprintf("Reconciled like_count of %d cached post stats", fixed))
+	}
 }
 
 // StartLikeEventConsumerWithRetry 启动点赞事件消费者，带重试机制
