@@ -130,7 +130,21 @@ type PostEventPublisher interface {
 	// PublishReviewResultNotice 发布人工审核结果通知事件（通过 / 驳回 → 帖子作者，#118）。
 	// 接收人与标题快照由通知 consumer 反查帖子；best-effort，失败只记日志。
 	PublishReviewResultNotice(ctx context.Context, operatorID, postID uuid.UUID, approved bool) error
+	// PublishModeratorNotice 发布圈管通知事件（帖子被举报达到阈值 / 已发布帖子疑似自伤 → 本圈圈主 + 管理员，#153）。
+	// 接收人由通知 consumer 按帖子所属圈子反查；actorID 举报通知传 uuid.Nil（不暴露举报人），自伤通知传帖子作者。
+	// best-effort，失败只记日志。
+	PublishModeratorNotice(ctx context.Context, kind ModeratorNoticeKind, actorID, postID uuid.UUID) error
+	// PublishPostRemovedNotice 发布「帖子被举报后经复核下架」通知事件（→ 帖子作者，#153）。best-effort。
+	PublishPostRemovedNotice(ctx context.Context, operatorID, postID uuid.UUID) error
 }
+
+// ModeratorNoticeKind 圈管通知种类（#153）。
+type ModeratorNoticeKind int
+
+const (
+	ModeratorNoticeReported ModeratorNoticeKind = iota + 1 // 帖子待处理举报达到通知阈值
+	ModeratorNoticeSelfHarm                                // 已发布帖子疑似自伤 / 轻生倾向，需要人工关怀
+)
 
 // PostStatistics 帖子统计信息。
 type PostStatistics struct {

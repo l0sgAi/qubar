@@ -15,22 +15,30 @@ import (
 
 // 通知类型（与 domains.notification.notice_type 列、Redpanda 事件 type 一一对应）。
 const (
-	NoticeTypeLikePost     int16 = 1 // 帖子被赞 → 帖子作者
-	NoticeTypeLikeComment  int16 = 2 // 评论被赞 → 评论作者
-	NoticeTypeCollectPost  int16 = 3 // 帖子被收藏 → 帖子作者
-	NoticeTypeCommentPost  int16 = 4 // 帖子被评论(顶层) → 帖子作者
-	NoticeTypeReplyComment int16 = 5 // 评论被回复 → 被回复评论作者
-	NoticeTypeMention      int16 = 6 // @提及 → 被提及用户
-	NoticeTypePostApproved int16 = 7 // 帖子人工审核通过 → 帖子作者（#118）
-	NoticeTypePostRejected int16 = 8 // 帖子人工审核驳回 → 帖子作者（#118）
+	NoticeTypeLikePost     int16 = 1  // 帖子被赞 → 帖子作者
+	NoticeTypeLikeComment  int16 = 2  // 评论被赞 → 评论作者
+	NoticeTypeCollectPost  int16 = 3  // 帖子被收藏 → 帖子作者
+	NoticeTypeCommentPost  int16 = 4  // 帖子被评论(顶层) → 帖子作者
+	NoticeTypeReplyComment int16 = 5  // 评论被回复 → 被回复评论作者
+	NoticeTypeMention      int16 = 6  // @提及 → 被提及用户
+	NoticeTypePostApproved int16 = 7  // 帖子人工审核通过 → 帖子作者（#118）
+	NoticeTypePostRejected int16 = 8  // 帖子人工审核驳回 → 帖子作者（#118）
+	NoticeTypePostReported int16 = 9  // 帖子待处理举报达到阈值 → 本圈圈主 + 管理员（#153）
+	NoticeTypePostSelfHarm int16 = 10 // 帖子疑似自伤 / 轻生倾向（已发布，需人工关怀）→ 本圈圈主 + 管理员（#153）
+	NoticeTypePostRemoved  int16 = 11 // 帖子被举报后经圈管复核下架 → 帖子作者（#153）
 
 	// NoticeTypeMax 最大合法通知类型（列表 type 过滤校验上限）。
-	NoticeTypeMax = NoticeTypePostRejected
+	NoticeTypeMax = NoticeTypePostRemoved
 )
 
-// HidesActor 该类型是否对接收人隐藏 actor：审核结果通知不暴露审核人（actor_id 仍落库供排查）。
+// HidesActor 该类型是否对接收人隐藏 actor：审核 / 下架结果不暴露处理人，举报通知不暴露举报人
+// （actor_id 仍落库供排查；举报通知的 actor_id 为全零 UUID）。疑似自伤通知的 actor 是帖子作者，照常展示。
 func HidesActor(noticeType int16) bool {
-	return noticeType == NoticeTypePostApproved || noticeType == NoticeTypePostRejected
+	switch noticeType {
+	case NoticeTypePostApproved, NoticeTypePostRejected, NoticeTypePostReported, NoticeTypePostRemoved:
+		return true
+	}
+	return false
 }
 
 // 已读状态。

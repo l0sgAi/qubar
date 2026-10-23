@@ -122,14 +122,15 @@ CREATE INDEX idx_post_mention_user ON domains.post_mention(user_id, create_time 
 
 ## 帖子 AI 审核日志表
 
-> 权威 DDL：`migrations/20261023164208_add_post_moderation_log.up.sql`（#117）+ `20261023193818_post_moderation_log_manual.up.sql`（#118 加 source / operator_id / reason）。
+> 权威 DDL：`migrations/20261023164208_add_post_moderation_log.up.sql`（#117）+ `20261023193818_post_moderation_log_manual.up.sql`（#118 加 source / operator_id / reason）
+> + `20261023211350_add_post_report.up.sql`（#153 只改 decision 注释）。
 > append-only，不进 CDC / ES（`-- cdc: none`）。AI 审核与圈主 / 管理员人工审核都写这张表，用 `source` 区分。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | id | uuid | 主键（UUIDv7，应用层 `sharedomain.NewID()` 生成） |
 | post_id | uuid | 被审核帖子 ID（无 FK，应用层保证） |
-| decision | varchar(16) | `publish` 发布 / `review` 人工待审 / `reject` 驳回 / `fail_open` 审核不可用按 fail_open 放行；人工审核只有 `publish`（通过）/ `reject`（驳回） |
+| decision | varchar(16) | AI：`publish` 发布 / `review` 人工待审（`review_action=hold`）/ `review_publish` 人工待审但 `review_action=publish` 自动发布（#153）/ `reject` 驳回 / `fail_open` 审核不可用按 fail_open 放行；人工：`publish` 通过 / `reject` 驳回（#118）/ `report_dismiss` 举报复核保留 / `report_remove` 举报复核下架（#153） |
 | hazards | jsonb | 各风险概率（0–1），key 为 `domain.Hazard`；审核调用失败时为 `{}` |
 | severity | double precision | 危害程度期望分（0–3）；失败时 NULL |
 | severity_confidence | double precision | severity 置信度（0–1）；失败时 NULL |
@@ -146,3 +147,29 @@ CREATE INDEX idx_post_mention_user ON domains.post_mention(user_id, create_time 
 - 一帖通常只有一行 AI 记录；转人工的帖子处理后再多一行人工记录（`source=2`）。状态变更由 `post.status` 条件更新（`WHERE status = 2`）保证只发生一次；
   人工审核的条件更新与审计行在同一事务里写入（`PostRepository.ResolveReview`）。
 - 待审列表取「最近一条 AI 结论」：`DISTINCT ON (post_id) ... WHERE source = 1 ORDER BY post_id, create_time DESC`，走上面的索引。
+
+## 帖子举报表
+
+> 权威 DDL：`migrations/20261023211350_add_post_report.up.sql`（#153）。只在 PG 内读写，不进 CDC / ES（`-- cdc: none`）。
+> 先发后审：用户举报已发布帖子，待处理举报数达到 `moderation.report_notify_threshold` 时通知圈主 + 管理员复核。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | uuid | 主键（UUIDv7，应用层生成） |
+| post_id | uuid | 被举报帖子 ID（无 FK） |
+| circle_id | uuid | 帖子所属圈子（冗余自 post.circle_id，圈内复核列表用） |
+| reporter_id | uuid | 举报人（user.id，无 FK）；不向作者、圈管接口暴露 |
+| reason_type | smallint | 1 垃圾广告 / 引流，2 色情低俗，3 辱骂骚扰，4 违法违规，5 暴力恐怖，6 泄露隐私，7 自伤轻生，8 其他 |
+| reason | varchar(200) | 补充说明（可空串） |
+| status | smallint | 0 待处理 / 1 举报不成立（帖子保留）/ 2 帖子已下架 |
+| notified | smallint | 本轮待处理举报是否已通知圈管：达到通知阈值的那一条置 1；复核关闭后失效，下一轮重新计数 |
+| handler_id | uuid | 复核处理人；待处理为 NULL |
+| handle_time | timestamptz | 复核时间；待处理为 NULL |
+| create_time / update_time | timestamptz | 举报 / 更新时间 |
+
+- 索引：`uk_post_report_post_reporter (post_id, reporter_id)` UNIQUE：每人每帖只能举报一次（处理后也不能再举报），也承担按帖子查待处理举报；
+  `idx_post_report_reporter (reporter_id, create_time DESC)`：每用户 24 小时上限；
+  `idx_post_report_circle_pending (circle_id, post_id) WHERE status = 0`：圈内被举报列表（按帖子聚合待处理举报）。
+- 并发：同一帖子的举报写入与复核用事务级 advisory lock（`pg_advisory_xact_lock(153, hashtext(post_id))`）串行化，
+  保证「处理前只通知一次」与自动屏蔽计数准确，不锁 `post` 行。
+- 自动屏蔽（`report_hide_threshold > 0`）把帖子 `status 1 → 4`（屏蔽），不进 #118 待审队列；`dismiss` 恢复为 1，`remove` 改为 3。

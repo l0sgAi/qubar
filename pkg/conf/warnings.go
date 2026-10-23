@@ -40,6 +40,9 @@ func (c *AppConfig) SecurityWarnings() []string {
 	if m := c.Moderation.Model; strings.HasSuffix(m, "-latest") || strings.HasSuffix(m, "-preview") {
 		out = append(out, fmt.Sprintf("moderation.model=%q is an alias; pin a version such as %s so thresholds stay valid", m, DefaultModerationModel))
 	}
+	if a := c.Moderation.ReviewAction; a != "" && a != ModerationReviewActionPublish && a != ModerationReviewActionHold {
+		out = append(out, fmt.Sprintf("moderation.review_action=%q is invalid (publish | hold); falling back to publish", a))
+	}
 	return out
 }
 
