@@ -13,6 +13,8 @@ import (
 func shutdown() {
 	// 收到信号后 Spin 返回，执行资源清理。
 	logger.Log.Info("Shutdown Server ...")
+	// 先停机器人自动回复扫描器：取消进行中的一轮（回复会写评论并发事件，依赖 DB/Redis/生产者）。
+	redpanda.StopAgentAutoReplySyncer()
 	// 先停通知消费者：排干 flush 窗口内缓冲事件（落库 + 未读计数依赖 DB/Redis，
 	// 必须先于 CloseRedis 执行）。
 	redpanda.StopNotificationEventConsumerGlobal()

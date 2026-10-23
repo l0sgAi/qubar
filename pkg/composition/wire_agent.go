@@ -19,7 +19,7 @@ func newAgentService(deps *Deps) (agentdomain.AgentRepository, agentapp.AgentSer
 	return agentRepo, agentapp.NewAgentService(agentRepo)
 }
 
-// newAgentReplyService 构造机器人回复执行服务（eino LLM + post/comment 跨域桥接，
+// newAgentReplyService 构造机器人回复执行服务（eino LLM + post/comment 跨域桥接 + 自动回复候选，
 // 桥接器见 agent_bridges.go；role 读取 setter 注入见 RegisterDomainRoutes）。
 func newAgentReplyService(deps *Deps, postSvc postapp.PostService, commentSvc commentapp.CommentService) agentapp.ReplyService {
 	agentRepo := agentinfra.NewAgentRepository(deps.DB.Get())
@@ -28,6 +28,7 @@ func newAgentReplyService(deps *Deps, postSvc postapp.PostService, commentSvc co
 	svc := agentapp.NewReplyService(agentRepo, replyLogRepo, llm)
 	svc.SetPostReader(&agentPostReader{delegate: postSvc})
 	svc.SetCommentCreator(&agentCommentCreator{delegate: commentSvc})
+	svc.SetCandidateReader(&agentCandidateReader{post: postSvc, comment: commentSvc})
 	return svc
 }
 

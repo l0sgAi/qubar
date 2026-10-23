@@ -11,4 +11,6 @@ type AiAgent struct {
 	// AllowPrivateBaseURL 允许 base_url 使用 http 及内网/环回地址（#48 防 SSRF 开关）。
 	// 默认 false；仅本地开发或内网自建模型网关时开启，开启后圈主可让服务端访问内网。
 	AllowPrivateBaseURL bool `mapstructure:"allow_private_base_url" json:"allow_private_base_url" yaml:"allow_private_base_url"`
+	// Autonomy 自主行为（自动回复高热度帖子 / 评论）的平台总开关与上限，见 conf_aiagent_autonomy.go。
+	Autonomy AiAgentAutonomy `mapstructure:"autonomy" json:"autonomy" yaml:"autonomy"`
 }

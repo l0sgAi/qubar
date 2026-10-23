@@ -4,6 +4,7 @@
 > **对应实现**：`pkg/domains/aiagent/`，DDL 见 [../pgsql-ddl/ai-agent.md](../pgsql-ddl/ai-agent.md)，回复链路设计见 [../agent-reply-design.md](../agent-reply-design.md)。
 > **状态**：CRUD 已交付；回复执行链路已交付（评论关键词触发 mode=2 + 手动触发 mode=3；「全部新帖」mode=1 暂不生效，P2 待实现）。
 > 2026-08-26 起支持**两阶段回复判定**：新增 `filter_prompt` 字段（判定条件），详见 §2.3，设计见 [../agent-reply-filter-design.md](../agent-reply-filter-design.md)。
+> 2026-10-23 起支持**自动回复高热度帖子 / 评论**（#99）：新增 `auto_config.auto_reply` 字段，详见 §2.5，设计见 [../agent-auto-reply-design.md](../agent-auto-reply-design.md)。
 
 ---
 
@@ -66,6 +67,7 @@ Content-Type: application/json   （POST/PUT）
 | `trigger_keywords` | string[] | 触发关键词；仅 mode=2 时有意义（匹配**评论内容**，不区分大小写子串） |
 | `max_replies_per_hour` | int | 每小时回复上限，0=不限，默认 30 |
 | `min_interval_sec` | int | 两次回复最小间隔秒，0=不限，默认 60 |
+| `auto_config` | object | 自主行为配置；本期只有 `auto_reply`（自动回复高热度帖子 / 评论），见 §2.5。未配置时回显 `enabled=false` 的零值 |
 | `status` | int | 1=启用，0=停用 |
 | `create_time` / `update_time` | string(RFC3339) | 时间戳 |
 
@@ -91,6 +93,49 @@ Content-Type: application/json   （POST/PUT）
 
 **前端建议**：表单上作为「高级选项」textarea，占位文案示例 `只回复编程相关问题`；仅 `trigger_mode=2` 时展示。
 
+### 2.5 auto_config.auto_reply 自动回复高热度帖子 / 评论
+
+后台按 `aiagent.autonomy.scan_interval_sec`（默认 5 分钟）定时扫描，挑出达到门槛的帖子 / 评论自动回复。
+与 `trigger_mode` **互不影响**（任何模式的机器人都可以开），默认关闭；平台总开关 `aiagent.autonomy.enabled` 关闭时所有机器人都不扫描。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `enabled` | bool | 是否开启自动回复 |
+| `targets` | string[] | 目标类型：`post`（回复帖子，发顶层评论）/ `comment`（回复评论，挂在该评论楼层内），不可重复 |
+| `post_hot_min` | int | 帖子热度门槛（`hot >= 该值`）；`targets` 含 `post` 且开启时必须 ≥1 |
+| `comment_like_min` | int | 评论点赞数门槛；与 `comment_reply_min` **满足任一即可**，0 = 该条件不参与 |
+| `comment_reply_min` | int | 评论回复数门槛；`targets` 含 `comment` 且开启时两个评论门槛至少一个 ≥1 |
+| `window_hours` | int | 只看最近 N 小时发布的内容，1-168（开启时必填） |
+| `max_per_hour` | int | 自动回复每小时上限，0 = 不单独限制，≤1000；**同时**仍受 `max_replies_per_hour` / `min_interval_sec` 约束 |
+
+规则：
+- **每个机器人对同一目标最多自动回复一次**（失败、分类器判定不回复也算已触发，不重试）；同一目标最多被 `aiagent.autonomy.max_agents_per_target`（默认 1）个机器人自动回复。
+- 机器人账号（role=2）发的帖子 / 评论不会被选中；圈内机器人只回复本圈内容，全局机器人全站。
+- 配置了 `filter_prompt` 时自动回复同样先经分类器判定（§2.3）。
+- 每轮每个机器人每种目标按热度取前 `aiagent.autonomy.max_candidates_per_run`（默认 20）个候选；
+  受 `min_interval_sec` 约束，每个机器人每轮通常至多回复一次。
+- 自动回复的日志行 `trigger_source=4`（1=关键词 2=@提及 3=手动）。
+
+示例：
+
+```json
+{
+  "auto_config": {
+    "auto_reply": {
+      "enabled": true,
+      "targets": ["post", "comment"],
+      "post_hot_min": 200,
+      "comment_like_min": 20,
+      "comment_reply_min": 10,
+      "window_hours": 24,
+      "max_per_hour": 5
+    }
+  }
+}
+```
+
+**前端建议**：表单「自动回复」分组；`enabled=false` 时可折叠其余字段（但提交时仍按整体替换语义带上，见 §3.4）。
+
 ### 2.4 响应示例
 
 ```json
@@ -114,6 +159,12 @@ Content-Type: application/json   （POST/PUT）
     "trigger_keywords": ["怎么加入", "求助", "新人"],
     "max_replies_per_hour": 30,
     "min_interval_sec": 60,
+    "auto_config": {
+      "auto_reply": {
+        "enabled": false, "targets": [], "post_hot_min": 0, "comment_like_min": 0,
+        "comment_reply_min": 0, "window_hours": 0, "max_per_hour": 0
+      }
+    },
     "status": 1,
     "create_time": "2026-08-25T10:00:00+08:00",
     "update_time": "2026-08-25T10:00:00+08:00"
@@ -158,7 +209,7 @@ Content-Type: application/json   （POST/PUT）
 }
 ```
 
-**默认值**（字段不传时）：`trigger_mode=1`、`max_replies_per_hour=30`、`min_interval_sec=60`、`status=1`、`llm_params={}`、`trigger_keywords=[]`、`filter_prompt=""`（不判定）。
+**默认值**（字段不传时）：`trigger_mode=1`、`max_replies_per_hour=30`、`min_interval_sec=60`、`status=1`、`llm_params={}`、`trigger_keywords=[]`、`filter_prompt=""`（不判定）、`auto_config` 为空（不自动回复）。创建时也可带 `auto_config`（§2.5）。
 
 **成功**：HTTP 200，`data` 为完整 AgentVO（注意本项目创建统一回 200/`Created successfully`，非 201）。
 
@@ -206,12 +257,13 @@ Content-Type: application/json   （POST/PUT）
 { "api_key": "sk-new-key", "status": 0 }
 ```
 
-可更新字段：`name`、`avatar_url`、`api_protocol`、`base_url`、`api_key`、`model`、`llm_params`、`system_prompt`、`filter_prompt`、`trigger_mode`、`trigger_keywords`、`max_replies_per_hour`、`min_interval_sec`、`status`。
+可更新字段：`name`、`avatar_url`、`api_protocol`、`base_url`、`api_key`、`model`、`llm_params`、`system_prompt`、`filter_prompt`、`trigger_mode`、`trigger_keywords`、`max_replies_per_hour`、`min_interval_sec`、`status`、`auto_config`。
 
 **注意**：
 - `api_key` 传**空串 = 清除 key**（`has_api_key` 变 false）；要「保持不变」就不传该字段。
 - `filter_prompt` 传**空串 = 关闭判定**（回到命中即回复）；不传 = 保持原条件。
 - `llm_params` / `trigger_keywords` 是**整体替换**语义（传了就覆盖全量），不是合并。
+- `auto_config.auto_reply` 传了即**整体替换该子对象**（未传的字段按 0 / false 处理，会参与校验）；不传 `auto_reply` 则保持不变。`auto_config` 里其他子对象（后续的自动发帖等）不受影响。
 - `trigger_mode` 改为 2 时，同请求需带非空 `trigger_keywords`（或已存关键词非空）。
 - 空请求体（无任何可更新字段）返回 400（`at least one field to update`）。
 - `name` 改名会做唯一性检查，撞名返回 409。
@@ -258,6 +310,8 @@ Content-Type: application/json   （POST/PUT）
 | 400 | `rate limit values must be >= 0` | 限频字段为负 | 数字输入框 min=0 |
 | 400 | `status must be 0 or 1` | status 非法 | 开关组件 |
 | 400 | `filter_prompt must be <= 2000 chars` | 判定条件超长 | textarea 计数限制 |
+| 400 | `auto_config.auto_reply is invalid: ...` | 自动回复配置非法（目标非 post/comment 或重复、数值为负 / 超上限、开启时缺目标 / 窗口 / 门槛） | 按 §2.5 做表单联动校验 |
+| 400 | `Invalid request body` | JSON 类型不匹配（如 `enabled` 传字符串） | 按字段类型提交 |
 | 400 | `at least one field to update` | PUT 空更新 | 提交前检查 |
 | 400 | `Invalid agent id` | 路径 :id 非 UUID | 不会出现，防御 |
 | 401 | `Token not found` / `Invalid or expired token` | 未登录/token 过期 | 走全局 401 拦截 |
@@ -276,7 +330,7 @@ Content-Type: application/json   （POST/PUT）
 2. **掩码含义**：`sk-****z789` = 前 3 + `****` + 后 4；key 长度 ≤8 时显示 `****`。掩码只用于人工辨认，不可用于任何提交。
 3. **列表搜索**：`GET /agent/list` 支持 `keyword` 按 `name` 模糊过滤（服务端 ILIKE，`total` 为过滤后总数）；也可继续本地过滤。
 4. **`linked_user_id` 只读**：机器人账号由后端生成（role=2，username/email 由 uuidv7+时间戳生成，明显非真人），前端仅展示。
-5. **status 语义**：停用（0）后机器人不再参与任何回复触发（关键词/手动均拒绝）。
+5. **status 语义**：停用（0）后机器人不再参与任何回复触发（关键词/手动均拒绝，自动回复扫描也跳过）。
 6. **触发/限频字段已生效**：mode=2 匹配**评论内容**（不是帖子）；mode=3 走 `POST /agent/:id/reply/:postId`；mode=1（全部新帖）暂不生效。同一帖子可被同一机器人多次回复（不设防重），限频按回复日志行统计（含失败、排除分类器跳过 status=2）。
 7. **时间字段**：RFC3339 带时区（+08:00），直接 `new Date()` 解析即可。
 8. **并发编辑**：无版本控制，后写覆盖；管理后台单人使用场景可接受。

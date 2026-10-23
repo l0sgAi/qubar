@@ -44,6 +44,8 @@ type createCircleAgentReq struct {
 	MaxRepliesPerHour int                    `json:"max_replies_per_hour"`
 	MinIntervalSec    int                    `json:"min_interval_sec"`
 	Status            *int                   `json:"status"`
+	// AutoConfig 自主行为配置（同全局 createAgentReq）。
+	AutoConfig *application.AutoConfigInput `json:"auto_config"`
 }
 
 // listCircleAgentsReq 列表查询参数（hertz BindQuery 只认 query tag）。
@@ -85,6 +87,7 @@ func (h *CircleAgentHandler) CreateCircleAgent(c appctx.AppContext) {
 		MaxRepliesPerHour: req.MaxRepliesPerHour,
 		MinIntervalSec:    req.MinIntervalSec,
 		Status:            req.Status,
+		AutoConfig:        req.AutoConfig,
 	})
 	if err != nil {
 		writeCircleAgentError(c, err)
@@ -165,6 +168,7 @@ func (h *CircleAgentHandler) UpdateCircleAgent(c appctx.AppContext) {
 		MaxRepliesPerHour: req.MaxRepliesPerHour,
 		MinIntervalSec:    req.MinIntervalSec,
 		Status:            req.Status,
+		AutoConfig:        req.AutoConfig,
 	})
 	if err != nil {
 		writeCircleAgentError(c, err)
@@ -239,6 +243,7 @@ func writeCircleAgentError(c appctx.AppContext, err error) {
 		application.IsInvalidRateLimitErr(err),
 		application.IsInvalidStatusErr(err),
 		application.IsInvalidFilterErr(err),
+		application.IsInvalidAutoConfigErr(err),
 		application.IsNoFieldsToUpdateErr(err):
 		httputil.BadRequest(c, err.Error())
 	case application.IsAPIKeyNotSetErr(err):

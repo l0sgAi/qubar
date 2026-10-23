@@ -8,6 +8,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -87,6 +88,18 @@ type CreateAgentInput struct {
 	MaxRepliesPerHour int                    `json:"max_replies_per_hour"`
 	MinIntervalSec    int                    `json:"min_interval_sec"`
 	Status            *int                   `json:"status"` // nil=默认启用；显式 0=停用
+	AutoConfig        *AutoConfigInput       `json:"auto_config"`
+}
+
+// AutoConfigInput 自主行为配置入参（auto_config）。子对象按顶层 key 独立写入：
+// 传了 auto_reply 即整体替换该子对象，未传的子对象（含其他自主行为）保持不变。
+type AutoConfigInput struct {
+	AutoReply *domain.AutoReplyConfig `json:"auto_reply"`
+}
+
+// AutoConfigVO 自主行为配置视图（未配置的子对象回显零值，即 enabled=false）。
+type AutoConfigVO struct {
+	AutoReply domain.AutoReplyConfig `json:"auto_reply"`
 }
 
 // UpdateAgentInput 更新机器人入参（指针字段，部分更新语义，同 user.UpdateProfileInput）。
@@ -105,6 +118,7 @@ type UpdateAgentInput struct {
 	MaxRepliesPerHour *int                   `json:"max_replies_per_hour"`
 	MinIntervalSec    *int                   `json:"min_interval_sec"`
 	Status            *int                   `json:"status"`
+	AutoConfig        *AutoConfigInput       `json:"auto_config"`
 }
 
 // AgentVO 机器人视图（api_key 只回掩码，永不回明文/密文）。
@@ -126,6 +140,7 @@ type AgentVO struct {
 	TriggerKeywords   []string               `json:"trigger_keywords"`
 	MaxRepliesPerHour int                    `json:"max_replies_per_hour"`
 	MinIntervalSec    int                    `json:"min_interval_sec"`
+	AutoConfig        AutoConfigVO           `json:"auto_config"`
 	Status            int                    `json:"status"`
 	CreateTime        time.Time              `json:"create_time"`
 	UpdateTime        time.Time              `json:"update_time"`
@@ -450,6 +465,14 @@ func toVO(a *domain.AiAgent) AgentVO {
 	if vo.TriggerKeywords == nil {
 		vo.TriggerKeywords = []string{}
 	}
+	if ar, err := a.AutoConfig.AutoReply(); err == nil {
+		vo.AutoConfig.AutoReply = ar
+	} else {
+		logger.Log.Warn(fmt.Sprintf("agent %s: invalid auto_config.auto_reply ignored: %s", a.ID, err.Error()))
+	}
+	if vo.AutoConfig.AutoReply.Targets == nil {
+		vo.AutoConfig.AutoReply.Targets = []string{}
+	}
 	return vo
 }
 
@@ -512,6 +535,14 @@ func validateAndBuildAgent(ctx context.Context, input CreateAgentInput) (*domain
 			return nil, err
 		}
 	}
+	autoConfig := domain.AutoConfigJSON{}
+	if input.AutoConfig != nil && input.AutoConfig.AutoReply != nil {
+		raw, err := buildAutoReply(*input.AutoConfig.AutoReply)
+		if err != nil {
+			return nil, err
+		}
+		autoConfig[domain.AutoConfigKeyAutoReply] = raw
+	}
 
 	// api_key 加密（自部署免鉴权网关可免 key）
 	apiKeyEnc := ""
@@ -540,6 +571,7 @@ func validateAndBuildAgent(ctx context.Context, input CreateAgentInput) (*domain
 		TriggerKeywords:   toKeywords(input.TriggerKeywords),
 		MaxRepliesPerHour: input.MaxRepliesPerHour,
 		MinIntervalSec:    input.MinIntervalSec,
+		AutoConfig:        autoConfig,
 	}
 	// 触发模式关键词默认值补齐
 	if input.TriggerKeywords == nil {
@@ -662,6 +694,14 @@ func buildAgentUpdateFields(ctx context.Context, repo domain.AgentRepository, ag
 		}
 		fields["status"] = *input.Status
 	}
+	if input.AutoConfig != nil && input.AutoConfig.AutoReply != nil {
+		raw, err := buildAutoReply(*input.AutoConfig.AutoReply)
+		if err != nil {
+			return nil, err
+		}
+		// 顶层 key 合并补丁：只替换 auto_reply，其他自主行为子对象保持不变。
+		fields["auto_config"] = domain.AutoConfigPatch{domain.AutoConfigKeyAutoReply: raw}
+	}
 	return fields, nil
 }
 
@@ -776,6 +816,54 @@ func validateFilterPrompt(s string) error {
 		return errInvalidFilter
 	}
 	return nil
+}
+
+// 自动回复配置取值范围（每个机器人的配置；平台级上限见 conf aiagent.autonomy）。
+const (
+	autoReplyMaxWindowHours = 168     // 时间窗口最长 7 天
+	autoReplyMaxPerHour     = 1000    // 每小时上限的合法范围上界（防误填）
+	autoReplyMaxThreshold   = 1 << 30 // 门槛上界（防溢出 / 误填）
+)
+
+// buildAutoReply 校验自动回复配置并序列化为 auto_config.auto_reply 子对象。
+//
+// 规则：targets 只能是 post / comment 且不重复；门槛、窗口、上限均非负且有上界；
+// 启用时至少一个目标、window_hours 必须 >= 1，且每个启用的目标都要有生效门槛
+// （帖子 post_hot_min >= 1；评论 comment_like_min / comment_reply_min 至少一个 >= 1）——
+// 门槛全 0 等于"窗口内全部内容"，属于 trigger_mode=1 的语义，不在自动回复范围内。
+func buildAutoReply(cfg domain.AutoReplyConfig) (json.RawMessage, error) {
+	seen := make(map[string]bool, len(cfg.Targets))
+	targets := make([]string, 0, len(cfg.Targets))
+	for _, t := range cfg.Targets {
+		t = strings.TrimSpace(t)
+		if (t != domain.AutoReplyTargetPost && t != domain.AutoReplyTargetComment) || seen[t] {
+			return nil, errInvalidAutoConfig
+		}
+		seen[t] = true
+		targets = append(targets, t)
+	}
+	cfg.Targets = targets
+	for _, v := range []int{cfg.PostHotMin, cfg.CommentLikeMin, cfg.CommentReplyMin} {
+		if v < 0 || v > autoReplyMaxThreshold {
+			return nil, errInvalidAutoConfig
+		}
+	}
+	if cfg.WindowHours < 0 || cfg.WindowHours > autoReplyMaxWindowHours ||
+		cfg.MaxPerHour < 0 || cfg.MaxPerHour > autoReplyMaxPerHour {
+		return nil, errInvalidAutoConfig
+	}
+	if cfg.Enabled {
+		if len(targets) == 0 || cfg.WindowHours < 1 {
+			return nil, errInvalidAutoConfig
+		}
+		if seen[domain.AutoReplyTargetPost] && cfg.PostHotMin < 1 {
+			return nil, errInvalidAutoConfig
+		}
+		if seen[domain.AutoReplyTargetComment] && cfg.CommentLikeMin < 1 && cfg.CommentReplyMin < 1 {
+			return nil, errInvalidAutoConfig
+		}
+	}
+	return json.Marshal(cfg)
 }
 
 func validateStatus(status int) error {
