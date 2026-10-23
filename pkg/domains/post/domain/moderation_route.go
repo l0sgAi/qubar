@@ -8,6 +8,9 @@ const (
 	ModerationReview   ModerationDecision = "review"    // 人工待审（留在 status 2，一直不可见，#118 处理）
 	ModerationReject   ModerationDecision = "reject"    // 驳回（status 3）
 	ModerationFailOpen ModerationDecision = "fail_open" // 审核服务不可用，按 fail_open 放行发布（status 1）
+	// ModerationReviewPublish AI 判为人工待审，但 review_action=publish：待审后自动发布（status 1，#153）。
+	// 不是 RouteModeration 的输出，由应用层按配置从 ModerationReview 转换，只用于状态变更与审核日志。
+	ModerationReviewPublish ModerationDecision = "review_publish"
 )
 
 // ModerationThresholds 分流阈值（来自 moderation 配置，调用方先 WithDefaults）。
@@ -58,7 +61,7 @@ func RouteModeration(a Assessment, t ModerationThresholds) ModerationDecision {
 // TargetStatus 分流结果对应的帖子目标状态；ok=false 表示不改状态（人工待审留在审核中）。
 func (d ModerationDecision) TargetStatus() (status int16, ok bool) {
 	switch d {
-	case ModerationPublish, ModerationFailOpen:
+	case ModerationPublish, ModerationFailOpen, ModerationReviewPublish:
 		return PostStatusPublished, true
 	case ModerationReject:
 		return PostStatusRejected, true

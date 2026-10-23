@@ -96,6 +96,9 @@ func TestModerationDecision_TargetStatus(t *testing.T) {
 		{ModerationFailOpen, PostStatusPublished, true},
 		{ModerationReject, PostStatusRejected, true},
 		{ModerationReview, 0, false},
+		{ModerationReviewPublish, PostStatusPublished, true},
+		{ModerationReportDismiss, 0, false},
+		{ModerationReportRemove, 0, false},
 	}
 	for _, tc := range cases {
 		status, ok := tc.d.TargetStatus()
