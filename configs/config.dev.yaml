@@ -65,6 +65,7 @@ sa_token:
   is_concurrent: true # 允许并发登录
   is_share: false # 不共享session
   max_login_count: 10 # 同一账号同时在线的终端上限，超出时注销最早登录的终端
+  renew_interval: 600 # 同一 token 两次自动续期的最小间隔(秒)，剩余有效期低于 timeout - renew_interval 才续期
 
 # AWS S3 对象存储配置
 s3:
