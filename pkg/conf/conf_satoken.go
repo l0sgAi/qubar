@@ -11,4 +11,7 @@ type SaToken struct {
 	// MaxLoginCount 同一账号同时在线的终端上限，超出时注销最早登录的终端；<=0 时回落默认 10。
 	// 由 auth 领域的会话索引控制，sa-token 自带的 MaxLoginCount 固定关闭（-1）。
 	MaxLoginCount int `mapstructure:"max_login_count" json:"max_login_count" yaml:"max_login_count"`
+	// RenewInterval 同一 token 两次自动续期的最小间隔（秒）；<=0 时回落默认 600。
+	// 通过 sa-token 的 MaxRefresh = timeout - renew_interval 实现（剩余有效期低于阈值才续期），不额外访问 Redis。
+	RenewInterval int `mapstructure:"renew_interval" json:"renew_interval" yaml:"renew_interval"`
 }
