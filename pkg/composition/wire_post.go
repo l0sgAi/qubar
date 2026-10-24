@@ -20,6 +20,8 @@ func newPostService(deps *Deps) postapp.PostService {
 	// AI 审核（#117）：始终注入，是否生效由 moderation.enabled + api_key 决定（未启用时发帖直接发布）。
 	svc.SetModeration(postinfra.NewJevModerator(conf.Config.Moderation),
 		postinfra.NewPostModerationLogRepository(deps.DB.Get()), conf.Config.Moderation)
+	// 举报复核（#153）：与审核开关无关，始终可用。
+	svc.SetReportRepository(postinfra.NewPostReportRepository(deps.DB.Get()))
 	return svc
 }
 

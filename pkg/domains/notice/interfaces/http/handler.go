@@ -150,7 +150,7 @@ func normalizeSize(size int) int {
 }
 
 // parseNoticeTypes 解析 type 查询参数为类型集合。
-// 空串或 "0" = 全部（nil）；否则按逗号拆分，每段须为 1-8 的整数。
+// 空串或 "0" = 全部（nil）；否则按逗号拆分，每段须为 1-11 的整数。
 func parseNoticeTypes(raw string) ([]int16, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || raw == "0" {

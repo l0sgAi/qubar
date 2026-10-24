@@ -94,3 +94,121 @@ func writeReviewError(c appctx.AppContext, err error) {
 		httputil.InternalError(c, "Failed to process post review")
 	}
 }
+
+// ===== 举报与复核（#153）=====
+
+// ReportPostRequest 举报请求。
+type ReportPostRequest struct {
+	PostID     uuid.UUID `json:"post_id" binding:"required"`
+	ReasonType int16     `json:"reason_type" binding:"required"` // 1 垃圾广告 2 色情低俗 3 辱骂骚扰 4 违法违规 5 暴力恐怖 6 泄露隐私 7 自伤轻生 8 其他
+	Reason     string    `json:"reason" binding:"omitempty,max=200"`
+}
+
+// ReportPost POST /post/report
+func (h *Handler) ReportPost(c appctx.AppContext) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+	var req ReportPostRequest
+	if err := c.BindJSON(&req); err != nil {
+		httputil.BadRequest(c, "Invalid request parameters")
+		return
+	}
+	if err := h.svc.ReportPost(c, userID, application.ReportPostInput{
+		PostID: req.PostID, ReasonType: req.ReasonType, Reason: req.Reason,
+	}); err != nil {
+		writeReportError(c, err)
+		return
+	}
+	httputil.Success(c, nil)
+}
+
+// ListReportedPosts GET /circle/moderation/reports
+//
+// 圈主 / 管理员查看本圈被举报（有待处理举报）的帖子，参数同待审列表。
+func (h *Handler) ListReportedPosts(c appctx.AppContext) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+	var req ListReviewQueueRequest
+	if err := c.BindQuery(&req); err != nil {
+		httputil.BadRequest(c, "Invalid request parameters")
+		return
+	}
+	circleID, err := uuid.Parse(req.CircleID)
+	if err != nil {
+		httputil.BadRequest(c, "Invalid circle_id")
+		return
+	}
+
+	result, err := h.svc.ListReportedPosts(c, userID, circleID, req.Size, req.Cursor)
+	if err != nil {
+		writeReportError(c, err)
+		return
+	}
+	httputil.Success(c, result)
+}
+
+// ResolveReportRequest 举报复核请求。
+type ResolveReportRequest struct {
+	CircleID uuid.UUID `json:"circle_id" binding:"required"`
+	PostID   uuid.UUID `json:"post_id" binding:"required"`
+	Action   string    `json:"action" binding:"required"` // dismiss | remove
+	Reason   string    `json:"reason" binding:"omitempty,max=200"`
+}
+
+// ResolveReport POST /circle/moderation/reports/resolve
+func (h *Handler) ResolveReport(c appctx.AppContext) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+	var req ResolveReportRequest
+	if err := c.BindJSON(&req); err != nil {
+		httputil.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	result, err := h.svc.ResolveReport(c, userID, application.ResolveReportInput{
+		CircleID: req.CircleID,
+		PostID:   req.PostID,
+		Action:   application.ReportAction(req.Action),
+		Reason:   req.Reason,
+	})
+	if err != nil {
+		writeReportError(c, err)
+		return
+	}
+	httputil.Success(c, result)
+}
+
+// writeReportError 举报 / 复核错误映射。
+func writeReportError(c appctx.AppContext, err error) {
+	switch {
+	case application.IsCircleIDRequiredErr(err):
+		httputil.BadRequest(c, "circle_id is required")
+	case application.IsInvalidReportReasonErr(err):
+		httputil.BadRequest(c, "reason_type must be within 1-8")
+	case application.IsCannotReportOwnPostErr(err):
+		httputil.BadRequest(c, "You cannot report your own post")
+	case application.IsInvalidReportActionErr(err):
+		httputil.BadRequest(c, "action must be dismiss or remove")
+	case application.IsInvalidReviewCursorErr(err):
+		httputil.BadRequest(c, "Invalid cursor")
+	case application.IsNotCircleModeratorErr(err):
+		httputil.Forbidden(c, "Only circle owner or admin can handle reports")
+	case application.IsReportPostNotFoundErr(err):
+		httputil.NotFound(c, "Post not found or not published")
+	case application.IsReportedPostNotFoundErr(err):
+		httputil.NotFound(c, "Post not found or has no pending reports")
+	case application.IsAlreadyReportedErr(err):
+		httputil.Conflict(c, "You have already reported this post")
+	case application.IsReportLimitExceededErr(err):
+		httputil.TooManyRequests(c, "Report limit exceeded, please try again later")
+	default:
+		logger.Log.Error("post report error: " + err.Error())
+		httputil.InternalError(c, "Failed to process post report")
+	}
+}

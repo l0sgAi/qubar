@@ -19,7 +19,11 @@ import (
 //	worker → ModeratePost：读帖子（不是审核中就跳过）→ Jev 打分 → domain.RouteModeration 分流
 //	      → 条件更新 UPDATE ... WHERE status = 2 → 写 post_moderation_log → 转为已发布时执行发布副作用（只一次）
 //
-// 人工待审的帖子留在审核中，一直不可见，由圈主 / 管理员人工审核（#118，见 moderation_review.go）。
+// 人工待审结果按 moderation.review_action 处理（#153）：
+//   - publish（默认）：直接发布，审核日志 decision=review_publish（区别于 AI 放行的 publish）；
+//     self_harm 命中时另外通知本圈圈主 / 管理员关注。发布后的帖子靠用户举报复核兜底（见 moderation_report.go）。
+//   - hold：留在审核中，一直不可见，由圈主 / 管理员人工审核（#118，见 moderation_review.go）。
+// 审核失败且 fail_open=false 的「转人工」不受 review_action 影响，始终留在审核中。
 
 // moderationErrMaxRunes error_msg 列上限（VARCHAR(2048)）。
 const moderationErrMaxRunes = 2048
@@ -153,8 +157,29 @@ func (s *postServiceImpl) ModeratePost(ctx context.Context, postID uuid.UUID) er
 	}
 	if published {
 		s.onPostPublishedByStored(ctx, post)
+		s.notifySelfHarm(ctx, post, a)
 	}
 	return nil
+}
+
+// reviewOutcome AI 给出「人工待审」结论时按 review_action 决定去向：publish 转为 review_publish（待审后自动发布），
+// hold 保持 review。审核失败（a 为 nil）时的 review 是 fail_open=false 的兜底，不转换。
+func (s *postServiceImpl) reviewOutcome(decision domain.ModerationDecision, a *domain.Assessment) domain.ModerationDecision {
+	if decision == domain.ModerationReview && a != nil && s.moderationCfg.ReviewPublishes() {
+		return domain.ModerationReviewPublish
+	}
+	return decision
+}
+
+// notifySelfHarm 已发布帖子 self_harm 命中（>= 转人工阈值）时通知本圈圈主 / 管理员关注（需要人工关怀而不是删帖）。
+// best-effort：通知失败不影响发布。
+func (s *postServiceImpl) notifySelfHarm(ctx context.Context, post *domain.Post, a *domain.Assessment) {
+	if a == nil || s.publisher == nil || a.Risks[domain.HazardSelfHarm] < s.moderationCfg.ReviewThreshold {
+		return
+	}
+	if err := s.publisher.PublishModeratorNotice(ctx, domain.ModeratorNoticeSelfHarm, post.UserID, post.ID); err != nil {
+		logger.Log.Error(fmt.Sprintf("Failed to publish self-harm notice for post %s: %s", post.ID, err.Error()))
+	}
 }
 
 // assess 组装审核输入并调用 ContentModerator。
@@ -175,12 +200,14 @@ func (s *postServiceImpl) assess(ctx context.Context, post *domain.Post) (*domai
 }
 
 // applyModeration 按分流结果改状态并写审核日志，返回帖子是否刚转为已发布（调用方据此执行发布副作用）。
+// 人工待审结果先按 review_action 转换（reviewOutcome）。
 //
-//   - 发布 / fail_open / 驳回：条件更新 WHERE status = 2，更新 0 行说明已被处理，什么都不做；
+//   - 发布 / fail_open / 待审后自动发布 / 驳回：条件更新 WHERE status = 2，更新 0 行说明已被处理，什么都不做；
 //     更新成功后写日志（best-effort：状态已改，重试会被条件更新挡掉，日志失败只记错误）。
 //   - 人工待审：不改状态，只写日志；日志写失败返回错误让 worker 重试（未改任何状态，重试安全）。
 func (s *postServiceImpl) applyModeration(ctx context.Context, post *domain.Post, decision domain.ModerationDecision,
 	a *domain.Assessment, aerr error, latency time.Duration) (bool, error) {
+	decision = s.reviewOutcome(decision, a)
 	entry := buildModerationLog(post.ID, decision, a, aerr, latency)
 
 	status, change := decision.TargetStatus()

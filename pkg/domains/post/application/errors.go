@@ -19,6 +19,15 @@ var (
 	errReviewPostNotFound  = errors.New("post not found or not under review in this circle")
 	errInvalidReviewAction = errors.New("action must be approve or reject")
 	errInvalidReviewCursor = errors.New("invalid cursor")
+
+	// 举报复核（#153）
+	errInvalidReportReason  = errors.New("invalid report reason_type")
+	errReportPostNotFound   = errors.New("post not found or not published")
+	errCannotReportOwnPost  = errors.New("you cannot report your own post")
+	errAlreadyReported      = errors.New("you have already reported this post")
+	errReportLimitExceeded  = errors.New("report limit exceeded, please try again later")
+	errInvalidReportAction  = errors.New("action must be dismiss or remove")
+	errReportedPostNotFound = errors.New("post not found or has no pending reports in this circle")
 )
 
 // errMutedUntil 是带参数的错误（禁言截止时间）。
@@ -52,3 +61,11 @@ func IsNotCircleModeratorErr(err error) bool  { return errors.Is(err, errNotCirc
 func IsReviewPostNotFoundErr(err error) bool  { return errors.Is(err, errReviewPostNotFound) }
 func IsInvalidReviewActionErr(err error) bool { return errors.Is(err, errInvalidReviewAction) }
 func IsInvalidReviewCursorErr(err error) bool { return errors.Is(err, errInvalidReviewCursor) }
+
+func IsInvalidReportReasonErr(err error) bool  { return errors.Is(err, errInvalidReportReason) }
+func IsReportPostNotFoundErr(err error) bool   { return errors.Is(err, errReportPostNotFound) }
+func IsCannotReportOwnPostErr(err error) bool  { return errors.Is(err, errCannotReportOwnPost) }
+func IsAlreadyReportedErr(err error) bool      { return errors.Is(err, errAlreadyReported) }
+func IsReportLimitExceededErr(err error) bool  { return errors.Is(err, errReportLimitExceeded) }
+func IsInvalidReportActionErr(err error) bool  { return errors.Is(err, errInvalidReportAction) }
+func IsReportedPostNotFoundErr(err error) bool { return errors.Is(err, errReportedPostNotFound) }

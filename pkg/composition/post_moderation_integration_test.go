@@ -272,21 +272,22 @@ func TestModerationWorker_PublishAndDuplicate(t *testing.T) {
 	}
 }
 
-// 人工待审：留在审核中、无副作用；重复投递靠审计行识别，不再调审核器。
-func TestModerationWorker_ReviewStaysHidden(t *testing.T) {
+// 人工待审 + 默认 review_action=publish（#153）：worker 直接发布（副作用一次），审计 decision=review_publish；
+// 重复投递时帖子已发布，不再调审核器、不重复副作用。用生产首条实测分数（harassment 0.79 / severity 1.08）。
+func TestModerationWorker_ReviewPublishes(t *testing.T) {
 	t.Parallel()
 	env := setupModeration(t)
-	title := uniqueTitle("review")
-	env.mod.set(title, assessment(postdomain.HazardSelfHarm, 0.95, 2.5, 0.9), nil)
+	title := uniqueTitle("review-publish")
+	env.mod.set(title, assessment(postdomain.HazardHarassment, 0.79, 1.08, 0.9), nil)
 
 	postID, circleID := createModeratedPost(t, sharedModSvc, title)
 	rows := waitModerationLogs(t, env.db, postID)
 
-	if rows[0].Decision != string(postdomain.ModerationReview) {
-		t.Fatalf("decision = %s, want review", rows[0].Decision)
+	if rows[0].Decision != string(postdomain.ModerationReviewPublish) || rows[0].Model != "jev-test" || rows[0].Severity == nil {
+		t.Fatalf("unexpected log: %+v", rows[0])
 	}
-	if got := postStatus(t, env.db, postID); got != postdomain.PostStatusReviewing {
-		t.Fatalf("status = %d, want reviewing", got)
+	if got := postStatus(t, env.db, postID); got != postdomain.PostStatusPublished {
+		t.Fatalf("status = %d, want published", got)
 	}
 
 	if err := redpanda.PublishPostModerationEvent(t.Context(), postID); err != nil {
@@ -303,8 +304,53 @@ func TestModerationWorker_ReviewStaysHidden(t *testing.T) {
 	if rows := moderationLogs(t, env.db, postID); len(rows) != 1 {
 		t.Fatalf("log rows = %d, want 1", len(rows))
 	}
-	if count, trigger := env.fx.get(circleID, postID); count != 0 || trigger != 0 {
-		t.Fatalf("review must not run side effects: count=%d trigger=%d", count, trigger)
+	if count, trigger := env.fx.get(circleID, postID); count != 1 || trigger != 1 {
+		t.Fatalf("side effects count=%d trigger=%d, want 1/1", count, trigger)
+	}
+}
+
+// newDirectModerationService 不发审核事件的服务（帖子不进共享 worker），由测试直接调用 ModeratePost。
+func newDirectModerationService(db *gorm.DB, mod postdomain.ContentModerator, fx *sideEffects, cfg conf.Moderation) postapp.PostService {
+	svc := postapp.NewPostService(postinfra.NewPostRepository(db), nil, nil, nil, nil,
+		noEventPublisher{postinfra.NewPostEventPublisher()})
+	svc.SetUserFacade(anyUserFacade{})
+	svc.SetPostCountPort(fx)
+	svc.SetAgentTrigger(fx)
+	svc.SetModeration(mod, postinfra.NewPostModerationLogRepository(db), cfg)
+	return svc
+}
+
+// review_action=hold：与 #118 一致，人工待审留在审核中、无副作用；重复投递靠审计行识别，不再调审核器。
+func TestModeration_ReviewActionHold(t *testing.T) {
+	t.Parallel()
+	env := setupModeration(t)
+	mod := &scriptedModerator{results: map[string]scriptedResult{}, calls: map[string]int{}}
+	fx := &sideEffects{counts: map[uuid.UUID]int{}, trigger: map[uuid.UUID]int{}}
+	cfg := activeModeration(true)
+	cfg.ReviewAction = conf.ModerationReviewActionHold
+	svc := newDirectModerationService(env.db, mod, fx, cfg)
+	title := uniqueTitle("review-hold")
+	mod.set(title, assessment(postdomain.HazardHarassment, 0.79, 1.08, 0.9), nil)
+
+	postID, circleID := createModeratedPost(t, svc, title)
+	for range 2 {
+		if err := svc.ModeratePost(t.Context(), postID); err != nil {
+			t.Fatalf("ModeratePost: %v", err)
+		}
+	}
+
+	rows := moderationLogs(t, env.db, postID)
+	if len(rows) != 1 || rows[0].Decision != string(postdomain.ModerationReview) {
+		t.Fatalf("want exactly one review log, got %+v", rows)
+	}
+	if n := mod.callCount(title); n != 1 {
+		t.Fatalf("moderator called %d times, want 1", n)
+	}
+	if got := postStatus(t, env.db, postID); got != postdomain.PostStatusReviewing {
+		t.Fatalf("status = %d, want reviewing", got)
+	}
+	if count, trigger := fx.get(circleID, postID); count != 0 || trigger != 0 {
+		t.Fatalf("hold must not run side effects: count=%d trigger=%d", count, trigger)
 	}
 }
 
@@ -329,7 +375,7 @@ func TestModerationWorker_Reject(t *testing.T) {
 	}
 }
 
-// Jev 不可用 + fail_open=true：发布并记 fail_open 审计（含错误、无分数）。
+// Jev 不可用 + fail_open=true（共享 worker 用默认 review_action=publish，即生产配置）：发布并记 fail_open 审计（含错误、无分数）。
 func TestModerationWorker_FailOpen(t *testing.T) {
 	t.Parallel()
 	env := setupModeration(t)

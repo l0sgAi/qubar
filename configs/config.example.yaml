@@ -247,3 +247,8 @@ moderation:
   severity_block: 1.5            # 驳回所需最低 severity（0–3）
   low_confidence: 0.5            # severity 置信度低于此值视为不确定
   low_confidence_severity: 1.0   # severity >= 此值且置信度低时转人工
+  # 先发后审（#153）：AI「人工待审」结果的去向 + 用户举报复核。举报功能与审核开关无关，始终可用
+  review_action: "publish"       # publish（默认）= 待审结果直接发布（日志 decision=review_publish）；hold = 留在审核中等圈管处理（#118 行为）
+  report_notify_threshold: 1     # 帖子待处理举报数达到此值时通知本圈圈主 / 管理员（处理前只通知一次），默认 1
+  report_hide_threshold: 0       # 待处理举报数达到此值时自动屏蔽（status 4）等圈管复核，0 = 关闭（默认，防恶意举报）
+  report_daily_limit: 20         # 每个用户 24 小时内最多举报次数，默认 20

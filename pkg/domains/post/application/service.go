@@ -297,6 +297,16 @@ type PostService interface {
 	ListReviewQueue(ctx context.Context, operatorID, circleID uuid.UUID, size int, cursor string) (*ReviewQueueResult, error)
 	// ReviewPost 人工审核（#118）：通过走发布副作用入口，驳回改为 3；并发时只有一方生效，其余 404。
 	ReviewPost(ctx context.Context, operatorID uuid.UUID, in ReviewPostInput) (*ReviewPostResult, error)
+
+	// ReportPost 用户举报已发布帖子（#153，见 moderation_report.go）：不能举报自己的帖子、每帖一次、每日上限；
+	// 待处理举报达到阈值时通知圈主 / 管理员（处理前只通知一次），可选自动屏蔽。
+	ReportPost(ctx context.Context, reporterID uuid.UUID, in ReportPostInput) error
+	// ListReportedPosts 圈内被举报帖子列表（#153）：操作者须为该圈 admin+，每条带举报数、最近举报理由与 AI 结论。
+	ListReportedPosts(ctx context.Context, operatorID, circleID uuid.UUID, size int, cursor string) (*ReportedPostsResult, error)
+	// ResolveReport 举报复核（#153）：dismiss 保留帖子并关闭举报，remove 下架为 status 3 并通知作者；并发时只有一方生效，其余 404。
+	ResolveReport(ctx context.Context, operatorID uuid.UUID, in ResolveReportInput) (*ResolveReportResult, error)
+	// SetReportRepository 注入举报仓储（未注入时举报相关接口返回错误）。
+	SetReportRepository(r domain.PostReportRepository)
 }
 
 // PostMeta 帖子元信息（供 comment/like 领域校验用）。
@@ -341,6 +351,9 @@ type postServiceImpl struct {
 	moderationLog domain.PostModerationLogRepository
 	moderationCfg conf.Moderation // 已填默认值
 	modCircle     ModerationCircleReader
+
+	// 举报复核（#153），见 moderation_report.go
+	reportRepo domain.PostReportRepository
 }
 
 // NewPostService 构造 PostService。

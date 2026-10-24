@@ -141,9 +141,14 @@ func (s *postServiceImpl) ListReviewQueue(ctx context.Context, operatorID, circl
 		next = encodeReviewCursor(last.CreateTime, last.ID)
 	}
 
+	return &ReviewQueueResult{Posts: s.buildReviewItems(ctx, posts), Size: size, Cursor: next}, nil
+}
+
+// buildReviewItems 帖子 → 列表项（带作者信息与最近一条 AI 结论），待审队列与被举报列表共用。
+func (s *postServiceImpl) buildReviewItems(ctx context.Context, posts []domain.Post) []ReviewQueueItem {
 	items := make([]ReviewQueueItem, 0, len(posts))
 	if len(posts) == 0 {
-		return &ReviewQueueResult{Posts: items, Size: size, Cursor: next}, nil
+		return items
 	}
 
 	postIDs := make([]uuid.UUID, 0, len(posts))
@@ -178,7 +183,7 @@ func (s *postServiceImpl) ListReviewQueue(ctx context.Context, operatorID, circl
 		}
 		items = append(items, item)
 	}
-	return &ReviewQueueResult{Posts: items, Size: size, Cursor: next}, nil
+	return items
 }
 
 // loadAIVerdicts 批量取 AI 结论；失败降级为空（列表仍可用于人工处理）。

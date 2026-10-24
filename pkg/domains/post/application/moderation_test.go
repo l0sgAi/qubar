@@ -59,9 +59,11 @@ func (r *fakeModerationRepo) GetMentionUserIDsByPostIDs(_ context.Context, ids [
 type fakeModerationPublisher struct {
 	fakeMentionPublisher
 
-	moderation    []uuid.UUID
-	reviewNotices []reviewNotice
-	err           error
+	moderation       []uuid.UUID
+	reviewNotices    []reviewNotice
+	moderatorNotices []moderatorNotice // #153 圈管通知（举报 / 自伤）
+	removedNotices   []reviewNotice    // #153 举报下架通知
+	err              error
 }
 
 func (p *fakeModerationPublisher) PublishModeration(_ context.Context, postID uuid.UUID) error {
