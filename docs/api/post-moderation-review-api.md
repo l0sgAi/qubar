@@ -19,11 +19,13 @@
 | 举报帖子 | `POST /post/report` | 任意登录用户（不能举报自己的帖子） |
 | 被举报帖子列表（带举报理由 + AI 结论） | `GET /circle/moderation/reports` | 本圈圈主 + 管理员 |
 | 举报复核：保留 / 下架 | `POST /circle/moderation/reports/resolve` | 同上 |
+| 待处理数量（审核页角标） | `GET /circle/moderation/summary` | 同上 |
 
 - 全部接口都**需要登录**（未登录 `code=202`）。
 - 普通成员、非成员、禁言 / 拉黑中的管理员、其他圈子的管理员：一律 `403`（不区分原因，不暴露成员身份）。
 - 前端入口建议：`GET /circle/detail/:id` 返回的 `member_role >= 20` 时在圈子管理页展示「被举报帖子」（以及 `hold` 模式下的「待审帖子」）；
   帖子详情页的「…」菜单里给非作者展示「举报」。
+- 审核类通知（类型 9 被举报 / 10 疑似自伤）带 `circle_id`，点击直接进该圈圈子管理的「审核」页（#156，见 `docs/notice-frontend-api.md` §二）。
 - 统一响应信封 `{code, message, data}`；`message` 为英文，前端按 `code` + 自身文案渲染。
 
 ## 二、待审帖子列表 `GET /circle/moderation/posts`
@@ -260,3 +262,30 @@ Query 参数同待审列表（`circle_id` / `size` / `cursor`）。只返回本�
 - 配置（`moderation` 段）：`review_action`（`publish` | `hold`，默认 `publish`）、`report_notify_threshold`（默认 1）、
   `report_hide_threshold`（默认 0 = 关闭）、`report_daily_limit`（默认 20）。举报功能与 `moderation.enabled` 无关，始终可用。
 - 表结构见 `docs/pgsql-ddl/post.md`「帖子举报表」。
+
+## 十一、待处理数量 `GET /circle/moderation/summary`（#156）
+
+审核页 / 入口的角标：本圈「待审 N、被举报 M」，不用翻完两个列表自己数。鉴权与第二、七节相同（本圈圈主 / 管理员，其他人 403）。
+
+Query 参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `circle_id` | string | 是 | 圈子 ID（uuid），缺失 / 非法 400 |
+
+响应 `data`：
+
+```json
+{ "review_pending": 2, "report_pending": 5 }
+```
+
+| 字段 | 说明 |
+|---|---|
+| `review_pending` | 本圈审核中（`status=2`）且未删除的帖子数，与 `GET /circle/moderation/posts` 全部翻完的条数一致 |
+| `report_pending` | 本圈有待处理举报、未删除且 `status ∈ {1, 4}` 的**帖子数**（不是举报条数），与 `GET /circle/moderation/reports` 全部翻完的条数一致 |
+
+- `review_action=publish`（默认）时新帖不会进待审，`review_pending` 通常为 0（只剩切换前遗留 / `fail_open=false` 转人工的帖子）。
+- 实时计数、不缓存；处理（复核 / 审核）后重新拉一次即可。
+- 错误码同第九节（`400 Invalid circle_id`、`403 Only circle owner or admin can handle reports`）。
+- 代码：`pkg/domains/post/application/moderation_report.go`（`GetModerationSummary`）；两个计数与对应列表共用过滤条件
+  （`post_repo_pg.go` `reviewingByCircle`、`post_report_repo_pg.go` `reportedPostsFrom`），口径不会漂移。

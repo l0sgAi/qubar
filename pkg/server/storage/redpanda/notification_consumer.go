@@ -551,6 +551,9 @@ func lookupComments(commentIDs []uuid.UUID) map[uuid.UUID]commentLookupRow {
 // upsertNotifications 批量 upsert（uk_notice_dedup 表达式索引锚点）。
 //
 // 冲突（重赞/at-least-once 重复投递）→ 复用行：重置未读 + 刷新 snippet/时间，不产生第二行。
+// 举报 / 疑似自伤（类型 9 / 10，#156）冲突时再换成本次 Go 侧生成的新 id 并刷新 create_time：
+// 列表按 id DESC 排序，同一帖子下一轮再触发的通知要排到最前面，否则未读 +1 却停在旧位置。
+// 其他类型保留原 id / create_time（重赞不应把旧通知顶上来）。
 func upsertNotifications(rows []noticeRow) error {
 	jsonBytes, err := json.Marshal(rows)
 	if err != nil {
@@ -563,8 +566,13 @@ func upsertNotifications(rows []noticeRow) error {
 			COALESCE(post_id, '00000000-0000-0000-0000-000000000000'::uuid),
 			COALESCE(comment_id, '00000000-0000-0000-0000-000000000000'::uuid))
 		WHERE deleted = 0
-		DO UPDATE SET is_read = 0, snippet = EXCLUDED.snippet, update_time = CURRENT_TIMESTAMP`
-	return pgsql.DB.Exec(sql, string(jsonBytes)).Error
+		DO UPDATE SET is_read = 0, snippet = EXCLUDED.snippet, update_time = CURRENT_TIMESTAMP,
+			id = CASE WHEN EXCLUDED.notice_type IN (?, ?) THEN EXCLUDED.id ELSE notification.id END,
+			create_time = CASE WHEN EXCLUDED.notice_type IN (?, ?) THEN CURRENT_TIMESTAMP ELSE notification.create_time END`
+	resurface := []any{noticedomain.NoticeTypePostReported, noticedomain.NoticeTypePostSelfHarm}
+	args := append([]any{string(jsonBytes)}, resurface...)
+	args = append(args, resurface...)
+	return pgsql.DB.Exec(sql, args...).Error
 }
 
 // incrNoticeUnread 按接收人聚合累加未读计数（best-effort，软信号）。

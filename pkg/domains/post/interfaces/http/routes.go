@@ -19,6 +19,7 @@ import (
 //	POST /post/report               举报帖子（需登录；#153）
 //	GET  /circle/moderation/reports          圈内被举报帖子列表（需登录；admin+，service 校验；#153）
 //	POST /circle/moderation/reports/resolve  举报复核 保留 / 下架（需登录；admin+，service 校验；#153）
+//	GET  /circle/moderation/summary          圈内待审 / 被举报帖子数（需登录；admin+，service 校验；#156）
 //
 // 访客可读端点（list/user/detail）挂 optionalCheck；写操作与个人列表挂 authCheck。
 func RegisterRoutes(
@@ -52,5 +53,6 @@ func RegisterRoutes(
 		mod.POST("/review", h.ReviewPost)
 		mod.GET("/reports", h.ListReportedPosts)
 		mod.POST("/reports/resolve", h.ResolveReport)
+		mod.GET("/summary", h.GetModerationSummary)
 	}
 }

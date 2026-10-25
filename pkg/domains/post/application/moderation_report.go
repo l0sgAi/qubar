@@ -270,3 +270,31 @@ func (s *postServiceImpl) ResolveReport(ctx context.Context, operatorID uuid.UUI
 	}
 	return &ResolveReportResult{PostID: post.ID, Status: status, ClosedReports: closed}, nil
 }
+
+// ModerationSummary 圈内待处理数量（审核页角标，#156）。
+type ModerationSummary struct {
+	ReviewPending int64 `json:"review_pending"` // 待审帖子数（同 GET /circle/moderation/posts）
+	ReportPending int64 `json:"report_pending"` // 被举报帖子数（同 GET /circle/moderation/reports）
+}
+
+// GetModerationSummary 圈内待处理数量（实现 PostService）。先鉴权后查询，鉴权同待审 / 被举报列表。
+func (s *postServiceImpl) GetModerationSummary(ctx context.Context, operatorID, circleID uuid.UUID) (*ModerationSummary, error) {
+	if circleID == uuid.Nil {
+		return nil, errCircleIDRequired
+	}
+	if err := s.requireCircleModerator(ctx, circleID, operatorID); err != nil {
+		return nil, err
+	}
+	if s.reportRepo == nil {
+		return nil, errors.New("post report repository is not configured")
+	}
+	review, err := s.repo.CountReviewingByCircle(ctx, circleID)
+	if err != nil {
+		return nil, err
+	}
+	report, err := s.reportRepo.CountReportedByCircle(ctx, circleID)
+	if err != nil {
+		return nil, err
+	}
+	return &ModerationSummary{ReviewPending: review, ReportPending: report}, nil
+}

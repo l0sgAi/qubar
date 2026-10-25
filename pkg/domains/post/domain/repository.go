@@ -50,6 +50,10 @@ type PostRepository interface {
 	// ListReviewingByCircle 圈内审核中（status=2、未删除）的帖子，按 (create_time, id) 倒序 keyset 翻页；
 	// after 为 nil 表示第一页，最多返回 limit 条。
 	ListReviewingByCircle(ctx context.Context, circleID uuid.UUID, after *PostKeyset, limit int) ([]Post, error)
+	// CountReviewingByCircle 圈内审核中（status=2、未删除）的帖子数，口径与 ListReviewingByCircle 一致（#156）。
+	CountReviewingByCircle(ctx context.Context, circleID uuid.UUID) (int64, error)
+	// GetCircleIDsByIDs 批量取 帖子ID → 所属 circle_id，不过滤删除 / 状态（通知跳转用，#156）；查不到的 ID 不在结果里。
+	GetCircleIDsByIDs(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
 }
 
 // PostKeyset 帖子 (create_time, id) 倒序翻页位置（上一页最后一条）。

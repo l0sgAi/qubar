@@ -101,14 +101,21 @@ func (r *postReportRepoPG) CountByReporterSince(ctx context.Context, reporterID 
 	return n, err
 }
 
-// ListReportedByCircle 先在 idx_post_report_circle_pending 上按帖子聚合待处理举报，再关联帖子过滤已删除 / 非可见状态。
-// 排序键用首次举报时间（同一轮内不变），翻页稳定。
-func (r *postReportRepoPG) ListReportedByCircle(ctx context.Context, circleID uuid.UUID, after *domain.PostKeyset, limit int) ([]domain.ReportedPost, error) {
-	sql := `SELECT p.*, r.report_count, r.first_report_time
-		FROM (SELECT post_id, count(*) AS report_count, min(create_time) AS first_report_time
+// reportedPostsFrom 被举报帖子列表与计数共用的 FROM 子句（参数见 reportedPostsArgs），保证两者口径一致：
+// 先在 idx_post_report_circle_pending 上按帖子聚合待处理举报，再关联帖子过滤已删除 / 非可见状态。
+const reportedPostsFrom = `FROM (SELECT post_id, count(*) AS report_count, min(create_time) AS first_report_time
 			FROM domains.post_report WHERE circle_id = ? AND status = ? GROUP BY post_id) r
 		JOIN domains.post p ON p.id = r.post_id AND p.deleted = 0 AND p.status IN (?, ?)`
-	args := []any{circleID, domain.PostReportPending, domain.PostStatusPublished, domain.PostStatusBlocked}
+
+func reportedPostsArgs(circleID uuid.UUID) []any {
+	return []any{circleID, domain.PostReportPending, domain.PostStatusPublished, domain.PostStatusBlocked}
+}
+
+// ListReportedByCircle 圈内被举报帖子（FROM 见 reportedPostsFrom）。
+// 排序键用首次举报时间（同一轮内不变），翻页稳定。
+func (r *postReportRepoPG) ListReportedByCircle(ctx context.Context, circleID uuid.UUID, after *domain.PostKeyset, limit int) ([]domain.ReportedPost, error) {
+	sql := `SELECT p.*, r.report_count, r.first_report_time ` + reportedPostsFrom
+	args := reportedPostsArgs(circleID)
 	if after != nil {
 		sql += ` WHERE (r.first_report_time, r.post_id) < (?, ?)`
 		args = append(args, after.CreateTime, after.ID)
@@ -119,6 +126,13 @@ func (r *postReportRepoPG) ListReportedByCircle(ctx context.Context, circleID uu
 	var rows []domain.ReportedPost
 	err := r.db.WithContext(ctx).Raw(sql, args...).Scan(&rows).Error
 	return rows, err
+}
+
+// CountReportedByCircle 与 ListReportedByCircle 同一 FROM 子句计数（#156 待处理角标）。
+func (r *postReportRepoPG) CountReportedByCircle(ctx context.Context, circleID uuid.UUID) (int64, error) {
+	var n int64
+	err := r.db.WithContext(ctx).Raw(`SELECT count(*) `+reportedPostsFrom, reportedPostsArgs(circleID)...).Scan(&n).Error
+	return n, err
 }
 
 // ListPendingByPostIDs 每帖最近 perPost 条待处理举报，走 uk_post_report_post_reporter 的 post_id 前缀。

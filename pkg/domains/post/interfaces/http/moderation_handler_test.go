@@ -1,10 +1,11 @@
-// 人工审核（#118）与举报复核（#153）handler 单元测试：错误 → HTTP 状态映射（400 / 403 / 404 / 409 / 429）与成功路径。
+// 人工审核（#118）、举报复核（#153）与待处理数量（#156）handler 单元测试：错误 → HTTP 状态映射（400 / 403 / 404 / 409 / 429）与成功路径。
 package http
 
 import (
 	"context"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,6 +49,13 @@ func (r *fakeReviewRepo) ResolveReview(_ context.Context, id uuid.UUID, status i
 
 func (r *fakeReviewRepo) ListReviewingByCircle(context.Context, uuid.UUID, *domain.PostKeyset, int) ([]domain.Post, error) {
 	return nil, nil
+}
+
+func (r *fakeReviewRepo) CountReviewingByCircle(_ context.Context, circleID uuid.UUID) (int64, error) {
+	if circleID == r.post.CircleID && r.post.Status == domain.PostStatusReviewing {
+		return 1, nil
+	}
+	return 0, nil
 }
 
 func (r *fakeReviewRepo) GetMentionUserIDsByPostIDs(context.Context, []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error) {
@@ -183,6 +191,16 @@ func (r *fakeHandlerReportRepo) Resolve(_ context.Context, postID, _ uuid.UUID, 
 	return closed, closed > 0, nil
 }
 
+func (r *fakeHandlerReportRepo) CountReportedByCircle(context.Context, uuid.UUID) (int64, error) {
+	posts := map[uuid.UUID]struct{}{}
+	for _, x := range r.reports {
+		if x.Status == domain.PostReportPending {
+			posts[x.PostID] = struct{}{}
+		}
+	}
+	return int64(len(posts)), nil
+}
+
 func (fakeReviewPublisher) PublishPostRemovedNotice(context.Context, uuid.UUID, uuid.UUID) error {
 	return nil
 }
@@ -289,6 +307,43 @@ func TestResolveReportHandler_StatusCodes(t *testing.T) {
 	for _, tc := range cases {
 		if got, b := doJSON(t, func(c appctx.AppContext) { h.ResolveReport(c) }, tc.user, tc.body); got != tc.want {
 			t.Fatalf("%s: status = %d, want %d; body=%s", tc.name, got, tc.want, b)
+		}
+	}
+}
+
+// ===== 待处理数量（#156）=====
+
+func TestModerationSummaryHandler(t *testing.T) {
+	h := newReportHandler(5)
+	if got, b := doJSON(t, func(c appctx.AppContext) { h.ReportPost(c) }, uuid.New(),
+		`{"post_id":"`+testPublished.String()+`","reason_type":1}`); got != http.StatusOK {
+		t.Fatalf("seed report status = %d; body=%s", got, b)
+	}
+	cases := []struct {
+		name  string
+		user  uuid.UUID
+		query string
+		want  int
+	}{
+		{"missing circle", testAdminID, "", http.StatusBadRequest},
+		{"bad circle", testAdminID, "circle_id=x", http.StatusBadRequest},
+		{"plain member", testAuthorID, "circle_id=" + testCircleID.String(), http.StatusForbidden},
+		{"admin", testAdminID, "circle_id=" + testCircleID.String(), http.StatusOK},
+	}
+	for _, tc := range cases {
+		rc := &app.RequestContext{}
+		rc.Request.SetMethod(http.MethodGet)
+		rc.Request.SetRequestURI("/circle/moderation/summary?" + tc.query)
+		ac := hertzadapter.New(context.Background(), rc)
+		ac.SetLoginID(tc.user.String())
+
+		h.GetModerationSummary(ac)
+
+		if got := rc.Response.StatusCode(); got != tc.want {
+			t.Fatalf("%s: status = %d, want %d; body=%s", tc.name, got, tc.want, rc.Response.Body())
+		}
+		if tc.want == http.StatusOK && !strings.Contains(string(rc.Response.Body()), `"review_pending":1,"report_pending":1`) {
+			t.Fatalf("%s: body = %s", tc.name, rc.Response.Body())
 		}
 	}
 }

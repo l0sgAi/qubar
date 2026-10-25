@@ -1,7 +1,8 @@
 //go:build integration
 
 // post_review_repo_pg_integration_test.go 人工审核（#118）仓储方法对开发栈 PostgreSQL 的集成测试：
-// ResolveReview（条件更新 + 审计行同事务）、ListReviewingByCircle（keyset 翻页）、LatestAIByPostIDs。
+// ResolveReview（条件更新 + 审计行同事务）、ListReviewingByCircle（keyset 翻页 + 计数口径）、LatestAIByPostIDs；
+// 以及 GetCircleIDsByIDs（#156 通知回填）。
 package infrastructure_test
 
 import (
@@ -169,6 +170,35 @@ func TestPostRepo_ListReviewingByCircle(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("order mismatch at %d: got %v, want %v", i, got, want)
 		}
+	}
+	// 待处理角标（#156）：计数与列表口径一致
+	if n, err := repo.CountReviewingByCircle(ctx, circleID); err != nil || n != int64(len(want)) {
+		t.Fatalf("CountReviewingByCircle = %d, %v; want %d", n, err, len(want))
+	}
+}
+
+// 帖子ID → circle_id：已删除 / 任意状态的帖子也返回，查不到的 ID 不在结果里（#156 通知回填）。
+func TestPostRepo_GetCircleIDsByIDs(t *testing.T) {
+	t.Parallel()
+	db := testkit.PG(t)
+	repo := infrastructure.NewPostRepository(db)
+	ctx := t.Context()
+
+	published := newPost(t, repo, nil)
+	blocked := newPost(t, repo, func(p *domain.Post) { p.Status = domain.PostStatusBlocked })
+	gone := newPost(t, repo, nil)
+	softDelete(t, db, "domains.post", gone.ID)
+	missing := sharedomain.NewID()
+
+	got, err := repo.GetCircleIDsByIDs(ctx, []uuid.UUID{published.ID, blocked.ID, gone.ID, missing})
+	if err != nil {
+		t.Fatalf("GetCircleIDsByIDs: %v", err)
+	}
+	if len(got) != 3 || got[published.ID] != published.CircleID || got[blocked.ID] != blocked.CircleID || got[gone.ID] != gone.CircleID {
+		t.Fatalf("circle ids = %v", got)
+	}
+	if empty, err := repo.GetCircleIDsByIDs(ctx, nil); err != nil || len(empty) != 0 {
+		t.Fatalf("empty input = %v, %v", empty, err)
 	}
 }
 

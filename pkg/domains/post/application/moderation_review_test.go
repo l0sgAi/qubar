@@ -89,6 +89,11 @@ func (r *fakeModerationRepo) ListReviewingByCircle(_ context.Context, circleID u
 	return res, nil
 }
 
+func (r *fakeModerationRepo) CountReviewingByCircle(ctx context.Context, circleID uuid.UUID) (int64, error) {
+	posts, err := r.ListReviewingByCircle(ctx, circleID, nil, len(r.created)+1)
+	return int64(len(posts)), err
+}
+
 // keysetBefore p 是否排在翻页位置 after 之后（create_time, id 倒序）。
 func keysetBefore(p domain.Post, after *domain.PostKeyset) bool {
 	if p.CreateTime.Equal(after.CreateTime) {
