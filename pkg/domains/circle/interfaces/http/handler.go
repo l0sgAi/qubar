@@ -178,8 +178,10 @@ func (h *Handler) LeaveCircle(c appctx.AppContext) {
 }
 
 // GetMyCirclesRequest 我加入圈子列表请求。
+// Role 角色筛选：0/不传 全部，30 圈主 / 20 管理员 / 10 成员，其他值 400（service 校验）。
 type GetMyCirclesRequest struct {
 	Keyword     string `query:"keyword"`
+	Role        int16  `query:"role"`
 	Size        int    `query:"size"`
 	SearchAfter string `query:"search_after"`
 }
@@ -200,7 +202,7 @@ func (h *Handler) GetMyCircles(c appctx.AppContext) {
 
 	size := normalizeSize(req.Size)
 
-	result, err := h.svc.GetMyCircles(c, userID, req.Keyword, size, req.SearchAfter)
+	result, err := h.svc.GetMyCircles(c, userID, req.Keyword, req.Role, size, req.SearchAfter)
 	if err != nil {
 		writeCircleError(c, err)
 		return
@@ -212,6 +214,7 @@ func (h *Handler) GetMyCircles(c appctx.AppContext) {
 type GetUserCirclesRequest struct {
 	UserID      string `query:"user_id"`
 	Keyword     string `query:"keyword"`
+	Role        int16  `query:"role"`
 	Size        int    `query:"size"`
 	SearchAfter string `query:"search_after"`
 }
@@ -233,7 +236,7 @@ func (h *Handler) GetUserCircles(c appctx.AppContext) {
 
 	size := normalizeSize(req.Size)
 
-	result, err := h.svc.GetUserCircles(c, targetUserID, req.Keyword, size, req.SearchAfter)
+	result, err := h.svc.GetUserCircles(c, targetUserID, req.Keyword, req.Role, size, req.SearchAfter)
 	if err != nil {
 		writeCircleError(c, err)
 		return
@@ -712,6 +715,8 @@ func writeCircleError(c appctx.AppContext, err error) {
 	switch {
 	case application.IsInvalidCursorErr(err):
 		httputil.BadRequest(c, "Invalid search_after parameter")
+	case application.IsInvalidJoinedRoleFilterErr(err):
+		httputil.BadRequest(c, "role must be 30 (owner), 20 (admin), 10 (member) or 0 (all)")
 	case application.IsInvalidJoinTypeErr(err):
 		httputil.BadRequest(c, "join_type must be 0 (direct), 1 (approval), or 2 (private)")
 	case application.IsCircleNameExistsErr(err):

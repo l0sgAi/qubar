@@ -87,3 +87,6 @@ const (
 	MemberStatusBanned  = 3 // 拉黑/踢出
 	MemberStatusLeft    = 4 // 已退出
 )
+
+// JoinedMemberStatuses 「已加入」口径：正常 + 禁言（禁言仍计为成员，拉黑/退出/申请中不算）。
+var JoinedMemberStatuses = []int16{MemberStatusNormal, MemberStatusMuted}

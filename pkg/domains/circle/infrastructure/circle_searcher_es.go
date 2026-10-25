@@ -129,7 +129,7 @@ func toMyCircleSearchResult(r *elasticsearch.CircleListResponse) *application.My
 	circles := make([]application.MyCircleDoc, 0, len(r.Circles))
 	for _, doc := range r.Circles {
 		circles = append(circles, application.MyCircleDoc{
-			ID: doc.ID, Name: doc.Name, AvatarURL: doc.AvatarURL, MemberCount: doc.MemberCount,
+			ID: doc.ID, Name: doc.Name, Slug: doc.Slug, AvatarURL: doc.AvatarURL, MemberCount: doc.MemberCount,
 		})
 	}
 	return &application.MyCircleSearchResult{
