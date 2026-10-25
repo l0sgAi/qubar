@@ -93,6 +93,8 @@ type PostReportRepository interface {
 	// ListReportedByCircle 圈内有待处理举报、且已发布 / 已屏蔽的帖子，按 (首次举报时间, post_id) 倒序 keyset 翻页；
 	// after 为 nil 表示第一页（PostKeyset.CreateTime 为首次举报时间）。
 	ListReportedByCircle(ctx context.Context, circleID uuid.UUID, after *PostKeyset, limit int) ([]ReportedPost, error)
+	// CountReportedByCircle 圈内有待处理举报、且已发布 / 已屏蔽的帖子数，口径与 ListReportedByCircle 一致（#156）。
+	CountReportedByCircle(ctx context.Context, circleID uuid.UUID) (int64, error)
 	// ListPendingByPostIDs 每篇帖子最近 perPost 条待处理举报（新→旧）。
 	ListPendingByPostIDs(ctx context.Context, postIDs []uuid.UUID, perPost int) (map[uuid.UUID][]PostReport, error)
 	// Resolve 圈管复核（同一事务）：关闭该帖全部待处理举报 → remove 时帖子转为驳回（status 3），
