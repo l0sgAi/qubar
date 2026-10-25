@@ -60,3 +60,10 @@ func UpdateCircleHotForTest(ids []uuid.UUID, delta int64) error {
 	}
 	return (&CircleHotSyncer{}).batchUpdateCircleHot(deltas)
 }
+
+// UpsertNotificationForTest 通知消费者落库：写一行通知（id 由调用方给定，模拟 Go 侧 NewID）。
+func UpsertNotificationForTest(id, recipientID, actorID uuid.UUID, noticeType int16, postID uuid.UUID, snippet string) error {
+	return upsertNotifications([]noticeRow{{
+		ID: id, RecipientID: recipientID, ActorID: actorID, NoticeType: noticeType, PostID: &postID, Snippet: snippet,
+	}})
+}
