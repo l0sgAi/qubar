@@ -151,6 +151,38 @@ func (h *Handler) ListReportedPosts(c appctx.AppContext) {
 	httputil.Success(c, result)
 }
 
+// ModerationSummaryRequest 待处理数量请求。
+type ModerationSummaryRequest struct {
+	CircleID string `query:"circle_id"`
+}
+
+// GetModerationSummary GET /circle/moderation/summary
+//
+// 圈主 / 管理员查看本圈待审帖子数与被举报帖子数（审核页角标，#156），鉴权同被举报列表。
+func (h *Handler) GetModerationSummary(c appctx.AppContext) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+	var req ModerationSummaryRequest
+	if err := c.BindQuery(&req); err != nil {
+		httputil.BadRequest(c, "Invalid request parameters")
+		return
+	}
+	circleID, err := uuid.Parse(req.CircleID)
+	if err != nil {
+		httputil.BadRequest(c, "Invalid circle_id")
+		return
+	}
+
+	result, err := h.svc.GetModerationSummary(c, userID, circleID)
+	if err != nil {
+		writeReportError(c, err)
+		return
+	}
+	httputil.Success(c, result)
+}
+
 // ResolveReportRequest 举报复核请求。
 type ResolveReportRequest struct {
 	CircleID uuid.UUID `json:"circle_id" binding:"required"`

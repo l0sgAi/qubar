@@ -9,8 +9,6 @@ package application
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -95,8 +93,16 @@ type CircleSearchResult struct {
 type MyCircleDoc struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
+	Slug        string `json:"slug,omitempty"`
 	AvatarURL   string `json:"avatar_url,omitempty"`
 	MemberCount int    `json:"member_count"`
+	// Role 该用户在圈内的角色（30 圈主 / 20 管理员 / 10 成员）。
+	Role int16 `json:"role"`
+	// MemberStatus 我的成员状态（1 正常 / 2 禁言）。仅 GET /circle/my 回填；
+	// 他人列表不回填（禁言属个人隐私），零值经 omitempty 不出现。
+	MemberStatus int16 `json:"member_status,omitempty"`
+	// MuteEndTime 禁言截止时间，仅禁言生效中返回（已过期按正常处理，不返回）。
+	MuteEndTime *time.Time `json:"mute_end_time,omitempty"`
 }
 
 // MyCircleSearchResult 我加入圈子搜索结果。
@@ -278,10 +284,11 @@ type CircleService interface {
 	JoinCircle(ctx context.Context, userID, circleID uuid.UUID) (joined bool, pending bool, err error)
 	LeaveCircle(ctx context.Context, userID, circleID uuid.UUID) error
 	SearchCircles(ctx context.Context, keyword string, size int, searchAfter []interface{}) (*CircleSearchResult, error)
-	GetMyCircles(ctx context.Context, userID uuid.UUID, keyword string, size int, cursor string) (*MyCircleSearchResult, error)
+	// GetMyCircles 获取我加入的圈子列表（含我的成员状态）。role 为角色筛选：0 全部，10/20/30 单选。
+	GetMyCircles(ctx context.Context, userID uuid.UUID, keyword string, role int16, size int, cursor string) (*MyCircleSearchResult, error)
 	// GetUserCircles 获取任意用户加入的圈子列表（查看「他人」加入的圈子）。
-	// 逻辑与 GetMyCircles 一致，仅 userID 来源不同（query 参数 vs 当前会话）。
-	GetUserCircles(ctx context.Context, targetUserID uuid.UUID, keyword string, size int, cursor string) (*MyCircleSearchResult, error)
+	// 逻辑与 GetMyCircles 一致，仅 userID 来源不同（query 参数 vs 当前会话），且不回填成员状态。
+	GetUserCircles(ctx context.Context, targetUserID uuid.UUID, keyword string, role int16, size int, cursor string) (*MyCircleSearchResult, error)
 	GetCirclePosts(ctx context.Context, circleID uuid.UUID, sortType, size int, searchAfter []interface{}) (*CirclePostResult, error)
 	// ListActiveCircles 近期活跃圈子分页列表（按近 N 天发帖数排序）。
 	ListActiveCircles(ctx context.Context, size, offset int) (*ActiveCircleResult, error)
@@ -719,51 +726,75 @@ const joinedSearchBatchSize = 100
 // 超限置 Truncated=true，前端提示细化关键字。
 const joinedSearchMaxScan = 5000
 
-// errInvalidCursor 游标非法（非 base64 / 负 rank）。
+// errInvalidCursor 游标非法（非 base64 / 负 rank / 与 role 参数不匹配）。
 var errInvalidCursor = errors.New("invalid search_after cursor")
 
 // IsInvalidCursorErr 判断是否游标非法错误。
 func IsInvalidCursorErr(err error) bool { return errors.Is(err, errInvalidCursor) }
 
-// GetMyCircles 获取我加入的圈子列表。
-func (s *circleServiceImpl) GetMyCircles(ctx context.Context, userID uuid.UUID, keyword string, size int, cursor string) (*MyCircleSearchResult, error) {
-	return s.loadJoinedCircles(ctx, userID, keyword, size, cursor)
+// GetMyCircles 获取我加入的圈子列表（回填我的成员状态）。
+func (s *circleServiceImpl) GetMyCircles(ctx context.Context, userID uuid.UUID, keyword string, role int16, size int, cursor string) (*MyCircleSearchResult, error) {
+	return s.loadJoinedCircles(ctx, joinedListQuery{
+		userID: userID, keyword: keyword, role: role, size: size, cursor: cursor, withStatus: true,
+	})
 }
 
-// GetUserCircles 获取任意用户加入的圈子列表（查看「他人」加入的圈子）。
-func (s *circleServiceImpl) GetUserCircles(ctx context.Context, targetUserID uuid.UUID, keyword string, size int, cursor string) (*MyCircleSearchResult, error) {
-	return s.loadJoinedCircles(ctx, targetUserID, keyword, size, cursor)
+// GetUserCircles 获取任意用户加入的圈子列表（查看「他人」加入的圈子；不回填成员状态）。
+func (s *circleServiceImpl) GetUserCircles(ctx context.Context, targetUserID uuid.UUID, keyword string, role int16, size int, cursor string) (*MyCircleSearchResult, error) {
+	return s.loadJoinedCircles(ctx, joinedListQuery{
+		userID: targetUserID, keyword: keyword, role: role, size: size, cursor: cursor,
+	})
 }
 
 // loadJoinedCircles 加载指定用户加入的圈子列表（GetMyCircles / GetUserCircles 共用）。
 //
-// 数据源为用户 joined ZSET（member=circle_id, score=加入时间ms，倒序），支持无上限成员数：
-// 永不物化全量 ID 列表，按 rank 游标分页/批量。
+// 无角色筛选时数据源为用户 joined ZSET（member=circle_id, score=加入时间ms，倒序），
+// 支持无上限成员数：永不物化全量 ID 列表，按 rank 游标分页/批量。
 //   - 浏览（keyword 空）：ZSET 取一页 ID → ES SearchMy 过滤 status=1/deleted=0 并 hydrate
 //   - 搜索（keyword 非空）：ZSET 按 rank 批量取 ID → 每批喂 ES 过滤 → 累积到 size
 //
 // ZSET miss 时从 DB 全量重建（ensureJoinedWarm）。查「他人」会回填对方的 ZSET。
-func (s *circleServiceImpl) loadJoinedCircles(ctx context.Context, userID uuid.UUID, keyword string, size int, cursor string) (*MyCircleSearchResult, error) {
-	rank, err := decodeJoinedCursor(cursor)
-	if err != nil {
+// 带角色筛选时 ZSET 不含角色，改走 PG keyset（见 joined.go loadJoinedByRole）。
+// 两种模式都按页一次批量查 circle_member 回填 role / 成员状态。
+func (s *circleServiceImpl) loadJoinedCircles(ctx context.Context, q joinedListQuery) (*MyCircleSearchResult, error) {
+	if !isJoinedRoleFilter(q.role) {
+		return nil, errInvalidJoinedRoleFilter
+	}
+	cur, err := decodeJoinedCursor(q.cursor)
+	if err != nil || (q.cursor != "" && cur.role != q.role) {
+		// rank 游标与角色游标不可混用：切换筛选条件须从第一页开始。
 		return nil, errInvalidCursor
 	}
-	if err := s.ensureJoinedWarm(ctx, userID); err != nil {
+	if q.role != 0 {
+		return s.loadJoinedByRole(ctx, q, cur.key)
+	}
+
+	rank := cur.rank
+	if err := s.ensureJoinedWarm(ctx, q.userID); err != nil {
 		return nil, err
 	}
-	card, err := s.joinedCache.Card(ctx, userID)
+	card, err := s.joinedCache.Card(ctx, q.userID)
 	if err != nil {
 		return nil, err
 	}
 	if card == 0 || int64(rank) >= card {
 		return &MyCircleSearchResult{
-			Circles: []MyCircleDoc{}, Total: card, Size: size, SearchAfter: "",
+			Circles: []MyCircleDoc{}, Total: card, Size: q.size, SearchAfter: "",
 		}, nil
 	}
-	if keyword == "" {
-		return s.browseJoinedByRank(ctx, userID, size, rank, card)
+	var res *MyCircleSearchResult
+	if q.keyword == "" {
+		res, err = s.browseJoinedByRank(ctx, q.userID, q.size, rank, card)
+	} else {
+		res, err = s.searchJoinedByRank(ctx, q.userID, q.keyword, q.size, rank, card)
 	}
-	return s.searchJoinedByRank(ctx, userID, keyword, size, rank, card)
+	if err != nil {
+		return nil, err
+	}
+	if res.Circles, err = s.fillJoinedMembership(ctx, q, res.Circles); err != nil {
+		return nil, err
+	}
+	return res, nil
 }
 
 // browseJoinedByRank 浏览模式：ZSET 取一页 ID，复用 ES SearchMy 过滤+hydrate。
@@ -880,35 +911,6 @@ func (s *circleServiceImpl) tryAddJoined(ctx context.Context, userID, circleID u
 	if err := s.joinedCache.Add(ctx, userID, circleID, scoreMs); err != nil {
 		logger.Log.Error("Failed to add joined circle to cache: " + err.Error())
 	}
-}
-
-// encodeJoinedCursor 把 rank 编码为 opaque base64url 游标串。
-func encodeJoinedCursor(rank int) string {
-	b, _ := json.Marshal(struct {
-		R int `json:"r"`
-	}{R: rank})
-	return base64.RawURLEncoding.EncodeToString(b)
-}
-
-// decodeJoinedCursor 解析游标。空串 → 0。非法返回错误。
-func decodeJoinedCursor(s string) (int, error) {
-	if s == "" {
-		return 0, nil
-	}
-	b, err := base64.RawURLEncoding.DecodeString(s)
-	if err != nil {
-		return 0, err
-	}
-	var c struct {
-		R int `json:"r"`
-	}
-	if err := json.Unmarshal(b, &c); err != nil {
-		return 0, err
-	}
-	if c.R < 0 {
-		return 0, fmt.Errorf("negative cursor rank")
-	}
-	return c.R, nil
 }
 
 // GetCirclePosts 获取圈内帖子列表（组装作者/圈子/图片信息）。

@@ -62,9 +62,19 @@ type CircleUpdateFields struct {
 type MemberRepository interface {
 	// GetMember 获取成员信息。未找到返回 ErrMemberNotFound。
 	GetMember(ctx context.Context, circleID, userID uuid.UUID) (*CircleMember, error)
-	// ListJoinedWithScore 列出用户 normal 成员的 (circleID, 加入时间ms)，按加入时间倒序。
-	// limit=0 表示不限制。用于 JoinedCirclesCache 重建。
+	// ListJoinedWithScore 列出用户已加入圈子（status IN (正常, 禁言)）的 (circleID, 加入时间ms)，
+	// 按加入时间倒序。limit=0 表示不限制。用于 JoinedCirclesCache 重建。
+	// 口径与增量维护一致：禁言不移出 ZSET，拉黑/退出移出，申请中不进入。
 	ListJoinedWithScore(ctx context.Context, userID uuid.UUID, limit int) ([]JoinedMember, error)
+	// ListJoinedMemberships 批量查询用户在给定圈子中的成员关系（仅 status IN (正常, 禁言)），
+	// 返回 circleID → 成员行（role/status/mute_end_time/create_time）。一次查询，供列表回填。
+	ListJoinedMemberships(ctx context.Context, userID uuid.UUID, circleIDs []uuid.UUID) (map[uuid.UUID]CircleMember, error)
+	// ListJoinedByRole 按角色分页用户已加入的圈子（status IN (正常, 禁言)），
+	// keyset 排序 (create_time DESC, circle_id DESC)，与 joined ZSET 的加入时间倒序一致。
+	// after 为 nil 表示第一页；返回成员行（circle_id/role/status/mute_end_time/create_time）。
+	ListJoinedByRole(ctx context.Context, userID uuid.UUID, role int16, after *JoinedKey, limit int) ([]CircleMember, error)
+	// CountJoinedByRole 用户以指定角色加入的圈子数（status IN (正常, 禁言)）。
+	CountJoinedByRole(ctx context.Context, userID uuid.UUID, role int16) (int64, error)
 	// JoinCircle 用户加入圈子（含状态机：pending/left/banned → normal 等）。
 	// 返回错误信息与旧 model.JoinCircle 一致（"user is already a member..." 等）。
 	JoinCircle(ctx context.Context, circleID, userID uuid.UUID, joinType int16) (*CircleMember, error)
@@ -132,6 +142,12 @@ type CircleStatsCache interface {
 type JoinedMember struct {
 	CircleID uuid.UUID
 	ScoreMs  int64 // 加入时间 Unix 毫秒
+}
+
+// JoinedKey 按角色分页「我加入的圈子」的 keyset 位置（成员行 create_time + circle_id）。
+type JoinedKey struct {
+	CreateTime time.Time
+	CircleID   uuid.UUID
 }
 
 // JoinedCirclesCache 用户已加入圈子 ID 的 ZSET 缓存。

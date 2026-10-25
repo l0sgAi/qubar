@@ -81,7 +81,8 @@
 - Service（`application/service.go:193`）：`CreatePost(成员+状态校验,sanitize,摘要,incr圈子post_count)/
   GetPostDetail(异步浏览+RestoreStats+is_liked/is_collected)/SearchPosts/GetMyPosts/GetUserPosts(ES)/
   GetPostsByIDs/SearchPostsByIDs/SearchPostsByIDsAndKeyword(跨域给 collect/history)/
-  ListCircleIDsByPostIDs(recommend C3)/GetPostMeta/RestoreStats/RestoreStatsAndIncrCommentCount`。
+  ListCircleIDsByPostIDs(recommend C3)/GetCircleIDsByPostIDs(notice 审核类通知,含已删帖)/GetModerationSummary(审核页角标)/
+  GetPostMeta/RestoreStats/RestoreStatsAndIncrCommentCount`。
 - **⚠️ 评论数同步落库**（`:967`），不像浏览/赞/藏走 MQ。
 - 跨域端口（setter 注入）：`UserFacade/CircleFacade/CircleMemberChecker/CircleStatusChecker/CirclePostCountPort/PostCollectCache/HistoryRecorder`。
 - publisher：`PublishViewCount`。
@@ -132,6 +133,7 @@
 | 帖子 hydrate(作者/圈子/图片/统计) | `PostHydrator.Hydrate(ctx,[]uuid) ([]FeedPostItem,error)` | `recommend/domain/ports.go:64` |
 | 批量回填 is_liked/is_collected | `InteractionChecker.BatchCheck` | `recommend/domain/ports.go:89` |
 | 帖子→circle_id 反查 | `PostMetaReader.ListCircleIDsByPostIDs` | `recommend/domain/ports.go:70` |
+| 帖子→circle_id 映射（含已删 / 任意状态） | `PostService.GetCircleIDsByPostIDs(ctx,[]uuid) map[uuid]uuid` | `post/application/service.go` |
 | 用户已加圈子 IDs | `CircleLookup.ListJoinedCircleIDs` | `recommend/domain/ports.go:75` |
 | ES 窗口化 terms 聚合榜 | `AggregateActiveCircles`（范式蓝本） | `elasticsearch/post.go:586` |
 | ES 时间衰减热度排序 | `SearchHomeFeed`（rank_score 脚本） | `elasticsearch/post.go:711` |

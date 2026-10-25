@@ -245,6 +245,9 @@ type PostService interface {
 	// ListCircleIDsByPostIDs 批量取帖子所属 circle_id（去重，仅未删除+已发布）。
 	// 供 recommend 域 C3 行为圈子召回用（seed 帖子 → 圈子）。
 	ListCircleIDsByPostIDs(ctx context.Context, postIDs []uuid.UUID) ([]uuid.UUID, error)
+	// GetCircleIDsByPostIDs 批量取 帖子ID → 所属 circle_id（含已删除 / 已屏蔽 / 已下架帖子，查不到的不在结果里）。
+	// 供 notice 域审核类通知回填 circle_id 用（#156）。
+	GetCircleIDsByPostIDs(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
 
 	// GetPostMeta 获取帖子元信息（供 comment/like 领域校验用）。
 	// 未找到返回 nil, nil。
@@ -305,6 +308,9 @@ type PostService interface {
 	ListReportedPosts(ctx context.Context, operatorID, circleID uuid.UUID, size int, cursor string) (*ReportedPostsResult, error)
 	// ResolveReport 举报复核（#153）：dismiss 保留帖子并关闭举报，remove 下架为 status 3 并通知作者；并发时只有一方生效，其余 404。
 	ResolveReport(ctx context.Context, operatorID uuid.UUID, in ResolveReportInput) (*ResolveReportResult, error)
+	// GetModerationSummary 圈内待处理数量（#156）：待审帖子数与被举报帖子数，口径分别与 ListReviewQueue /
+	// ListReportedPosts 一致；操作者须为该圈 admin+。
+	GetModerationSummary(ctx context.Context, operatorID, circleID uuid.UUID) (*ModerationSummary, error)
 	// SetReportRepository 注入举报仓储（未注入时举报相关接口返回错误）。
 	SetReportRepository(r domain.PostReportRepository)
 }
@@ -1205,6 +1211,11 @@ func (s *postServiceImpl) SearchPostsByIDsAndKeyword(ctx context.Context, postID
 		return nil, 0, err
 	}
 	return s.assemblePostList(ctx, raw), raw.Total, nil
+}
+
+// GetCircleIDsByPostIDs 批量取 帖子ID → circle_id（一次主键查询，不过滤删除 / 状态）。
+func (s *postServiceImpl) GetCircleIDsByPostIDs(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	return s.repo.GetCircleIDsByIDs(ctx, postIDs)
 }
 
 // ListCircleIDsByPostIDs 批量取帖子所属 circle_id（去重，仅未删除+已发布）。

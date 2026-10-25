@@ -31,6 +31,12 @@ const (
 	NoticeTypeMax = NoticeTypePostRemoved
 )
 
+// IsCircleReviewNotice 该类型是否为发给圈管的审核类通知（举报 / 疑似自伤）：列表回填帖子所属 circle_id，
+// 供前端跳转圈子管理「审核」页（#156）。
+func IsCircleReviewNotice(noticeType int16) bool {
+	return noticeType == NoticeTypePostReported || noticeType == NoticeTypePostSelfHarm
+}
+
 // HidesActor 该类型是否对接收人隐藏 actor：审核 / 下架结果不暴露处理人，举报通知不暴露举报人
 // （actor_id 仍落库供排查；举报通知的 actor_id 为全零 UUID）。疑似自伤通知的 actor 是帖子作者，照常展示。
 func HidesActor(noticeType int16) bool {

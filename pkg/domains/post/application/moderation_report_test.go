@@ -98,6 +98,11 @@ func (r *fakeReportRepo) ListReportedByCircle(_ context.Context, circleID uuid.U
 	return out, nil
 }
 
+func (r *fakeReportRepo) CountReportedByCircle(ctx context.Context, circleID uuid.UUID) (int64, error) {
+	rows, err := r.ListReportedByCircle(ctx, circleID, nil, len(r.reported)+1)
+	return int64(len(rows)), err
+}
+
 // reportedBefore x 是否排在翻页位置 after 之后（首次举报时间, id 倒序）。
 func reportedBefore(x domain.ReportedPost, after *domain.PostKeyset) bool {
 	if x.FirstReportTime.Equal(after.CreateTime) {
@@ -496,5 +501,40 @@ func TestListReportedPosts_AssemblesReports(t *testing.T) {
 	}
 	if _, err := f.svc.ListReportedPosts(ctx, reviewAdmin, postCircleID, 1, "!!!"); !IsInvalidReviewCursorErr(err) {
 		t.Fatalf("bad cursor err = %v", err)
+	}
+}
+
+// ===== 待处理数量（#156）=====
+
+// 鉴权同被举报列表（普通成员 / 禁言管理员 / 非成员 / 作者 403，缺 circle_id 400）；两个计数与两个列表条数一致。
+func TestGetModerationSummary(t *testing.T) {
+	f, reports, id := newReportFixture(t, moderationCfg(true, "key", true))
+	ctx := context.Background()
+	for name, op := range map[string]uuid.UUID{"member": reviewMember, "muted admin": reviewMuted, "stranger": reviewStrang, "author": mentionActor} {
+		if _, err := f.svc.GetModerationSummary(ctx, op, postCircleID); !IsNotCircleModeratorErr(err) {
+			t.Fatalf("%s summary err = %v", name, err)
+		}
+	}
+	if _, err := f.svc.GetModerationSummary(ctx, reviewOwner, uuid.Nil); !IsCircleIDRequiredErr(err) {
+		t.Fatalf("missing circle err = %v", err)
+	}
+
+	f.createPost(t) // 审核中
+	f.createPost(t)
+	f.repo.created = append(f.repo.created, &domain.Post{ID: uuid.New(), CircleID: otherCircleID, Status: domain.PostStatusReviewing})
+	reports.reported = []domain.ReportedPost{
+		{Post: *f.repo.created[0], ReportCount: 2, FirstReportTime: time.Now()},
+		{Post: domain.Post{ID: uuid.New(), CircleID: otherCircleID, Status: domain.PostStatusPublished}, ReportCount: 1},
+	}
+
+	got, err := f.svc.GetModerationSummary(ctx, reviewAdmin, postCircleID)
+	if err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+	queue, _ := f.svc.ListReviewQueue(ctx, reviewAdmin, postCircleID, 100, "")
+	reported, _ := f.svc.ListReportedPosts(ctx, reviewAdmin, postCircleID, 100, "")
+	if got.ReviewPending != 2 || got.ReportPending != 1 ||
+		got.ReviewPending != int64(len(queue.Posts)) || got.ReportPending != int64(len(reported.Posts)) || reported.Posts[0].ID != id {
+		t.Fatalf("summary = %+v, queue %d, reported %d", got, len(queue.Posts), len(reported.Posts))
 	}
 }

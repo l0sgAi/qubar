@@ -255,12 +255,44 @@ func (r *postRepoPG) ResolveReview(ctx context.Context, postID uuid.UUID, status
 // ListReviewingByCircle 圈内审核中帖子，(create_time, id) 倒序 keyset。
 // 审核中的帖子全站很少，走 idx_post_status (status, create_time DESC) 再按 circle_id 过滤即可。
 func (r *postRepoPG) ListReviewingByCircle(ctx context.Context, circleID uuid.UUID, after *domain.PostKeyset, limit int) ([]domain.Post, error) {
-	q := r.db.WithContext(ctx).
-		Where("circle_id = ? AND status = ? AND deleted = ?", circleID, domain.PostStatusReviewing, 0)
+	q := r.reviewingByCircle(ctx, circleID)
 	if after != nil {
 		q = q.Where("(create_time, id) < (?, ?)", after.CreateTime, after.ID)
 	}
 	var posts []domain.Post
 	err := q.Order("create_time DESC, id DESC").Limit(limit).Find(&posts).Error
 	return posts, err
+}
+
+// reviewingByCircle 待审队列与待审计数共用的过滤条件（口径一致）。
+func (r *postRepoPG) reviewingByCircle(ctx context.Context, circleID uuid.UUID) *gorm.DB {
+	return r.db.WithContext(ctx).Model(&domain.Post{}).
+		Where("circle_id = ? AND status = ? AND deleted = ?", circleID, domain.PostStatusReviewing, 0)
+}
+
+// CountReviewingByCircle 圈内审核中帖子数（#156 待处理角标），条件同 ListReviewingByCircle。
+func (r *postRepoPG) CountReviewingByCircle(ctx context.Context, circleID uuid.UUID) (int64, error) {
+	var n int64
+	err := r.reviewingByCircle(ctx, circleID).Count(&n).Error
+	return n, err
+}
+
+// GetCircleIDsByIDs 批量取 帖子ID → circle_id（主键 IN，一次查询；含已删除 / 任意状态的帖子）。
+func (r *postRepoPG) GetCircleIDsByIDs(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	out := make(map[uuid.UUID]uuid.UUID, len(postIDs))
+	if len(postIDs) == 0 {
+		return out, nil
+	}
+	var rows []struct {
+		ID       uuid.UUID
+		CircleID uuid.UUID
+	}
+	if err := r.db.WithContext(ctx).Model(&domain.Post{}).Select("id, circle_id").
+		Where("id IN ?", postIDs).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		out[row.ID] = row.CircleID
+	}
+	return out, nil
 }
