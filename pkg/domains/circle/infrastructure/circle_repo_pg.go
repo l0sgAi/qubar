@@ -218,15 +218,16 @@ func (r *memberRepoPG) GetMember(ctx context.Context, circleID, userID uuid.UUID
 	return &m, nil
 }
 
-// ListJoinedWithScore 列出用户 normal 成员的 (circleID, 加入时间ms)，按加入时间倒序。
-// limit=0 表示不限制。用于 JoinedCirclesCache 重建。
+// ListJoinedWithScore 列出用户已加入圈子（status IN (正常, 禁言)）的 (circleID, 加入时间ms)，
+// 按加入时间倒序。limit=0 表示不限制。用于 JoinedCirclesCache 重建。
+// 禁言不移出 ZSET（MuteMember 不动缓存），重建口径必须同样包含禁言，否则重建前后列表不一致。
 func (r *memberRepoPG) ListJoinedWithScore(ctx context.Context, userID uuid.UUID, limit int) ([]domain.JoinedMember, error) {
 	var rows []struct {
 		CircleID   uuid.UUID `gorm:"column:circle_id"`
 		CreateTime time.Time `gorm:"column:create_time"`
 	}
 	q := r.db.WithContext(ctx).Model(&domain.CircleMember{}).
-		Where("user_id = ? AND status = ?", userID, domain.MemberStatusNormal).
+		Where("user_id = ? AND status IN ?", userID, domain.JoinedMemberStatuses).
 		Order("create_time DESC")
 	if limit > 0 {
 		q = q.Limit(limit)
@@ -242,6 +243,60 @@ func (r *memberRepoPG) ListJoinedWithScore(ctx context.Context, userID uuid.UUID
 		}
 	}
 	return members, nil
+}
+
+// joinedMemberColumns 「我加入的圈子」列表回填所需的成员列。
+const joinedMemberColumns = "circle_id, role, status, mute_end_time, create_time"
+
+// ListJoinedMemberships 批量查询用户在给定圈子中的成员关系（仅 status IN (正常, 禁言)）。
+// user_id + circle_id IN 走 idx_member_user / idx_member_unique，一页一次查询。
+func (r *memberRepoPG) ListJoinedMemberships(ctx context.Context, userID uuid.UUID, circleIDs []uuid.UUID) (map[uuid.UUID]domain.CircleMember, error) {
+	result := make(map[uuid.UUID]domain.CircleMember, len(circleIDs))
+	if len(circleIDs) == 0 {
+		return result, nil
+	}
+	var rows []domain.CircleMember
+	if err := r.db.WithContext(ctx).Model(&domain.CircleMember{}).
+		Select(joinedMemberColumns).
+		Where("user_id = ? AND circle_id IN ? AND status IN ?", userID, circleIDs, domain.JoinedMemberStatuses).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, m := range rows {
+		result[m.CircleID] = m
+	}
+	return result, nil
+}
+
+// ListJoinedByRole 按角色 keyset 分页用户已加入的圈子（status IN (正常, 禁言)）。
+//
+// 排序 (create_time DESC, circle_id DESC)：与 joined ZSET 的加入时间倒序一致，circle_id
+// 作同一时刻的确定性 tiebreaker（同一用户对同一圈子只有一行，二元组唯一）。
+// 过滤走 idx_member_user (user_id, role, status)；单用户单角色的行数有限，排序代价可控。
+func (r *memberRepoPG) ListJoinedByRole(ctx context.Context, userID uuid.UUID, role int16, after *domain.JoinedKey, limit int) ([]domain.CircleMember, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	q := r.db.WithContext(ctx).Model(&domain.CircleMember{}).
+		Select(joinedMemberColumns).
+		Where("user_id = ? AND role = ? AND status IN ?", userID, role, domain.JoinedMemberStatuses)
+	if after != nil {
+		q = q.Where("(create_time, circle_id) < (?, ?)", after.CreateTime, after.CircleID)
+	}
+	var rows []domain.CircleMember
+	if err := q.Order("create_time DESC, circle_id DESC").Limit(limit).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// CountJoinedByRole 用户以指定角色加入的圈子数（status IN (正常, 禁言)）。
+func (r *memberRepoPG) CountJoinedByRole(ctx context.Context, userID uuid.UUID, role int16) (int64, error) {
+	var n int64
+	err := r.db.WithContext(ctx).Model(&domain.CircleMember{}).
+		Where("user_id = ? AND role = ? AND status IN ?", userID, role, domain.JoinedMemberStatuses).
+		Count(&n).Error
+	return n, err
 }
 
 // JoinCircle 用户加入圈子，与旧 model.JoinCircle 状态机完全一致。
