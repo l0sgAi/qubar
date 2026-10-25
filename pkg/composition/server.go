@@ -74,8 +74,9 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	historySvc.SetPostFetcher(&historyPostFetcher{delegate: postSvc})
 	postSvc.SetHistoryRecorder(&postHistoryRecorder{delegate: historySvc})
 
-	// notice 需要 user Facade（通知列表 actor 批量组装）
+	// notice 需要 user Facade（通知列表 actor 批量组装）+ post Facade（审核类通知 circle_id 回填）
 	noticeSvc.SetUserFacade(&noticeUserFacade{delegate: userFacade})
+	noticeSvc.SetPostFacade(&noticePostFacade{delegate: postSvc})
 
 	// SSE 未读数推流 hub：注入 notice service + Redpanda consumer hook（见 wire_notice.go）。
 	streamHub := newNoticeStreamHub(noticeSvc)
@@ -83,7 +84,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	// 跨领域 Facade 注入完成。如遗漏注入，相关领域会在请求时表现为空数据/校验失败，
 	// 这里打一条启动日志便于排查（强类型断言成本过高，用日志替代 panic，见 review P2-2）。
 	if logger.Log != nil {
-		logger.Log.Info("cross-domain facades injected: circle<-user/post, post<-user/circle, comment<-user/post, like<-post/comment, collect<-post, history<-post")
+		logger.Log.Info("cross-domain facades injected: circle<-user/post, post<-user/circle, comment<-user/post, like<-post/comment, collect<-post, history<-post, notice<-user/post")
 	}
 
 	// recommend 需要 post（hydrate + circle_id 反查）+ circle（joined IDs），均为只读消费者，无反向注入。
