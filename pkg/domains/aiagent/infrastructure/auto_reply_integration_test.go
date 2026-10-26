@@ -22,7 +22,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestMain(m *testing.M) { testkit.Main(m) }
+// TestMain 在同包的 search_quota_redis_integration_test.go（内部测试包，与本文件编进同一个测试二进制）。
 
 // newPlaceholder 构造一条自动回复占位行（随机 ID，测试结束删除）。
 func newPlaceholder(t *testing.T, agentID, postID uuid.UUID, target *uuid.UUID) *domain.ReplyLog {
