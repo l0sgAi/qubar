@@ -65,6 +65,7 @@ sa_token:
   is_concurrent: true # 允许并发登录
   is_share: false # 不共享session
   max_login_count: 10 # 同一账号同时在线的终端上限，超出时注销最早登录的终端
+  renew_interval: 600 # 同一 token 两次自动续期的最小间隔(秒)，剩余有效期低于 timeout - renew_interval 才续期
 
 # AWS S3 对象存储配置
 s3:
@@ -130,6 +131,8 @@ redpanda:
   notice_event_topic: "notification_events" # 通知事件topic（消息中心）
   notice_event_consumer_group: "notification_events_consumer_group" # 通知事件消费者组
   notice_event_flush_interval: 5 # 通知落库间隔(秒)
+  post_moderation_topic: "post_moderation" # 帖子 AI 审核事件topic（仅 moderation 启用时使用）
+  post_moderation_consumer_group: "post_moderation_consumer_group" # 帖子审核 worker 消费者组
 
 # 消息中心配置（设计见 docs/notice-design.md）
 notice:
@@ -200,6 +203,17 @@ discover:
 
 # AI 机器人回复执行链路（<=0 时用代码内默认值）
 aiagent:
+  # 机器人网络搜索热点来源（#100）：平台统一出 key，按机器人限制每日次数；api_key 为空时搜索关闭，启动不报错。
+  # 开发栈只放占位值：key 为空 = 搜索关闭；本机联调把真实 key 放 QUBAR_AIAGENT_SEARCH_API_KEY，勿写进本文件。
+  # 只用搜索结果的标题 / 摘要 / 链接，不抓结果网页；出站同 LLM 直连不走代理（#48），优先选国内直连可达的服务商。
+  search:
+    provider: bocha                                  # 服务商：bocha（博查，当前唯一实现）
+    endpoint: https://api.bochaai.com/v1/web-search  # 搜索 API 地址，空 = 服务商默认地址
+    api_key: ""                                      # 平台 key
+    timeout_sec: 10                                  # 单次调用超时(秒)，默认 10
+    max_results: 10                                  # 默认返回条数，默认 10，上限 50
+    freshness_hours: 24                              # 默认只要最近 N 小时的结果，默认 24
+    daily_quota: 20                                  # 每个机器人每日搜索次数（Asia/Shanghai 自然日），默认 20
   timeout_sec: 30          # LLM 单次调用超时(秒)，默认 30
   max_content_chars: 4000  # Prompt 各段(title/summary/评论)截断长度，默认 4000
   reply_concurrency: 3     # 关键词触发异步执行并发上限，默认 3
@@ -249,3 +263,8 @@ moderation:
   severity_block: 1.5            # 驳回所需最低 severity（0–3）
   low_confidence: 0.5            # severity 置信度低于此值视为不确定
   low_confidence_severity: 1.0   # severity >= 此值且置信度低时转人工
+  # 先发后审（#153）：AI「人工待审」结果的去向 + 用户举报复核。举报功能与审核开关无关，始终可用
+  review_action: "publish"       # publish（默认）= 待审结果直接发布（日志 decision=review_publish）；hold = 留在审核中等圈管处理（#118 行为）
+  report_notify_threshold: 1     # 帖子待处理举报数达到此值时通知本圈圈主 / 管理员（处理前只通知一次），默认 1
+  report_hide_threshold: 0       # 待处理举报数达到此值时自动屏蔽（status 4）等圈管复核，0 = 关闭（默认，防恶意举报）
+  report_daily_limit: 20         # 每个用户 24 小时内最多举报次数，默认 20

@@ -27,6 +27,32 @@ var noticeTypeCode = map[string]int16{
 	NoticeTypeCommentPost:  noticedomain.NoticeTypeCommentPost,
 	NoticeTypeReplyComment: noticedomain.NoticeTypeReplyComment,
 	NoticeTypeMention:      noticedomain.NoticeTypeMention,
+	NoticeTypePostApproved: noticedomain.NoticeTypePostApproved,
+	NoticeTypePostRejected: noticedomain.NoticeTypePostRejected,
+	NoticeTypePostReported: noticedomain.NoticeTypePostReported,
+	NoticeTypePostSelfHarm: noticedomain.NoticeTypePostSelfHarm,
+	NoticeTypePostRemoved:  noticedomain.NoticeTypePostRemoved,
+}
+
+// 圈管类通知（举报 / 疑似自伤）的接收人：帖子所属圈子的圈主 + 管理员（role >= 20）且成员状态正常（与 circle 域取值一致）。
+const (
+	circleModeratorMinRole int16 = 20
+	circleMemberNormal     int16 = 1
+)
+
+// isPostAuthorNotice 接收人为帖子作者、需反查帖子的类型。
+func isPostAuthorNotice(t string) bool {
+	switch t {
+	case NoticeTypeLikePost, NoticeTypeCollectPost, NoticeTypeCommentPost,
+		NoticeTypePostApproved, NoticeTypePostRejected, NoticeTypePostRemoved:
+		return true
+	}
+	return false
+}
+
+// isCircleModeratorNotice 接收人为帖子所属圈子圈主 + 管理员的类型（#153）。
+func isCircleModeratorNotice(t string) bool {
+	return t == NoticeTypePostReported || t == NoticeTypePostSelfHarm
 }
 
 // noticeSnippetMaxRunes snippet 快照上限（与 VARCHAR(200) 对齐留余量）。
@@ -275,9 +301,10 @@ type noticeRow struct {
 
 // postLookupRow 接收人/标题反查行（.Table 原始表名，避免跨域 import 实体）。
 type postLookupRow struct {
-	ID     uuid.UUID
-	UserID uuid.UUID
-	Title  string
+	ID       uuid.UUID
+	UserID   uuid.UUID
+	CircleID uuid.UUID
+	Title    string
 }
 
 // commentLookupRow 评论反查行。
@@ -292,12 +319,14 @@ type commentLookupRow struct {
 //
 // 规则落点（设计 docs/notice-design.md §3.3）：
 //   - 接收人消费端批量反查（post/comment 各一次 IN 查询；mention 自带接收人）
+//   - 举报 / 疑似自伤（#153）：帖子所属圈子的圈主 + 管理员（circle_member 一次 IN 查询）
 //   - R1 自动作不通知；R4 同 (recipient, comment) mention 优先；批内全键去重
 //   - 目标已删（反查 miss）→ 丢弃
 func buildNotificationRows(events []NotificationEventMessage) ([]noticeRow, map[uuid.UUID]int64) {
 	postIDs, commentIDs := collectLookupIDs(events)
 	posts := lookupPosts(postIDs)
 	comments := lookupComments(commentIDs)
+	moderators := lookupCircleModerators(moderatorCircleIDs(events, posts))
 
 	// dedup 键: recipient|actor|type|post|comment（与 uk_notice_dedup 对齐）
 	dedup := make(map[string]*noticeRow, len(events))
@@ -345,8 +374,8 @@ func buildNotificationRows(events []NotificationEventMessage) ([]noticeRow, map[
 			continue
 		}
 
-		switch event.Type {
-		case NoticeTypeLikePost, NoticeTypeCollectPost, NoticeTypeCommentPost:
+		switch {
+		case isPostAuthorNotice(event.Type):
 			if event.PostID == nil {
 				continue
 			}
@@ -356,10 +385,26 @@ func buildNotificationRows(events []NotificationEventMessage) ([]noticeRow, map[
 			}
 			snippet := event.Snippet
 			if event.Type != NoticeTypeCommentPost {
-				snippet = post.Title // like/collect 快照帖子标题（确认项 #4）
+				snippet = post.Title // like/collect/审核结果 快照帖子标题（确认项 #4）
 			}
 			addRow(post.UserID, event, snippet)
+			continue
 
+		case isCircleModeratorNotice(event.Type):
+			if event.PostID == nil {
+				continue
+			}
+			post, ok := posts[*event.PostID]
+			if !ok {
+				continue // 目标已删
+			}
+			for _, recipient := range moderators[post.CircleID] {
+				addRow(recipient, event, post.Title)
+			}
+			continue
+		}
+
+		switch event.Type {
 		case NoticeTypeLikeComment:
 			if event.CommentID == nil {
 				continue
@@ -407,11 +452,13 @@ func collectLookupIDs(events []NotificationEventMessage) ([]uuid.UUID, []uuid.UU
 	postSet := make(map[uuid.UUID]struct{})
 	commentSet := make(map[uuid.UUID]struct{})
 	for _, e := range events {
-		switch e.Type {
-		case NoticeTypeLikePost, NoticeTypeCollectPost, NoticeTypeCommentPost:
+		if isPostAuthorNotice(e.Type) || isCircleModeratorNotice(e.Type) {
 			if e.PostID != nil {
 				postSet[*e.PostID] = struct{}{}
 			}
+			continue
+		}
+		switch e.Type {
 		case NoticeTypeLikeComment, NoticeTypeReplyComment:
 			if e.CommentID != nil {
 				commentSet[*e.CommentID] = struct{}{}
@@ -430,7 +477,7 @@ func lookupPosts(postIDs []uuid.UUID) map[uuid.UUID]postLookupRow {
 	var rows []postLookupRow
 	if err := pgsql.DB.WithContext(context.Background()).
 		Table("domains.post").
-		Select("id, user_id, title").
+		Select("id, user_id, circle_id, title").
 		Where("id IN ? AND deleted = ?", postIDs, 0).
 		Scan(&rows).Error; err != nil {
 		logger.Log.Error("Failed to lookup posts for notifications: " + err.Error())
@@ -438,6 +485,44 @@ func lookupPosts(postIDs []uuid.UUID) map[uuid.UUID]postLookupRow {
 	}
 	for _, r := range rows {
 		result[r.ID] = r
+	}
+	return result
+}
+
+// moderatorCircleIDs 圈管类事件涉及的圈子（帖子已删的跳过）。
+func moderatorCircleIDs(events []NotificationEventMessage, posts map[uuid.UUID]postLookupRow) []uuid.UUID {
+	set := make(map[uuid.UUID]struct{})
+	for _, e := range events {
+		if !isCircleModeratorNotice(e.Type) || e.PostID == nil {
+			continue
+		}
+		if p, ok := posts[*e.PostID]; ok {
+			set[p.CircleID] = struct{}{}
+		}
+	}
+	return uuidSetSlice(set)
+}
+
+// lookupCircleModerators 批量反查圈子的圈主 + 管理员（成员状态正常），走 idx_member_circle_role。
+func lookupCircleModerators(circleIDs []uuid.UUID) map[uuid.UUID][]uuid.UUID {
+	result := make(map[uuid.UUID][]uuid.UUID, len(circleIDs))
+	if len(circleIDs) == 0 {
+		return result
+	}
+	var rows []struct {
+		CircleID uuid.UUID
+		UserID   uuid.UUID
+	}
+	if err := pgsql.DB.WithContext(context.Background()).
+		Table("domains.circle_member").
+		Select("circle_id, user_id").
+		Where("circle_id IN ? AND role >= ? AND status = ?", circleIDs, circleModeratorMinRole, circleMemberNormal).
+		Scan(&rows).Error; err != nil {
+		logger.Log.Error("Failed to lookup circle moderators for notifications: " + err.Error())
+		return result
+	}
+	for _, r := range rows {
+		result[r.CircleID] = append(result[r.CircleID], r.UserID)
 	}
 	return result
 }
@@ -466,6 +551,9 @@ func lookupComments(commentIDs []uuid.UUID) map[uuid.UUID]commentLookupRow {
 // upsertNotifications 批量 upsert（uk_notice_dedup 表达式索引锚点）。
 //
 // 冲突（重赞/at-least-once 重复投递）→ 复用行：重置未读 + 刷新 snippet/时间，不产生第二行。
+// 举报 / 疑似自伤（类型 9 / 10，#156）冲突时再换成本次 Go 侧生成的新 id 并刷新 create_time：
+// 列表按 id DESC 排序，同一帖子下一轮再触发的通知要排到最前面，否则未读 +1 却停在旧位置。
+// 其他类型保留原 id / create_time（重赞不应把旧通知顶上来）。
 func upsertNotifications(rows []noticeRow) error {
 	jsonBytes, err := json.Marshal(rows)
 	if err != nil {
@@ -478,8 +566,13 @@ func upsertNotifications(rows []noticeRow) error {
 			COALESCE(post_id, '00000000-0000-0000-0000-000000000000'::uuid),
 			COALESCE(comment_id, '00000000-0000-0000-0000-000000000000'::uuid))
 		WHERE deleted = 0
-		DO UPDATE SET is_read = 0, snippet = EXCLUDED.snippet, update_time = CURRENT_TIMESTAMP`
-	return pgsql.DB.Exec(sql, string(jsonBytes)).Error
+		DO UPDATE SET is_read = 0, snippet = EXCLUDED.snippet, update_time = CURRENT_TIMESTAMP,
+			id = CASE WHEN EXCLUDED.notice_type IN (?, ?) THEN EXCLUDED.id ELSE notification.id END,
+			create_time = CASE WHEN EXCLUDED.notice_type IN (?, ?) THEN CURRENT_TIMESTAMP ELSE notification.create_time END`
+	resurface := []any{noticedomain.NoticeTypePostReported, noticedomain.NoticeTypePostSelfHarm}
+	args := append([]any{string(jsonBytes)}, resurface...)
+	args = append(args, resurface...)
+	return pgsql.DB.Exec(sql, args...).Error
 }
 
 // incrNoticeUnread 按接收人聚合累加未读计数（best-effort，软信号）。

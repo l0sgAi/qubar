@@ -19,6 +19,26 @@ func TestModeration_WithDefaults(t *testing.T) {
 	if got.Active() {
 		t.Fatal("disabled by default")
 	}
+	if got.ReviewAction != ModerationReviewActionPublish || !got.ReviewPublishes() ||
+		got.ReportNotifyThreshold != 1 || got.ReportHideThreshold != 0 || got.ReportDailyLimit != 20 {
+		t.Fatalf("unexpected report defaults: %+v", got)
+	}
+}
+
+// review_action：只有显式 hold 才保留待审；非法值按默认 publish。
+func TestModeration_ReviewAction(t *testing.T) {
+	for in, want := range map[string]bool{"": true, "publish": true, "hold": false, "HOLD": true, "typo": true} {
+		m := Moderation{ReviewAction: in}
+		if got := m.ReviewPublishes(); got != want {
+			t.Errorf("ReviewPublishes(%q) = %v, want %v", in, got, want)
+		}
+		if got := m.WithDefaults().ReviewPublishes(); got != want {
+			t.Errorf("WithDefaults().ReviewPublishes(%q) = %v, want %v", in, got, want)
+		}
+	}
+	if got := (Moderation{ReportHideThreshold: -3}).WithDefaults().ReportHideThreshold; got != 0 {
+		t.Fatalf("negative report_hide_threshold = %d, want 0 (off)", got)
+	}
 }
 
 func TestModeration_WithDefaultsKeepsExplicitValues(t *testing.T) {
@@ -27,6 +47,7 @@ func TestModeration_WithDefaultsKeepsExplicitValues(t *testing.T) {
 		Enabled: true, APIKey: "k", BaseURL: "http://127.0.0.1:1", Model: "jev-1.14.0",
 		TimeoutSec: 3, MaxRetries: 5, ContentMaxRunes: 100, FailOpen: &no,
 		ReviewThreshold: 0.4, ActionThreshold: 0.8, SeverityBlock: 2, LowConfidence: 0.3, LowConfidenceSeverity: 1.2,
+		ReviewAction: ModerationReviewActionHold, ReportNotifyThreshold: 3, ReportHideThreshold: 5, ReportDailyLimit: 7,
 	}
 	got := in.WithDefaults()
 	if got.FailOpenEnabled() {

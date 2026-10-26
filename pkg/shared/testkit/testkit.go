@@ -337,7 +337,7 @@ func openRedpanda() error {
 	suffix := "_it_" + runID
 	for _, p := range []*string{
 		&rp.Topic, &rp.PostTopic, &rp.LikeEventTopic, &rp.CollectEventTopic, &rp.HistoryEventTopic,
-		&rp.PostHotTopic, &rp.PostInteractionTopic, &rp.NoticeEventTopic,
+		&rp.PostHotTopic, &rp.PostInteractionTopic, &rp.NoticeEventTopic, &rp.PostModerationTopic,
 	} {
 		*p += suffix
 		rpTopics = append(rpTopics, *p)
@@ -345,6 +345,7 @@ func openRedpanda() error {
 	for _, p := range []*string{
 		&rp.ConsumerGroup, &rp.PostConsumerGroup, &rp.LikeEventConsumerGroup, &rp.CollectEventConsumerGroup,
 		&rp.HistoryEventConsumerGroup, &rp.PostHotConsumerGroup, &rp.PostInteractionConsumerGroup, &rp.NoticeEventConsumerGroup,
+		&rp.PostModerationConsumerGroup,
 	} {
 		*p += suffix
 		rpGroups = append(rpGroups, *p)
@@ -380,6 +381,7 @@ func openRedpanda() error {
 		redpanda.InitPostHotProducer,
 		redpanda.InitPostInteractionProducer,
 		redpanda.InitNotificationEventProducer,
+		redpanda.InitPostModerationProducer,
 	} {
 		if err := initFn(); err != nil {
 			return err
@@ -392,6 +394,8 @@ func teardown() {
 	if len(rpTopics) > 0 {
 		redpanda.StopLikeEventConsumerGlobal()
 		redpanda.StopBatchConsumersGlobal()
+		redpanda.StopPostModerationConsumerGlobal()
+		redpanda.StopNotificationEventConsumerGlobal()
 		for _, closeFn := range []func() error{
 			redpanda.CloseRedpandaProducer,
 			redpanda.ClosePostStatsProducer,
@@ -401,6 +405,7 @@ func teardown() {
 			redpanda.ClosePostHotProducer,
 			redpanda.ClosePostInteractionProducer,
 			redpanda.CloseNotificationEventProducer,
+			redpanda.ClosePostModerationProducer,
 		} {
 			_ = closeFn()
 		}

@@ -245,6 +245,9 @@ type PostService interface {
 	// ListCircleIDsByPostIDs 批量取帖子所属 circle_id（去重，仅未删除+已发布）。
 	// 供 recommend 域 C3 行为圈子召回用（seed 帖子 → 圈子）。
 	ListCircleIDsByPostIDs(ctx context.Context, postIDs []uuid.UUID) ([]uuid.UUID, error)
+	// GetCircleIDsByPostIDs 批量取 帖子ID → 所属 circle_id（含已删除 / 已屏蔽 / 已下架帖子，查不到的不在结果里）。
+	// 供 notice 域审核类通知回填 circle_id 用（#156）。
+	GetCircleIDsByPostIDs(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
 
 	// GetPostMeta 获取帖子元信息（供 comment/like 领域校验用）。
 	// 未找到返回 nil, nil。
@@ -286,6 +289,33 @@ type PostService interface {
 	SetHistoryRecorder(r domain.HistoryRecorder)
 	// SetAgentTrigger 注入 AI 机器人回复触发端口（未注入则发帖 @机器人 不触发回复）。
 	SetAgentTrigger(t AgentPostTrigger)
+
+	// ModeratePost 审核 worker 处理一条帖子审核事件（#117），见 moderation.go。
+	// 返回错误表示需要重试（不提交 offset）；帖子不存在 / 已处理返回 nil。
+	ModeratePost(ctx context.Context, postID uuid.UUID) error
+	// SetModeration 注入 AI 审核依赖与配置（未注入或配置未启用时发帖直接发布，行为与审核流上线前一致）。
+	SetModeration(moderator domain.ContentModerator, logRepo domain.PostModerationLogRepository, cfg conf.Moderation)
+	// SetModerationCircleReader 注入审核用圈子信息读取端口（未注入时审核输入不带圈子语境）。
+	SetModerationCircleReader(r ModerationCircleReader)
+
+	// ListReviewQueue 圈子待审帖子列表（#118，见 moderation_review.go）：操作者须为该圈 admin+，
+	// 每条带最近一条 AI 审核结论；keyset 游标分页，create_time 倒序。
+	ListReviewQueue(ctx context.Context, operatorID, circleID uuid.UUID, size int, cursor string) (*ReviewQueueResult, error)
+	// ReviewPost 人工审核（#118）：通过走发布副作用入口，驳回改为 3；并发时只有一方生效，其余 404。
+	ReviewPost(ctx context.Context, operatorID uuid.UUID, in ReviewPostInput) (*ReviewPostResult, error)
+
+	// ReportPost 用户举报已发布帖子（#153，见 moderation_report.go）：不能举报自己的帖子、每帖一次、每日上限；
+	// 待处理举报达到阈值时通知圈主 / 管理员（处理前只通知一次），可选自动屏蔽。
+	ReportPost(ctx context.Context, reporterID uuid.UUID, in ReportPostInput) error
+	// ListReportedPosts 圈内被举报帖子列表（#153）：操作者须为该圈 admin+，每条带举报数、最近举报理由与 AI 结论。
+	ListReportedPosts(ctx context.Context, operatorID, circleID uuid.UUID, size int, cursor string) (*ReportedPostsResult, error)
+	// ResolveReport 举报复核（#153）：dismiss 保留帖子并关闭举报，remove 下架为 status 3 并通知作者；并发时只有一方生效，其余 404。
+	ResolveReport(ctx context.Context, operatorID uuid.UUID, in ResolveReportInput) (*ResolveReportResult, error)
+	// GetModerationSummary 圈内待处理数量（#156）：待审帖子数与被举报帖子数，口径分别与 ListReviewQueue /
+	// ListReportedPosts 一致；操作者须为该圈 admin+。
+	GetModerationSummary(ctx context.Context, operatorID, circleID uuid.UUID) (*ModerationSummary, error)
+	// SetReportRepository 注入举报仓储（未注入时举报相关接口返回错误）。
+	SetReportRepository(r domain.PostReportRepository)
 }
 
 // PostMeta 帖子元信息（供 comment/like 领域校验用）。
@@ -341,6 +371,15 @@ type postServiceImpl struct {
 	postCountPort CirclePostCountPort
 	historyRec    domain.HistoryRecorder
 	agentTrigger  AgentPostTrigger
+
+	// AI 审核（#117），见 moderation.go
+	moderator     domain.ContentModerator
+	moderationLog domain.PostModerationLogRepository
+	moderationCfg conf.Moderation // 已填默认值
+	modCircle     ModerationCircleReader
+
+	// 举报复核（#153），见 moderation_report.go
+	reportRepo domain.PostReportRepository
 }
 
 // NewPostService 构造 PostService。
@@ -378,7 +417,8 @@ func (s *postServiceImpl) SetAgentTrigger(t AgentPostTrigger)          { s.agent
 // CreatePost 创建帖子。
 //
 // 与旧 controller.CreatePost 行为一致（除状态外）：
-//  1. 默认 type=1(图文)；状态由服务端决定（客户端无法指定，#110），见下方 TODO；
+//  1. 默认 type=1(图文)；状态由服务端决定（客户端无法指定，#110）：
+//     moderation 未启用 → 已发布；启用 → 审核中，发审核事件后立即返回（#117）；
 //  2. 校验 circle_id/title 非空；
 //  3. 校验成员身份与状态（pending/muted/banned）；
 //  4. 校验圈子可用性；
@@ -390,9 +430,11 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 	if postType == 0 {
 		postType = domain.PostTypeTextImage
 	}
-	// TODO(review-flow): 审核流未上线，新帖一律直接置为已发布；
-	// 审核能力就绪后改为 domain.PostStatusReviewing（审核通过再转已发布）。
 	postStatus := int16(domain.PostStatusPublished)
+	moderated := s.moderationActive()
+	if moderated {
+		postStatus = domain.PostStatusReviewing
+	}
 
 	if input.CircleID == uuid.Nil {
 		return uuid.Nil, errCircleIDRequired
@@ -469,9 +511,12 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 		}
 	}
 
-	// 仅已发布才执行发布副作用（圈子计数 / @提及通知 / 机器人触发）。
+	// 仅已发布才执行发布副作用（圈子计数 / @提及通知 / 机器人触发）；
+	// 审核中的帖子发审核事件，由 worker 审核通过后再执行。
 	if postStatus == domain.PostStatusPublished {
 		s.onPostPublished(ctx, post, mentionIDs)
+	} else if moderated {
+		s.enqueueModeration(ctx, post, mentionIDs)
 	}
 
 	return post.ID, nil
@@ -644,15 +689,18 @@ func (s *postServiceImpl) GetPostDetail(ctx context.Context, userID, postID uuid
 		// 收藏状态（缓存优先，miss 回源 DB）
 		isCollected = s.checkCollected(ctx, userID, postID)
 
-		// 异步增加浏览量（独立 goroutine，需自带 panic 恢复，避免拖垮服务）
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					logger.Log.Error(fmt.Sprintf("Panic in asyncIncrementView: %v", r))
-				}
+		// 异步增加浏览量（独立 goroutine，需自带 panic 恢复，避免拖垮服务）。
+		// 只统计已发布帖子：作者查看自己审核中 / 驳回的帖子不计浏览、热度与浏览历史（#117）。
+		if post.Status == domain.PostStatusPublished {
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Log.Error(fmt.Sprintf("Panic in asyncIncrementView: %v", r))
+					}
+				}()
+				s.asyncIncrementView(postID, userID)
 			}()
-			s.asyncIncrementView(postID, userID)
-		}()
+		}
 	}
 
 	// 查发帖人信息
@@ -1183,6 +1231,11 @@ func (s *postServiceImpl) SearchPostsByIDsAndKeyword(ctx context.Context, postID
 		return nil, 0, err
 	}
 	return s.assemblePostList(ctx, raw), raw.Total, nil
+}
+
+// GetCircleIDsByPostIDs 批量取 帖子ID → circle_id（一次主键查询，不过滤删除 / 状态）。
+func (s *postServiceImpl) GetCircleIDsByPostIDs(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	return s.repo.GetCircleIDsByIDs(ctx, postIDs)
 }
 
 // ListCircleIDsByPostIDs 批量取帖子所属 circle_id（去重，仅未删除+已发布）。

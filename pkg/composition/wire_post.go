@@ -2,6 +2,7 @@
 package composition
 
 import (
+	"interestBar/pkg/conf"
 	postapp "interestBar/pkg/domains/post/application"
 	postinfra "interestBar/pkg/domains/post/infrastructure"
 	posthttp "interestBar/pkg/domains/post/interfaces/http"
@@ -15,7 +16,13 @@ func newPostService(deps *Deps) postapp.PostService {
 	collectCache := postinfra.NewPostCollectCache()
 	searcher := postinfra.NewPostSearcher()
 	publisher := postinfra.NewPostEventPublisher()
-	return postapp.NewPostService(repo, statsCache, likeCache, collectCache, searcher, publisher)
+	svc := postapp.NewPostService(repo, statsCache, likeCache, collectCache, searcher, publisher)
+	// AI 审核（#117）：始终注入，是否生效由 moderation.enabled + api_key 决定（未启用时发帖直接发布）。
+	svc.SetModeration(postinfra.NewJevModerator(conf.Config.Moderation),
+		postinfra.NewPostModerationLogRepository(deps.DB.Get()), conf.Config.Moderation)
+	// 举报复核（#153）：与审核开关无关，始终可用。
+	svc.SetReportRepository(postinfra.NewPostReportRepository(deps.DB.Get()))
+	return svc
 }
 
 // registerPost 装配 post 领域。

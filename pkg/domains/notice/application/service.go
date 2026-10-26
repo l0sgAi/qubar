@@ -1,7 +1,7 @@
 // Package application 提供 notice 领域的应用服务层。
 //
 // 职责：
-//   - 通知列表（DB keyset 游标分页 + actor 批量回填）
+//   - 通知列表（DB keyset 游标分页 + actor 批量回填 + 审核类通知 circle_id 批量回填）
 //   - 未读数（Redis 计数器，miss 回源 DB）
 //   - 标记已读（单批/全部 + 计数器校正）
 //
@@ -32,6 +32,12 @@ type UserFacade interface {
 	GetBriefs(ctx context.Context, userIDs []string) (map[string]UserBrief, error)
 }
 
+// PostFacade notice 领域需要的 post 查询接口（审核类通知回填帖子所属圈子，#156）。
+type PostFacade interface {
+	// GetCircleIDs 批量取 帖子ID → circle_id（含已删除 / 已屏蔽帖子；查不到的不在结果里）。
+	GetCircleIDs(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
+}
+
 // ===== DTO =====
 
 // ActorBrief 触发人展示信息（列表项内嵌）。
@@ -47,6 +53,7 @@ type NoticeItem struct {
 	NoticeType int16       `json:"notice_type"`
 	Actor      *ActorBrief `json:"actor,omitempty"`
 	PostID     string      `json:"post_id,omitempty"`
+	CircleID   string      `json:"circle_id,omitempty"` // 仅审核类通知（9 / 10）：帖子所属圈子，前端跳圈子管理「审核」页
 	CommentID  string      `json:"comment_id,omitempty"`
 	Snippet    string      `json:"snippet"`
 	IsRead     bool        `json:"is_read"`
@@ -76,6 +83,8 @@ type NoticeService interface {
 
 	// SetUserFacade 注入 user Facade（actor 展示信息回填用）。
 	SetUserFacade(f UserFacade)
+	// SetPostFacade 注入 post Facade（审核类通知 circle_id 回填用；为 nil 时不回填）。
+	SetPostFacade(f PostFacade)
 	// SetStreamHub 注入未读数推送 hub（MarkRead/MarkAllRead 成功后触发 SSE 推送）。
 	// 为 nil 时跳过推送（保测试兼容）。
 	SetStreamHub(h StreamHub)
@@ -85,6 +94,7 @@ type noticeServiceImpl struct {
 	repo       domain.NotificationRepository
 	cache      domain.NoticeUnreadCache
 	userFacade UserFacade
+	postFacade PostFacade
 	hub        StreamHub
 }
 
@@ -98,13 +108,16 @@ func NewNoticeService(repo domain.NotificationRepository, cache domain.NoticeUnr
 // SetUserFacade 注入 user Facade。
 func (s *noticeServiceImpl) SetUserFacade(f UserFacade) { s.userFacade = f }
 
+// SetPostFacade 注入 post Facade。
+func (s *noticeServiceImpl) SetPostFacade(f PostFacade) { s.postFacade = f }
+
 // SetStreamHub 注入未读数推送 hub。
 func (s *noticeServiceImpl) SetStreamHub(h StreamHub) { s.hub = h }
 
 // ListNotifications 获取当前用户通知列表。
 func (s *noticeServiceImpl) ListNotifications(ctx context.Context, userID uuid.UUID, noticeTypes []int16, size int, cursor string) (*NoticeListResult, error) {
 	for _, t := range noticeTypes {
-		if t < domain.NoticeTypeLikePost || t > domain.NoticeTypeMention {
+		if t < domain.NoticeTypeLikePost || t > domain.NoticeTypeMax {
 			return nil, errInvalidNoticeType
 		}
 	}
@@ -118,6 +131,7 @@ func (s *noticeServiceImpl) ListNotifications(ctx context.Context, userID uuid.U
 	}
 
 	briefs := s.loadActorBriefs(ctx, notices)
+	circleIDs := s.loadReviewCircleIDs(ctx, notices)
 
 	items := make([]NoticeItem, 0, len(notices))
 	for _, n := range notices {
@@ -130,11 +144,14 @@ func (s *noticeServiceImpl) ListNotifications(ctx context.Context, userID uuid.U
 		}
 		if n.PostID != nil {
 			item.PostID = n.PostID.String()
+			if c, ok := circleIDs[*n.PostID]; ok && domain.IsCircleReviewNotice(n.NoticeType) {
+				item.CircleID = c.String()
+			}
 		}
 		if n.CommentID != nil {
 			item.CommentID = n.CommentID.String()
 		}
-		if b, ok := briefs[n.ActorID.String()]; ok {
+		if b, ok := briefs[n.ActorID.String()]; ok && !domain.HidesActor(n.NoticeType) {
 			item.Actor = &ActorBrief{ID: b.ID, Username: b.Username, AvatarURL: b.AvatarURL}
 		}
 		items = append(items, item)
@@ -166,6 +183,33 @@ func (s *noticeServiceImpl) loadActorBriefs(ctx context.Context, notices []domai
 		return nil
 	}
 	return briefs
+}
+
+// loadReviewCircleIDs 审核类通知所指帖子的 circle_id，整页一次批量查询（失败降级为空 map，列表照常返回、不带 circle_id）。
+func (s *noticeServiceImpl) loadReviewCircleIDs(ctx context.Context, notices []domain.Notification) map[uuid.UUID]uuid.UUID {
+	if s.postFacade == nil {
+		return nil
+	}
+	seen := make(map[uuid.UUID]struct{})
+	postIDs := make([]uuid.UUID, 0)
+	for _, n := range notices {
+		if n.PostID == nil || !domain.IsCircleReviewNotice(n.NoticeType) {
+			continue
+		}
+		if _, ok := seen[*n.PostID]; !ok {
+			seen[*n.PostID] = struct{}{}
+			postIDs = append(postIDs, *n.PostID)
+		}
+	}
+	if len(postIDs) == 0 {
+		return nil
+	}
+	circleIDs, err := s.postFacade.GetCircleIDs(ctx, postIDs)
+	if err != nil {
+		logger.Log.Error("Failed to batch get notice post circle ids: " + err.Error())
+		return nil
+	}
+	return circleIDs
 }
 
 // GetUnreadCount 获取当前用户未读通知数（缓存优先，miss 回源 DB + 回填）。

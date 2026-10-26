@@ -107,12 +107,17 @@ type HistoryEventMessage struct {
 
 // 通知事件类型（与 domains.notification.notice_type 一一对应）。
 const (
-	NoticeTypeLikePost     = "like_post"     // 帖子被赞 → 帖子作者
-	NoticeTypeLikeComment  = "like_comment"  // 评论被赞 → 评论作者
-	NoticeTypeCollectPost  = "collect_post"  // 帖子被收藏 → 帖子作者
-	NoticeTypeCommentPost  = "comment_post"  // 帖子被评论(顶层) → 帖子作者
-	NoticeTypeReplyComment = "reply_comment" // 评论被回复 → 被回复评论作者
-	NoticeTypeMention      = "mention"       // @提及 → 被提及用户
+	NoticeTypeLikePost     = "like_post"      // 帖子被赞 → 帖子作者
+	NoticeTypeLikeComment  = "like_comment"   // 评论被赞 → 评论作者
+	NoticeTypeCollectPost  = "collect_post"   // 帖子被收藏 → 帖子作者
+	NoticeTypeCommentPost  = "comment_post"   // 帖子被评论(顶层) → 帖子作者
+	NoticeTypeReplyComment = "reply_comment"  // 评论被回复 → 被回复评论作者
+	NoticeTypeMention      = "mention"        // @提及 → 被提及用户
+	NoticeTypePostApproved = "post_approved"  // 帖子人工审核通过 → 帖子作者（#118）
+	NoticeTypePostRejected = "post_rejected"  // 帖子人工审核驳回 → 帖子作者（#118）
+	NoticeTypePostReported = "post_reported"  // 帖子待处理举报达到阈值 → 本圈圈主 + 管理员（#153）
+	NoticeTypePostSelfHarm = "post_self_harm" // 帖子疑似自伤 / 轻生倾向（已发布）→ 本圈圈主 + 管理员（#153）
+	NoticeTypePostRemoved  = "post_removed"   // 帖子被举报后经圈管复核下架 → 帖子作者（#153）
 )
 
 // NotificationEventMessage 通知事件消息（topic: notification_events）。
@@ -123,9 +128,9 @@ const (
 type NotificationEventMessage struct {
 	Type           string      `json:"type"` // NoticeType* 常量
 	ActorID        uuid.UUID   `json:"actor_id"`
-	PostID         *uuid.UUID  `json:"post_id,omitempty"`          // 跳转用；like_post/collect_post/comment_post/mention(post) 必填
+	PostID         *uuid.UUID  `json:"post_id,omitempty"`          // 跳转用；like_post/collect_post/comment_post/mention(post)/审核 / 举报类必填
 	CommentID      *uuid.UUID  `json:"comment_id,omitempty"`       // like_comment/comment_post/reply_comment/mention(comment) 必填
 	MentionUserIDs []uuid.UUID `json:"mention_user_ids,omitempty"` // type=mention 专用（触发端已校验+截断）
-	Snippet        string      `json:"snippet,omitempty"`          // comment 类：正文快照（已 SanitizeForPg）；like/collect 由 consumer 反查帖子标题
+	Snippet        string      `json:"snippet,omitempty"`          // comment 类：正文快照（已 SanitizeForPg）；like/collect/审核结果由 consumer 反查帖子标题
 	Ts             int64       `json:"ts"`                         // 事件时间 Unix 毫秒
 }

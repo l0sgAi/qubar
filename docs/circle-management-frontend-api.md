@@ -18,6 +18,11 @@
 | 解除拉黑 | `POST /circle/manage/unban` | 圈主 + 管理员 |
 | 入圈审核（通过/拒绝） | `POST /circle/manage/review` | 圈主 + 管理员 |
 | 编辑圈子资料 | `PUT /circle/update` | 圈主（全部字段）/ 管理员（部分字段） |
+| 待审帖子列表（AI 转人工） | `GET /circle/moderation/posts` | 圈主 + 管理员（详见 `docs/api/post-moderation-review-api.md`） |
+| 帖子人工审核（通过/驳回） | `POST /circle/moderation/review` | 圈主 + 管理员（同上） |
+| 被举报帖子列表 | `GET /circle/moderation/reports` | 圈主 + 管理员（同上，#153） |
+| 举报复核（保留/下架） | `POST /circle/moderation/reports/resolve` | 圈主 + 管理员（同上，#153） |
+| 待审 / 被举报数量（审核页角标） | `GET /circle/moderation/summary` | 圈主 + 管理员（同上，#156） |
 
 - **普通成员目前调用以上接口一律 `code=203`（403）**——「普通成员可看普通成员列表」是 P1 规划，本期未放开。前端不要对普通成员暴露管理入口。
 - 统一响应信封 `{code, message, data}`，下文只描述 `data` 与业务错误。管理操作成功时 `data` 为空，信息在 `message`（英文），**前端请按 `code` + 自身文案渲染，不要直接展示 message**。

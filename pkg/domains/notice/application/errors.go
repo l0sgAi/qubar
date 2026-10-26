@@ -4,8 +4,8 @@ import "errors"
 
 // 应用层哨兵错误 + 谓词（handler 用 IsXxxErr 映射 HTTP 状态码）。
 var (
-	// errInvalidNoticeType 非法通知类型（type 列表含 1-6 之外的值）。
-	errInvalidNoticeType = errors.New("invalid notice type, must be within 1-6")
+	// errInvalidNoticeType 非法通知类型（type 列表含 1-11 之外的值）。
+	errInvalidNoticeType = errors.New("invalid notice type, must be within 1-11")
 	// errEmptyNoticeIDs 已读操作未提供通知 ID。
 	errEmptyNoticeIDs = errors.New("notice ids must not be empty")
 )

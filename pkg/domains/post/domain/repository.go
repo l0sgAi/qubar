@@ -45,6 +45,19 @@ type PostRepository interface {
 	// Since 之后发布、作者不是机器人账号（users.role=2）、在圈子范围内、不在排除名单，
 	// 按 hot 降序取前 Limit 条（只填 id / circle_id / user_id / hot）。
 	ListHotForAutoReply(ctx context.Context, f AutoReplyPostFilter) ([]Post, error)
+	// UpdateStatusFromReviewing 条件更新帖子状态：仅当帖子未删除且仍是审核中（status=2）时改为 status。
+	// 返回是否真正更新了一行；false 表示已被其他路径处理（重复投递 / 人工审核 / 删帖），调用方跳过后续副作用。
+	UpdateStatusFromReviewing(ctx context.Context, postID uuid.UUID, status int16) (bool, error)
+	// ResolveReview 人工审核（#118）：同一事务内条件更新状态（同 UpdateStatusFromReviewing）并写审核日志。
+	// 返回 false 表示帖子已不是审核中（并发处理 / worker 抢先 / 已删除），此时不写日志。
+	ResolveReview(ctx context.Context, postID uuid.UUID, status int16, log *PostModerationLog) (bool, error)
+	// ListReviewingByCircle 圈内审核中（status=2、未删除）的帖子，按 (create_time, id) 倒序 keyset 翻页；
+	// after 为 nil 表示第一页，最多返回 limit 条。
+	ListReviewingByCircle(ctx context.Context, circleID uuid.UUID, after *PostKeyset, limit int) ([]Post, error)
+	// CountReviewingByCircle 圈内审核中（status=2、未删除）的帖子数，口径与 ListReviewingByCircle 一致（#156）。
+	CountReviewingByCircle(ctx context.Context, circleID uuid.UUID) (int64, error)
+	// GetCircleIDsByIDs 批量取 帖子ID → 所属 circle_id，不过滤删除 / 状态（通知跳转用，#156）；查不到的 ID 不在结果里。
+	GetCircleIDsByIDs(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
 }
 
 // AutoReplyPostFilter 机器人自动回复的帖子候选过滤条件（aiagent 扫描器经 Facade 传入）。
@@ -54,6 +67,12 @@ type AutoReplyPostFilter struct {
 	Since      time.Time   // 只看该时间之后发布的帖子
 	ExcludeIDs []uuid.UUID // 已触发 / 已饱和的帖子
 	Limit      int
+}
+
+// PostKeyset 帖子 (create_time, id) 倒序翻页位置（上一页最后一条）。
+type PostKeyset struct {
+	CreateTime time.Time
+	ID         uuid.UUID
 }
 
 // PostStatsCache 帖子统计信息缓存（view_count/comment_count/like_count 等）。
@@ -116,14 +135,33 @@ type PostCollectCache interface {
 	LoadAll(ctx context.Context, userID uuid.UUID, entries []InteractionEntry, complete bool) error
 }
 
-// PostEventPublisher 帖子事件发布（异步持久化统计到 DB）。
+// PostEventPublisher 帖子事件发布（异步持久化统计到 DB / 通知 / 审核）。
 type PostEventPublisher interface {
 	// PublishViewCount 发布浏览量变化事件。
 	PublishViewCount(ctx context.Context, postID uuid.UUID) error
 	// PublishMentionNotice 发布 @提及 通知事件（消息中心）。
 	// mentionUserIDs 由调用方校验（存在性/去自/截断）后传入；snippet 为帖子标题。
 	PublishMentionNotice(ctx context.Context, actorID, postID uuid.UUID, mentionUserIDs []uuid.UUID, snippet string) error
+	// PublishModeration 发布帖子审核事件（只带 post_id，worker 回源读库）。同步写入，返回错误表示事件未发出。
+	PublishModeration(ctx context.Context, postID uuid.UUID) error
+	// PublishReviewResultNotice 发布人工审核结果通知事件（通过 / 驳回 → 帖子作者，#118）。
+	// 接收人与标题快照由通知 consumer 反查帖子；best-effort，失败只记日志。
+	PublishReviewResultNotice(ctx context.Context, operatorID, postID uuid.UUID, approved bool) error
+	// PublishModeratorNotice 发布圈管通知事件（帖子被举报达到阈值 / 已发布帖子疑似自伤 → 本圈圈主 + 管理员，#153）。
+	// 接收人由通知 consumer 按帖子所属圈子反查；actorID 举报通知传 uuid.Nil（不暴露举报人），自伤通知传帖子作者。
+	// best-effort，失败只记日志。
+	PublishModeratorNotice(ctx context.Context, kind ModeratorNoticeKind, actorID, postID uuid.UUID) error
+	// PublishPostRemovedNotice 发布「帖子被举报后经复核下架」通知事件（→ 帖子作者，#153）。best-effort。
+	PublishPostRemovedNotice(ctx context.Context, operatorID, postID uuid.UUID) error
 }
+
+// ModeratorNoticeKind 圈管通知种类（#153）。
+type ModeratorNoticeKind int
+
+const (
+	ModeratorNoticeReported ModeratorNoticeKind = iota + 1 // 帖子待处理举报达到通知阈值
+	ModeratorNoticeSelfHarm                                // 已发布帖子疑似自伤 / 轻生倾向，需要人工关怀
+)
 
 // PostStatistics 帖子统计信息。
 type PostStatistics struct {

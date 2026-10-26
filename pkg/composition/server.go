@@ -5,7 +5,9 @@
 package composition
 
 import (
+	"interestBar/pkg/conf"
 	agentapp "interestBar/pkg/domains/aiagent/application"
+	categoryinfra "interestBar/pkg/domains/category/infrastructure"
 	circleapp "interestBar/pkg/domains/circle/application"
 	noticeapp "interestBar/pkg/domains/notice/application"
 	userapp "interestBar/pkg/domains/user/application"
@@ -51,6 +53,10 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	postSvc.SetMemberChecker(&circleMemberCheckerForPost{memberRepo: memberRepo})
 	postSvc.SetStatusChecker(&circleStatusCheckerForPost{circleRepo: circleRepo})
 	postSvc.SetPostCountPort(&circlePostCountPortForPost{svc: circleSvc})
+	postSvc.SetModerationCircleReader(&postModerationCircleReader{
+		circleRepo:   circleRepo,
+		categoryRepo: categoryinfra.NewCategoryRepository(deps.DB.Get()),
+	})
 
 	// comment 需要 user Facade + post 查询端口（帖子校验 + 评论计数）
 	commentSvc.SetUserFacade(&commentUserFacade{delegate: userFacade})
@@ -68,8 +74,9 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	historySvc.SetPostFetcher(&historyPostFetcher{delegate: postSvc})
 	postSvc.SetHistoryRecorder(&postHistoryRecorder{delegate: historySvc})
 
-	// notice 需要 user Facade（通知列表 actor 批量组装）
+	// notice 需要 user Facade（通知列表 actor 批量组装）+ post Facade（审核类通知 circle_id 回填）
 	noticeSvc.SetUserFacade(&noticeUserFacade{delegate: userFacade})
+	noticeSvc.SetPostFacade(&noticePostFacade{delegate: postSvc})
 
 	// SSE 未读数推流 hub：注入 notice service + Redpanda consumer hook（见 wire_notice.go）。
 	streamHub := newNoticeStreamHub(noticeSvc)
@@ -77,7 +84,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	// 跨领域 Facade 注入完成。如遗漏注入，相关领域会在请求时表现为空数据/校验失败，
 	// 这里打一条启动日志便于排查（强类型断言成本过高，用日志替代 panic，见 review P2-2）。
 	if logger.Log != nil {
-		logger.Log.Info("cross-domain facades injected: circle<-user/post, post<-user/circle, comment<-user/post, like<-post/comment, collect<-post, history<-post")
+		logger.Log.Info("cross-domain facades injected: circle<-user/post, post<-user/circle, comment<-user/post, like<-post/comment, collect<-post, history<-post, notice<-user/post")
 	}
 
 	// recommend 需要 post（hydrate + circle_id 反查）+ circle（joined IDs），均为只读消费者，无反向注入。
@@ -146,6 +153,13 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 
 	// 启动机器人自动回复扫描器（需要 replySvc 执行扫描；aiagent.autonomy.enabled=false 时不启动）。
 	go redpanda.StartAgentAutoReplySyncerWithRetry(replySvc)
+
+	// 启动帖子 AI 审核 worker（#117）：仅 moderation 启用时；未启用时发帖直接发布，不需要 worker。
+	if conf.Config.Moderation.Active() {
+		redpanda.StartPostModerationConsumer(postSvc.ModeratePost)
+	} else {
+		logger.Log.Info("Post moderation worker disabled (moderation.enabled=false or api_key empty)")
+	}
 
 	return streamHub
 }

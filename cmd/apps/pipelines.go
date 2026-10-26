@@ -133,6 +133,17 @@ func initPipelines() {
 		go redpanda.StartPostInteractionConsumerWithRetry()
 	}
 
+	// 8.17.1 Init Post moderation Redpanda producer（帖子 AI 审核事件，#117；仅 moderation 启用时，
+	// 消费者需要 post 服务，在 composition.RegisterDomainRoutes 里启动）
+	if conf.Config.Moderation.Active() {
+		if err := redpanda.InitPostModerationProducer(); err != nil {
+			logger.Log.Error("Failed to initialize post moderation producer: " + err.Error())
+			logger.Log.Warn("Post moderation events cannot be published; new posts fall back to fail_open.")
+		} else {
+			logger.Log.Info("Post moderation producer initialized successfully")
+		}
+	}
+
 	// 8.18 Start Item CF syncer（定时算 post↔post 共现相似度 → cf:item ZSET；P1）
 	// 仅在 CF 开关打开时启动；依赖 post_interaction 表有数据（P0 灌数）。
 	if conf.Config.Recommend.CF.Enabled {

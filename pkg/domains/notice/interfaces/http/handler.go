@@ -150,7 +150,7 @@ func normalizeSize(size int) int {
 }
 
 // parseNoticeTypes 解析 type 查询参数为类型集合。
-// 空串或 "0" = 全部（nil）；否则按逗号拆分，每段须为 1-6 的整数。
+// 空串或 "0" = 全部（nil）；否则按逗号拆分，每段须为 1-11 的整数。
 func parseNoticeTypes(raw string) ([]int16, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || raw == "0" {
@@ -161,7 +161,7 @@ func parseNoticeTypes(raw string) ([]int16, error) {
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
 		v, err := strconv.Atoi(p)
-		if err != nil || v < int(domain.NoticeTypeLikePost) || v > int(domain.NoticeTypeMention) {
+		if err != nil || v < int(domain.NoticeTypeLikePost) || v > int(domain.NoticeTypeMax) {
 			return nil, fmt.Errorf("invalid notice type: %s", p)
 		}
 		types = append(types, int16(v))

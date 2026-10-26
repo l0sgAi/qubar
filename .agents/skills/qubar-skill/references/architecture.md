@@ -274,7 +274,7 @@ Forbidden/NotFound/Conflict/TooManyRequests/InternalError/ServiceUnavailable/Pag
 ### 6.5 鉴权
 
 两层：
-- **路由级**：`authCheck`（= `composition.RequireLogin`，`pkg/composition/auth.go:25`）读 token header → `stputil.IsLogin` → `c.SetLoginID(loginID)`，失败写 401。
+- **路由级**：`authCheck`（= `composition.RequireLogin`，`pkg/composition/auth.go:25`）读 token header → `authenticate`（一次 GET 校验 + 按阈值续期）→ `c.SetLoginID(loginID)`，失败写 401。
   **故意不用** `sagin.CheckLogin`（gin 专用中间件破坏 `c.Next()` 语义，`auth.go:20-24`）。
 - **handler 级**：本地 `requireUserID(c)`（读 `c.LoginID()` → `uuid.Parse`，失败 401/400）。
   匿名可读端点用 `requireUserIDAllowAnon`（返回 `uuid.Nil, true`）。

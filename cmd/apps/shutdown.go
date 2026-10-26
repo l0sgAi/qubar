@@ -23,6 +23,8 @@ func shutdown() {
 	// 停统计类批量消费者（圈子/帖子统计、收藏、浏览历史、热度、互动）：排干缓冲并提交 offset。
 	// 须早于 CloseRedis（帖子热度 fan-out 写 Redis）。
 	redpanda.StopBatchConsumersGlobal()
+	// 停帖子审核 worker：取消进行中的处理（未提交，重启后重投）。须早于 CloseRedis（发布副作用写 Redis）。
+	redpanda.StopPostModerationConsumerGlobal()
 	// 停 SSE 推流 hub 的 sweeper（存量连接由 hertz 关停随连接关闭回收）。
 	composition.StopNoticeStreamHub()
 	if err := redis.CloseRedis(); err != nil {
@@ -40,6 +42,7 @@ func shutdown() {
 	_ = redpanda.ClosePostHotProducer()
 	_ = redpanda.ClosePostInteractionProducer()
 	_ = redpanda.CloseNotificationEventProducer()
+	_ = redpanda.ClosePostModerationProducer()
 	redpanda.StopCircleHotSyncer()
 	redpanda.StopItemCFSyncer()
 	redpanda.StopTrendingSyncer()
