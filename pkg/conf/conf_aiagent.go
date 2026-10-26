@@ -5,6 +5,8 @@ package conf
 // AiAgent AI 机器人回复执行链路配置（设计见 docs/agent-reply-design.md）。
 // 各字段 <=0 时用代码内默认值（30s / 4000 字符 / 3）。
 type AiAgent struct {
+	Search AiAgentSearch `mapstructure:"search" json:"search" yaml:"search"` // 网络搜索热点来源（#100）
+
 	TimeoutSec       int `mapstructure:"timeout_sec" json:"timeout_sec" yaml:"timeout_sec"`                   // LLM 单次调用超时(秒)，默认 30
 	MaxContentChars  int `mapstructure:"max_content_chars" json:"max_content_chars" yaml:"max_content_chars"` // Prompt 各段(title/summary/评论)截断长度，默认 4000
 	ReplyConcurrency int `mapstructure:"reply_concurrency" json:"reply_concurrency" yaml:"reply_concurrency"` // 关键词触发异步执行并发上限，默认 3
