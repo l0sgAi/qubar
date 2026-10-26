@@ -42,6 +42,8 @@ type createAgentReq struct {
 	MaxRepliesPerHour int                    `json:"max_replies_per_hour"`
 	MinIntervalSec    int                    `json:"min_interval_sec"`
 	Status            *int                   `json:"status"` // nil=默认启用；显式 0=停用
+	// AutoConfig 自主行为配置（传了 auto_reply 即整体替换该子对象，未传不变）。
+	AutoConfig *application.AutoConfigInput `json:"auto_config"`
 }
 
 // updateAgentReq 更新机器人请求（指针字段，部分更新）。
@@ -60,6 +62,8 @@ type updateAgentReq struct {
 	MaxRepliesPerHour *int                   `json:"max_replies_per_hour"`
 	MinIntervalSec    *int                   `json:"min_interval_sec"`
 	Status            *int                   `json:"status"`
+	// AutoConfig 自主行为配置（传了 auto_reply 即整体替换该子对象，未传不变）。
+	AutoConfig *application.AutoConfigInput `json:"auto_config"`
 }
 
 // listAgentsReq 列表查询参数（hertz BindQuery 只认 query tag）。
@@ -95,6 +99,7 @@ func (h *Handler) CreateAgent(c appctx.AppContext) {
 		MaxRepliesPerHour: req.MaxRepliesPerHour,
 		MinIntervalSec:    req.MinIntervalSec,
 		Status:            req.Status,
+		AutoConfig:        req.AutoConfig,
 	})
 	if err != nil {
 		writeAgentError(c, err)
@@ -170,6 +175,7 @@ func (h *Handler) UpdateAgent(c appctx.AppContext) {
 		MaxRepliesPerHour: req.MaxRepliesPerHour,
 		MinIntervalSec:    req.MinIntervalSec,
 		Status:            req.Status,
+		AutoConfig:        req.AutoConfig,
 	})
 	if err != nil {
 		writeAgentError(c, err)
@@ -291,6 +297,7 @@ func writeAgentError(c appctx.AppContext, err error) {
 		application.IsInvalidRateLimitErr(err),
 		application.IsInvalidStatusErr(err),
 		application.IsInvalidFilterErr(err),
+		application.IsInvalidAutoConfigErr(err),
 		application.IsNoFieldsToUpdateErr(err):
 		httputil.BadRequest(c, err.Error())
 	case application.IsAPIKeyNotSetErr(err):

@@ -221,6 +221,12 @@ aiagent:
   # ⚠️ LLM 出站直连，不读取 HTTPS_PROXY / HTTP_PROXY 环境变量（#48）：经代理时拨号校验只能看到代理地址，
   # 防 SSRF 失效。依赖出口代理访问 OpenAI / Anthropic 等的部署需改为直连可达（或换用可直连的中转 base_url），
   # 否则机器人调用会报拨号 / 超时错误。
+  # 机器人自主行为（#99 自动回复高热度帖子 / 评论）：平台总开关 + 上限兜底，每个机器人另在 auto_config.auto_reply 里单独开启。
+  autonomy:
+    enabled: true                # 总开关（开发栈默认开启，便于本机联调）；关闭后扫描器不再扫描
+    scan_interval_sec: 300       # 扫描周期(秒)，默认 300
+    max_agents_per_target: 1     # 同一帖子 / 评论最多被几个机器人自动回复（软限），默认 1
+    max_candidates_per_run: 20   # 每轮每个机器人每种目标按热度取的候选上限，默认 20
 
 # 安全相关配置
 security:

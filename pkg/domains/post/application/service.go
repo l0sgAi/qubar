@@ -255,6 +255,9 @@ type PostService interface {
 	// GetPostBrief 获取帖子内容摘要（供 aiagent 领域组装机器人回复 prompt 用）。
 	// 未找到返回 nil, nil。
 	GetPostBrief(ctx context.Context, postID uuid.UUID) (*PostBrief, error)
+	// ListAutoReplyCandidates 机器人自动回复的帖子候选（供 aiagent 扫描器经 Facade 调用）：
+	// 已发布未锁定、热度达标、时间窗口内、作者非机器人账号、在圈子范围内，按热度降序 top-N。
+	ListAutoReplyCandidates(ctx context.Context, q AutoReplyPostQuery) ([]AutoReplyPostCandidate, error)
 	// RestoreStatsAndIncrCommentCount 恢复帖子统计缓存（如果不存在），
 	// 然后递增帖子评论计数（Redis Hash + Redpanda 异步持久化）。
 	// 供 comment 领域发评论后调用。
@@ -335,6 +338,23 @@ type PostBrief struct {
 	IsLock   int16 // 是否锁定
 	AuthorID uuid.UUID
 	CircleID uuid.UUID // 帖子所属圈子（机器人回复作用域匹配用）
+}
+
+// AutoReplyPostQuery 机器人自动回复的帖子候选查询条件。
+type AutoReplyPostQuery struct {
+	CircleID   uuid.UUID   // 圈子范围；uuid.Nil = 全站
+	HotMin     int         // 热度门槛（含）
+	Since      time.Time   // 只看该时间之后发布的帖子
+	ExcludeIDs []uuid.UUID // 排除的帖子（已触发 / 已达每目标上限）
+	Limit      int         // 候选上限
+}
+
+// AutoReplyPostCandidate 机器人自动回复的帖子候选。
+type AutoReplyPostCandidate struct {
+	ID       uuid.UUID
+	CircleID uuid.UUID
+	AuthorID uuid.UUID
+	Hot      int
 }
 
 type postServiceImpl struct {
@@ -1346,6 +1366,31 @@ func (s *postServiceImpl) GetPostMeta(ctx context.Context, postID uuid.UUID) (*P
 		IsLock:   post.IsLock,
 		CircleID: post.CircleID,
 	}, nil
+}
+
+// ListAutoReplyCandidates 机器人自动回复的帖子候选（纯 DB 查询，hot 列由热度链路异步落库，
+// 分钟级滞后对定时扫描无影响）。
+func (s *postServiceImpl) ListAutoReplyCandidates(ctx context.Context, q AutoReplyPostQuery) ([]AutoReplyPostCandidate, error) {
+	posts, err := s.repo.ListHotForAutoReply(ctx, domain.AutoReplyPostFilter{
+		CircleID:   q.CircleID,
+		HotMin:     q.HotMin,
+		Since:      q.Since,
+		ExcludeIDs: q.ExcludeIDs,
+		Limit:      q.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AutoReplyPostCandidate, 0, len(posts))
+	for i := range posts {
+		out = append(out, AutoReplyPostCandidate{
+			ID:       posts[i].ID,
+			CircleID: posts[i].CircleID,
+			AuthorID: posts[i].UserID,
+			Hot:      posts[i].Hot,
+		})
+	}
+	return out, nil
 }
 
 // GetPostBrief 获取帖子内容摘要（供 aiagent 领域组装机器人回复 prompt 用）。

@@ -149,3 +149,9 @@ aiagent:
 > 2026-08-26 起「特定条件才回复」不再依赖 system prompt 输出空值，改为两阶段硬流程：
 > 关键词触发且 `filter_prompt` 非空时，先由分类器 LLM 判定（JSON 输出），通过才生成回复；
 > 判定不通过写 `status=2` 日志行，限频口径排除 skipped。详见 [agent-reply-filter-design.md](agent-reply-filter-design.md)。
+
+## 九、后续演进：自动回复高热度帖子 / 评论
+
+> 2026-10-23 起（#99）新增定时扫描入口：机器人按 `auto_config.auto_reply` 的热度门槛自动回复帖子 / 评论，
+> 复用本文 `executeReply` 全链路；日志表新增 `trigger_source` / `target_comment_id` 与自动回复部分唯一索引
+>（每机器人每目标最多一次）。详见 [agent-auto-reply-design.md](agent-auto-reply-design.md)。

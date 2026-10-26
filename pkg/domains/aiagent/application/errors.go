@@ -21,6 +21,9 @@ var (
 	errInvalidFilter    = errors.New("filter_prompt must be <= 2000 chars")
 	errAPIKeyNotSet     = errors.New("data key not configured (security.data_key)")
 	errNoFieldsToUpdate = errors.New("at least one field to update")
+	// errInvalidAutoConfig auto_config.auto_reply 取值非法（规则见 buildAutoReply）。
+	errInvalidAutoConfig = errors.New("auto_config.auto_reply is invalid: targets must be post/comment; " +
+		"when enabled, window_hours must be 1-168 and each target needs a threshold >= 1")
 )
 
 // 回复执行链路错误（reply_service）。
@@ -60,6 +63,9 @@ func IsInvalidStatusErr(err error) bool    { return errors.Is(err, errInvalidSta
 func IsInvalidFilterErr(err error) bool    { return errors.Is(err, errInvalidFilter) }
 func IsAPIKeyNotSetErr(err error) bool     { return errors.Is(err, errAPIKeyNotSet) }
 func IsNoFieldsToUpdateErr(err error) bool { return errors.Is(err, errNoFieldsToUpdate) }
+
+// IsInvalidAutoConfigErr auto_config 取值非法（handler 映射 400）。
+func IsInvalidAutoConfigErr(err error) bool { return errors.Is(err, errInvalidAutoConfig) }
 
 // 回复执行链路错误谓词（供 handler 映射手动触发接口的响应）。
 func IsAgentDisabledErr(err error) bool    { return errors.Is(err, errAgentDisabled) }

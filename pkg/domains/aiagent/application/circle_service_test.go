@@ -155,6 +155,14 @@ func (f *fakeAgentRepo) UpdateFields(ctx context.Context, id uuid.UUID, fields m
 			a.MinIntervalSec = v.(int)
 		case "status":
 			a.Status = int16(v.(int))
+		case "auto_config":
+			// 模拟 PG 的 auto_config || patch 顶层 key 合并。
+			if a.AutoConfig == nil {
+				a.AutoConfig = domain.AutoConfigJSON{}
+			}
+			for pk, pv := range v.(domain.AutoConfigPatch) {
+				a.AutoConfig[pk] = pv
+			}
 		}
 	}
 	return nil
@@ -175,6 +183,18 @@ func (f *fakeAgentRepo) ListEnabledForCircle(ctx context.Context, circleID uuid.
 		}
 		inScope := a.CircleID == nil || (circleID != uuid.Nil && *a.CircleID == circleID)
 		if !f.scopeFilterEnabled || inScope {
+			out = append(out, *a)
+		}
+	}
+	return out, nil
+}
+
+// ListAutoReplyEnabled 模拟 PG：启用且 auto_config.auto_reply.enabled=true。
+func (f *fakeAgentRepo) ListAutoReplyEnabled(ctx context.Context) ([]domain.AiAgent, error) {
+	var out []domain.AiAgent
+	for _, a := range f.byID {
+		cfg, err := a.AutoConfig.AutoReply()
+		if a.Status == domain.AgentStatusEnabled && err == nil && cfg.Enabled {
 			out = append(out, *a)
 		}
 	}
