@@ -223,8 +223,8 @@ CREATE INDEX idx_ai_agent_circle ON domains.ai_agent (circle_id) WHERE deleted =
 ## 存量表迁移（自动回复：auto_config / trigger_source / target_comment_id + 部分唯一索引）
 
 > 2026-10-23 变更（#99）：机器人自动回复高热度帖子 / 评论，设计见 [agent-auto-reply-design.md](../agent-auto-reply-design.md)。
-> 权威 DDL 在 `migrations/20261023164311_ai_agent_auto_reply.up.sql`（加列 + 存量回填）与
-> `migrations/20261023164312_ai_reply_log_auto_target_unique.up.sql`（`CREATE UNIQUE INDEX CONCURRENTLY`），
+> 权威 DDL 在 `migrations/20261026222115_ai_agent_auto_reply.up.sql`（加列 + 存量回填）与
+> `migrations/20261026222116_ai_reply_log_auto_target_unique.up.sql`（`CREATE UNIQUE INDEX CONCURRENTLY`），
 > 发布流水线以 DB-owner 自动执行，无需手工操作。
 >
 > 存量行 `trigger_source` 回填规则（存量日志未记录来源，按回复形态 + 机器人触发模式推断）：
