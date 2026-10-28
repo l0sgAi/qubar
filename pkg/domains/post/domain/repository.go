@@ -41,6 +41,10 @@ type PostRepository interface {
 	// GetMentionUserIDsByPostIDs 批量获取帖子的提及用户ID（按提及写入顺序）。
 	// 返回以 postID 为 key 的映射；无提及的帖子不出现在 map 中。
 	GetMentionUserIDsByPostIDs(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error)
+	// ListHotForAutoReply 机器人自动回复的帖子候选：已发布、未锁定、未删除、hot >= HotMin、
+	// Since 之后发布、作者不是机器人账号（users.role=2）、在圈子范围内、不在排除名单，
+	// 按 hot 降序取前 Limit 条（只填 id / circle_id / user_id / hot）。
+	ListHotForAutoReply(ctx context.Context, f AutoReplyPostFilter) ([]Post, error)
 	// UpdateStatusFromReviewing 条件更新帖子状态：仅当帖子未删除且仍是审核中（status=2）时改为 status。
 	// 返回是否真正更新了一行；false 表示已被其他路径处理（重复投递 / 人工审核 / 删帖），调用方跳过后续副作用。
 	UpdateStatusFromReviewing(ctx context.Context, postID uuid.UUID, status int16) (bool, error)
@@ -54,6 +58,15 @@ type PostRepository interface {
 	CountReviewingByCircle(ctx context.Context, circleID uuid.UUID) (int64, error)
 	// GetCircleIDsByIDs 批量取 帖子ID → 所属 circle_id，不过滤删除 / 状态（通知跳转用，#156）；查不到的 ID 不在结果里。
 	GetCircleIDsByIDs(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
+}
+
+// AutoReplyPostFilter 机器人自动回复的帖子候选过滤条件（aiagent 扫描器经 Facade 传入）。
+type AutoReplyPostFilter struct {
+	CircleID   uuid.UUID   // 圈子范围；uuid.Nil = 全站（全局机器人）
+	HotMin     int         // 热度门槛（含）
+	Since      time.Time   // 只看该时间之后发布的帖子
+	ExcludeIDs []uuid.UUID // 已触发 / 已饱和的帖子
+	Limit      int
 }
 
 // PostKeyset 帖子 (create_time, id) 倒序翻页位置（上一页最后一条）。

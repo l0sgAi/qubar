@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"interestBar/pkg/conf"
 	"interestBar/pkg/domains/comment/domain"
@@ -157,6 +158,29 @@ type CreateCommentInput struct {
 	MentionUserIDs []uuid.UUID // @提及用户（前端选人传入；后端校验存在性/去自/截断）
 }
 
+// AutoReplyCommentQuery 机器人自动回复的评论候选查询条件。
+// LikeMin / ReplyMin 满足任一即可，<=0 表示该条件不参与。
+type AutoReplyCommentQuery struct {
+	CircleID   uuid.UUID   // 所属帖子的圈子范围；uuid.Nil = 全站
+	LikeMin    int         // 点赞数门槛（含）
+	ReplyMin   int         // 回复数门槛（含）
+	Since      time.Time   // 只看该时间之后发布的评论
+	ExcludeIDs []uuid.UUID // 排除的评论（已触发 / 已达每目标上限）
+	Limit      int         // 候选上限
+}
+
+// AutoReplyCommentCandidate 机器人自动回复的评论候选。
+type AutoReplyCommentCandidate struct {
+	ID           uuid.UUID
+	PostID       uuid.UUID
+	PostCircleID uuid.UUID
+	UserID       uuid.UUID
+	RootID       *uuid.UUID // nil = 顶层评论
+	Content      string
+	LikeCount    int
+	ReplyCount   int
+}
+
 // ===== Service 接口 =====
 
 // CommentService 是 comment 领域的应用服务接口。
@@ -187,6 +211,10 @@ type CommentService interface {
 	// IsLikedByUser 用户是否已赞该评论（缓存优先，miss 回源 DB，DB 已赞则回填缓存）。
 	// 供 like 领域点赞前解析真实状态；DB 错误原样返回（调用方不得猜测）。
 	IsLikedByUser(ctx context.Context, userID, commentID uuid.UUID) (bool, error)
+	// ListAutoReplyCandidates 机器人自动回复的评论候选（供 aiagent 扫描器经 Facade 调用）：
+	// 评论正常、时间窗口内、点赞 / 回复数达到任一门槛、作者非机器人账号、所属帖子可回复且在
+	// 圈子范围内，按 like_count + reply_count 降序 top-N。
+	ListAutoReplyCandidates(ctx context.Context, q AutoReplyCommentQuery) ([]AutoReplyCommentCandidate, error)
 
 	// SetUserFacade 注入 user Facade（组装评论者/被回复人信息用）。
 	SetUserFacade(f UserFacade)
@@ -765,6 +793,36 @@ func (s *commentServiceImpl) checkLiked(ctx context.Context, userID, commentID u
 //
 // 用户评论点赞 ZSET 有 TTL 与容量上限，miss 不等于未赞，必须回源 DB 区分。
 // 缓存故障直接回源 DB；DB 错误原样返回。
+// ListAutoReplyCandidates 机器人自动回复的评论候选（纯 DB 查询；like_count 由点赞链路
+// 异步落库，分钟级滞后对定时扫描无影响）。
+func (s *commentServiceImpl) ListAutoReplyCandidates(ctx context.Context, q AutoReplyCommentQuery) ([]AutoReplyCommentCandidate, error) {
+	rows, err := s.repo.ListHotForAutoReply(ctx, domain.AutoReplyCommentFilter{
+		CircleID:   q.CircleID,
+		LikeMin:    q.LikeMin,
+		ReplyMin:   q.ReplyMin,
+		Since:      q.Since,
+		ExcludeIDs: q.ExcludeIDs,
+		Limit:      q.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AutoReplyCommentCandidate, 0, len(rows))
+	for i := range rows {
+		out = append(out, AutoReplyCommentCandidate{
+			ID:           rows[i].ID,
+			PostID:       rows[i].PostID,
+			PostCircleID: rows[i].PostCircleID,
+			UserID:       rows[i].UserID,
+			RootID:       rows[i].RootID,
+			Content:      rows[i].Content,
+			LikeCount:    rows[i].LikeCount,
+			ReplyCount:   rows[i].ReplyCount,
+		})
+	}
+	return out, nil
+}
+
 func (s *commentServiceImpl) IsLikedByUser(ctx context.Context, userID, commentID uuid.UUID) (bool, error) {
 	chk, err := s.likeCache.BatchCheck(ctx, userID, []uuid.UUID{commentID})
 	if err == nil && (chk.Hits[commentID] || len(chk.Missed) == 0) {

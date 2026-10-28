@@ -151,6 +151,9 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	// 启动 Discover pool syncer（需要 discoverSvc 复用 RebuildPool；其它无依赖 syncer 在 apps/server.go）。
 	go redpanda.StartDiscoverSyncerWithRetry(discoverSvc)
 
+	// 启动机器人自动回复扫描器（需要 replySvc 执行扫描；aiagent.autonomy.enabled=false 时不启动）。
+	go redpanda.StartAgentAutoReplySyncerWithRetry(replySvc)
+
 	// 启动帖子 AI 审核 worker（#117）：仅 moderation 启用时；未启用时发帖直接发布，不需要 worker。
 	if conf.Config.Moderation.Active() {
 		redpanda.StartPostModerationConsumer(postSvc.ModeratePost)

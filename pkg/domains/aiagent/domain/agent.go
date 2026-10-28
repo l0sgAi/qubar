@@ -18,29 +18,30 @@ import (
 //
 // CircleID == nil 为平台全局机器人（超管经 /agent/* 维护，参与回复触发链路）；
 // CircleID 非 nil 为圈子级机器人（该圈 owner/admin 经 /circle/agent/* 维护，
-// 创建后不可变，本期不参与任何回复触发）。跨作用域互不可见（查询侧守卫）。
+// 创建后不可变，只回复本圈帖子）。跨作用域互不可见（查询侧守卫）。
 type AiAgent struct {
-	ID                uuid.UUID     `json:"id" gorm:"type:uuid;primaryKey;column:id"`
-	Name              string        `json:"name" gorm:"column:name;type:varchar(50);not null"`
-	AvatarURL         string        `json:"avatar_url,omitempty" gorm:"column:avatar_url;type:varchar(500)"`
-	LinkedUserID      uuid.UUID     `json:"linked_user_id" gorm:"column:linked_user_id;type:uuid;not null"`    // 机器人以该系统用户身份发评论
-	CircleID          *uuid.UUID    `json:"circle_id,omitempty" gorm:"column:circle_id;type:uuid"`             // 绑定圈子ID;nil=平台全局机器人
-	CreatorID         uuid.UUID     `json:"creator_id" gorm:"column:creator_id;type:uuid"`                     // 创建者用户ID(审计;存量行/全局机器人为零值)
-	APIProtocol       string        `json:"api_protocol" gorm:"column:api_protocol;type:varchar(20);not null"` // openai/anthropic/gemini/ollama（应用层白名单）
-	BaseURL           string        `json:"base_url,omitempty" gorm:"column:base_url;type:varchar(500);not null;default:''"`
-	APIKeyEnc         string        `json:"-" gorm:"column:api_key;type:varchar(512)"` // AES-GCM 密文，永不 JSON 回显
-	Model             string        `json:"model" gorm:"column:model;type:varchar(100);not null"`
-	LLMParams         LLMParamsJSON `json:"llm_params" gorm:"column:llm_params;type:jsonb;not null;default:'{}'::jsonb"`
-	SystemPrompt      string        `json:"system_prompt,omitempty" gorm:"column:system_prompt;type:text;not null;default:''"`
-	FilterPrompt      string        `json:"filter_prompt,omitempty" gorm:"column:filter_prompt;type:text;not null;default:''"` // 回复判定条件（空=不判定直接回复，仅关键词触发生效）
-	TriggerMode       TriggerMode   `json:"trigger_mode" gorm:"column:trigger_mode;type:smallint;not null;default:1"`
-	TriggerKeywords   KeywordsJSON  `json:"trigger_keywords" gorm:"column:trigger_keywords;type:jsonb;not null;default:'[]'::jsonb"`
-	MaxRepliesPerHour int           `json:"max_replies_per_hour" gorm:"column:max_replies_per_hour;not null;default:30"` // 0=不限
-	MinIntervalSec    int           `json:"min_interval_sec" gorm:"column:min_interval_sec;not null;default:60"`         // 0=不限
-	Status            int16         `json:"status" gorm:"column:status;type:smallint;not null;default:1"`
-	Deleted           int16         `json:"deleted" gorm:"column:deleted;type:smallint;default:0"`
-	CreateTime        time.Time     `json:"create_time" gorm:"column:create_time;autoCreateTime"`
-	UpdateTime        time.Time     `json:"update_time" gorm:"column:update_time;autoUpdateTime"`
+	ID                uuid.UUID      `json:"id" gorm:"type:uuid;primaryKey;column:id"`
+	Name              string         `json:"name" gorm:"column:name;type:varchar(50);not null"`
+	AvatarURL         string         `json:"avatar_url,omitempty" gorm:"column:avatar_url;type:varchar(500)"`
+	LinkedUserID      uuid.UUID      `json:"linked_user_id" gorm:"column:linked_user_id;type:uuid;not null"`    // 机器人以该系统用户身份发评论
+	CircleID          *uuid.UUID     `json:"circle_id,omitempty" gorm:"column:circle_id;type:uuid"`             // 绑定圈子ID;nil=平台全局机器人
+	CreatorID         uuid.UUID      `json:"creator_id" gorm:"column:creator_id;type:uuid"`                     // 创建者用户ID(审计;存量行/全局机器人为零值)
+	APIProtocol       string         `json:"api_protocol" gorm:"column:api_protocol;type:varchar(20);not null"` // openai/anthropic/gemini/ollama（应用层白名单）
+	BaseURL           string         `json:"base_url,omitempty" gorm:"column:base_url;type:varchar(500);not null;default:''"`
+	APIKeyEnc         string         `json:"-" gorm:"column:api_key;type:varchar(512)"` // AES-GCM 密文，永不 JSON 回显
+	Model             string         `json:"model" gorm:"column:model;type:varchar(100);not null"`
+	LLMParams         LLMParamsJSON  `json:"llm_params" gorm:"column:llm_params;type:jsonb;not null;default:'{}'::jsonb"`
+	SystemPrompt      string         `json:"system_prompt,omitempty" gorm:"column:system_prompt;type:text;not null;default:''"`
+	FilterPrompt      string         `json:"filter_prompt,omitempty" gorm:"column:filter_prompt;type:text;not null;default:''"` // 回复判定条件（空=不判定直接回复，仅关键词触发生效）
+	TriggerMode       TriggerMode    `json:"trigger_mode" gorm:"column:trigger_mode;type:smallint;not null;default:1"`
+	TriggerKeywords   KeywordsJSON   `json:"trigger_keywords" gorm:"column:trigger_keywords;type:jsonb;not null;default:'[]'::jsonb"`
+	MaxRepliesPerHour int            `json:"max_replies_per_hour" gorm:"column:max_replies_per_hour;not null;default:30"`   // 0=不限
+	MinIntervalSec    int            `json:"min_interval_sec" gorm:"column:min_interval_sec;not null;default:60"`           // 0=不限
+	AutoConfig        AutoConfigJSON `json:"auto_config" gorm:"column:auto_config;type:jsonb;not null;default:'{}'::jsonb"` // 自主行为配置(auto_reply 等子对象，与 TriggerMode 互不影响)
+	Status            int16          `json:"status" gorm:"column:status;type:smallint;not null;default:1"`
+	Deleted           int16          `json:"deleted" gorm:"column:deleted;type:smallint;default:0"`
+	CreateTime        time.Time      `json:"create_time" gorm:"column:create_time;autoCreateTime"`
+	UpdateTime        time.Time      `json:"update_time" gorm:"column:update_time;autoUpdateTime"`
 }
 
 // TableName 指定表名。

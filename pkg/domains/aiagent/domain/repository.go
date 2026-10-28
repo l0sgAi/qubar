@@ -44,6 +44,7 @@ type AgentRepository interface {
 	//（调用方已 ExistsByNameInScope 预检）。circle_id/creator_id 由调用方写入 agent。
 	CreateInCircle(ctx context.Context, agent *AiAgent, maxPerCircle int) error
 	// UpdateFields 按 map 更新指定字段（部分更新）。
+	// "auto_config" 的值为 AutoConfigPatch 时按顶层 key 合并（auto_config || patch），不覆盖兄弟子对象。
 	UpdateFields(ctx context.Context, agentID uuid.UUID, fields map[string]interface{}) error
 	// SoftDelete 软删（deleted=1 且 status=0，一并停用）。
 	SoftDelete(ctx context.Context, agentID uuid.UUID) error
@@ -53,6 +54,10 @@ type AgentRepository interface {
 	// 供回复执行链路按帖子所在圈加载触发候选（设计见 docs/circle-agent-reply-design.md），
 	// 不加载他圈机器人——原"circle_id IS NULL 防泄漏护栏"由本方法的 OR 语义接棒。
 	ListEnabledForCircle(ctx context.Context, circleID uuid.UUID) ([]AiAgent, error)
+	// ListAutoReplyEnabled 获取开启了自动回复的启用机器人（未删除、status=1、
+	// auto_config.auto_reply.enabled=true），全局与圈内机器人都在内（作用域由调用方按 CircleID 收口）。
+	// 供自动回复扫描器每轮加载（设计见 docs/agent-auto-reply-design.md）。
+	ListAutoReplyEnabled(ctx context.Context) ([]AiAgent, error)
 	// ExistsByLinkedUserID 检查某系统用户是否为机器人的关联账号（未删除）。
 	// 供评论触发钩子反查，机器人自己的评论不再触发关键词回复（防回环）。
 	// 不加 circle 过滤：防回环口径应覆盖全部机器人（含圈子级，语义前瞻正确）。

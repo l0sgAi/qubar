@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -40,6 +41,33 @@ type CommentRepository interface {
 	// GetMentionUserIDsByCommentIDs 批量获取评论的提及用户ID（按提及写入顺序）。
 	// 返回以 commentID 为 key 的映射；无提及的评论不出现在 map 中。
 	GetMentionUserIDsByCommentIDs(ctx context.Context, commentIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error)
+	// ListHotForAutoReply 机器人自动回复的评论候选：评论正常未删、Since 之后发布、点赞数 / 回复数
+	// 达到任一门槛、作者不是机器人账号（users.role=2）、所属帖子已发布未锁定未删且在圈子范围内、
+	// 不在排除名单，按 like_count + reply_count 降序取前 Limit 条。
+	ListHotForAutoReply(ctx context.Context, f AutoReplyCommentFilter) ([]AutoReplyCommentRow, error)
+}
+
+// AutoReplyCommentFilter 机器人自动回复的评论候选过滤条件（aiagent 扫描器经 Facade 传入）。
+// LikeMin / ReplyMin 满足任一即可，<=0 表示该条件不参与；两者都 <=0 时不返回任何候选。
+type AutoReplyCommentFilter struct {
+	CircleID   uuid.UUID   // 所属帖子的圈子范围；uuid.Nil = 全站
+	LikeMin    int         // 点赞数门槛（含）
+	ReplyMin   int         // 回复数门槛（含）
+	Since      time.Time   // 只看该时间之后发布的评论
+	ExcludeIDs []uuid.UUID // 已触发 / 已饱和的评论
+	Limit      int
+}
+
+// AutoReplyCommentRow 评论候选行（评论字段 + 所属帖子的圈子）。
+type AutoReplyCommentRow struct {
+	ID           uuid.UUID  `gorm:"column:id"`
+	PostID       uuid.UUID  `gorm:"column:post_id"`
+	UserID       uuid.UUID  `gorm:"column:user_id"`
+	RootID       *uuid.UUID `gorm:"column:root_id"`
+	Content      string     `gorm:"column:content"`
+	LikeCount    int        `gorm:"column:like_count"`
+	ReplyCount   int        `gorm:"column:reply_count"`
+	PostCircleID uuid.UUID  `gorm:"column:post_circle_id"`
 }
 
 // CommentStatsCache 评论统计信息缓存（like_count）。
