@@ -58,12 +58,20 @@ type FeedPage struct {
 type HomeFeedSearcher interface {
 	// Search sort: "hot"=rank_score 时间衰减 | "latest"=create_time desc。
 	// circleIDs nil/空=全局；非空=terms 过滤。next 为下一页 searchAfter（recall 内部翻页用）。
-	Search(ctx context.Context, sort string, circleIDs []uuid.UUID, size int, searchAfter []interface{}) (ids []uuid.UUID, next []interface{}, err error)
+	// excludeCircleIDs 为查看者不可见的私密圈（must_not）。
+	Search(ctx context.Context, sort string, circleIDs, excludeCircleIDs []uuid.UUID, size int, searchAfter []interface{}) (ids []uuid.UUID, next []interface{}, err error)
 }
 
 // PostHydrator 把 postID 列表 hydrate 成 FeedPostItem（作者/圈子/图片/统计；不含交互态）。
+// viewerID 不可见的私密圈帖子不返回（候选池 / 榜单里的旧条目在回填时兜底过滤）。
 type PostHydrator interface {
-	Hydrate(ctx context.Context, postIDs []uuid.UUID) ([]FeedPostItem, error)
+	Hydrate(ctx context.Context, viewerID uuid.UUID, postIDs []uuid.UUID) ([]FeedPostItem, error)
+}
+
+// CircleVisibility 私密圈可见性（composition 注入 circle.application.CircleVisibility）。
+type CircleVisibility interface {
+	// HiddenCircleIDs 查看者不可见的圈子（所有私密圈 − 查看者已加入的私密圈）。
+	HiddenCircleIDs(ctx context.Context, viewerID uuid.UUID) ([]uuid.UUID, error)
 }
 
 // PostMetaReader 取帖子所属 circle_id（C3 行为圈子路用）。

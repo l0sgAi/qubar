@@ -92,7 +92,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	}
 
 	// recommend 需要 post（hydrate + circle_id 反查）+ circle（joined IDs），均为只读消费者，无反向注入。
-	recommendSvc := newRecommendService(postSvc, circleSvc)
+	recommendSvc := newRecommendService(postSvc, circleSvc, circleVisibility)
 
 	// trending 需要 post（hydrate + 交互态）+ circle（GetByIDs）+ user（GetBriefs），均为只读消费者。
 	trendingSvc := newTrendingService(postSvc, circleRepo, userFacade)

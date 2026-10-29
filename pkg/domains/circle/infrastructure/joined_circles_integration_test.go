@@ -123,7 +123,7 @@ func TestJoinedCircles_MutedSurvivesCacheRebuild(t *testing.T) {
 	}
 
 	// 他人视角：有 role，无成员状态。
-	other, err := svc.GetUserCircles(ctx, user, "", 0, 20, "")
+	other, err := svc.GetUserCircles(ctx, user, user, "", 0, 20, "")
 	if err != nil {
 		t.Fatalf("GetUserCircles: %v", err)
 	}

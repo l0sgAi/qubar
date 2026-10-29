@@ -25,10 +25,11 @@ import (
 type PostFetcher interface {
 	// SearchByIDs 按 ID 列表从 ES 批量获取已组装帖子(仅未删除 + 已发布)。
 	// 顺序不保证,调用方按浏览时间自行排序;失效帖静默过滤。
-	SearchByIDs(ctx context.Context, postIDs []uuid.UUID) ([]postapp.PostListItem, error)
+	// viewerID 不可见的私密圈帖子过滤（退出 / 被移出后浏览记录保留，列表不展示）。
+	SearchByIDs(ctx context.Context, viewerID uuid.UUID, postIDs []uuid.UUID) ([]postapp.PostListItem, error)
 	// SearchByIDsAndKeyword 在 ID 集合内按关键字搜索并组装帖子(title^3/summary),
 	// 按 _score desc 排序,offset 分页;返回匹配总数。供「最近浏览」关键字搜索用。
-	SearchByIDsAndKeyword(ctx context.Context, postIDs []uuid.UUID, keyword string, size, offset int) ([]postapp.PostListItem, int64, error)
+	SearchByIDsAndKeyword(ctx context.Context, viewerID uuid.UUID, postIDs []uuid.UUID, keyword string, size, offset int) ([]postapp.PostListItem, int64, error)
 }
 
 // ===== DTO =====
@@ -157,7 +158,7 @@ func (s *historyServiceImpl) ListHistoryPosts(ctx context.Context, userID uuid.U
 		for _, e := range entries {
 			postIDs = append(postIDs, e.PostID)
 		}
-		fetched, err := s.fetcher.SearchByIDs(ctx, postIDs)
+		fetched, err := s.fetcher.SearchByIDs(ctx, userID, postIDs)
 		if err != nil {
 			return nil, err
 		}
@@ -223,7 +224,7 @@ func (s *historyServiceImpl) searchHistoryPosts(ctx context.Context, userID uuid
 		viewedAtByID[e.PostID] = e.ViewedAt
 	}
 
-	matched, total, err := s.fetcher.SearchByIDsAndKeyword(ctx, postIDs, keyword, size, offset)
+	matched, total, err := s.fetcher.SearchByIDsAndKeyword(ctx, userID, postIDs, keyword, size, offset)
 	if err != nil {
 		return nil, err
 	}

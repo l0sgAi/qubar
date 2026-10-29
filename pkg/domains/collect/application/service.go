@@ -26,7 +26,8 @@ import (
 type PostFetcher interface {
 	// GetPostsByIDs 按 ID 列表批量获取已组装的帖子（仅未删除 + 已发布）。
 	// 顺序不保证，调用方按收藏时间自行排序；失效帖静默过滤（不在返回中）。
-	GetPostsByIDs(ctx context.Context, postIDs []uuid.UUID) ([]postapp.PostListItem, error)
+	// viewerID 不可见的私密圈帖子同样过滤（退出 / 被移出后收藏记录保留，列表不展示）。
+	GetPostsByIDs(ctx context.Context, viewerID uuid.UUID, postIDs []uuid.UUID) ([]postapp.PostListItem, error)
 }
 
 // ===== DTO =====
@@ -225,7 +226,7 @@ func (s *collectServiceImpl) ListCollectedPosts(ctx context.Context, userID uuid
 
 	posts := make([]postapp.PostListItem, 0, len(postIDs))
 	if len(postIDs) > 0 {
-		fetched, err := s.postFetcher.GetPostsByIDs(ctx, postIDs)
+		fetched, err := s.postFetcher.GetPostsByIDs(ctx, userID, postIDs)
 		if err != nil {
 			return nil, err
 		}

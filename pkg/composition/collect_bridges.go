@@ -44,6 +44,6 @@ type collectPostFetcher struct {
 	delegate postapp.PostService
 }
 
-func (f *collectPostFetcher) GetPostsByIDs(ctx context.Context, postIDs []uuid.UUID) ([]postapp.PostListItem, error) {
-	return f.delegate.GetPostsByIDs(ctx, postIDs)
+func (f *collectPostFetcher) GetPostsByIDs(ctx context.Context, viewerID uuid.UUID, postIDs []uuid.UUID) ([]postapp.PostListItem, error) {
+	return f.delegate.GetPostsByIDs(ctx, viewerID, postIDs)
 }

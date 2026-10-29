@@ -79,11 +79,21 @@ func setupVisibility(t *testing.T) *visibilityEnv {
 	}
 }
 
-// emptyCircleSearcher 集成栈不含 ES：圈内帖子列表返回空结果，只验证 403 拦截发生在检索之前。
+// emptyCircleSearcher 集成栈不含 ES：圈内帖子列表返回空结果，只验证 403 拦截发生在检索之前；
+// SearchMy 直接回显 ID（「TA 加入的圈子」过滤断言用）。
 type emptyCircleSearcher struct{ circleapp.CircleSearcher }
 
 func (emptyCircleSearcher) SearchCirclePosts(context.Context, uuid.UUID, int, int, []interface{}) (*circleapp.RawCirclePostResult, error) {
 	return &circleapp.RawCirclePostResult{}, nil
+}
+
+// SearchMy 原样返回传入的圈子（视为正常、未删除、命中），供 /circle/user 过滤断言。
+func (emptyCircleSearcher) SearchMy(_ context.Context, circleIDs []uuid.UUID, _ string, size int, _ []interface{}) (*circleapp.MyCircleSearchResult, error) {
+	docs := make([]circleapp.MyCircleDoc, 0, len(circleIDs))
+	for _, id := range circleIDs {
+		docs = append(docs, circleapp.MyCircleDoc{ID: id.String()})
+	}
+	return &circleapp.MyCircleSearchResult{Circles: docs, Size: size}, nil
 }
 
 // visCircle 一个随机圈子：圈主 + 正常成员 + 禁言成员 + 已移出成员（status=3）+ 已退出成员（status=4）+ 非成员。
