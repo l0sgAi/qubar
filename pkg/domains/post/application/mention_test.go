@@ -1,7 +1,8 @@
 // mention_test.go 发帖 @提及 校验的圈子作用域兜底单元测试。
 //
 // 覆盖设计文档 P0-8 的"兜底剔除"：越圈机器人剔除 / 本圈机器人保留 / 全局机器人与
-// 普通用户保留 / GetAgentCircleIDs 失败 fail-open（跳过剔除不报错）。
+// 普通用户保留 / 停用或已删除的机器人（全局、圈内）剔除（#171）/ GetAgentMentionScopes 失败
+// fail-open（跳过剔除不报错）。
 // @选人列表已在 ES 侧过滤，此层只防手搓 ID 构造请求（场景为正常路径的静默剔除语义）。
 package application
 
@@ -34,13 +35,15 @@ var (
 	ownCircleBot  = uuid.MustParse("0192a0d0-0000-7000-8000-000000000012")
 	otherCirclBot = uuid.MustParse("0192a0d0-0000-7000-8000-000000000013")
 	ghostUserID   = uuid.MustParse("0192a0d0-0000-7000-8000-000000000014")
+	disabledGBot  = uuid.MustParse("0192a0d0-0000-7000-8000-000000000015") // 停用/已删除的全局机器人
+	disabledCBot  = uuid.MustParse("0192a0d0-0000-7000-8000-000000000016") // 停用/已删除的本圈机器人
 )
 
 // fakePostUserFacade UserFacade fake：预设存在性与机器人圈子绑定。
 type fakePostUserFacade struct {
-	briefs       map[string]UserBrief
-	agentCircles map[uuid.UUID]uuid.UUID
-	circleErr    error // 非 nil 时模拟 GetAgentCircleIDs 失败（fail-open 断言）
+	briefs    map[string]UserBrief
+	scopes    map[uuid.UUID]AgentMentionScope
+	circleErr error // 非 nil 时模拟 GetAgentMentionScopes 失败（fail-open 断言）
 }
 
 func (f *fakePostUserFacade) GetBriefs(ctx context.Context, userIDs []string) (map[string]UserBrief, error) {
@@ -60,21 +63,22 @@ func (f *fakePostUserFacade) GetBrief(ctx context.Context, userID string) (*User
 	return nil, nil
 }
 
-func (f *fakePostUserFacade) GetAgentCircleIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+func (f *fakePostUserFacade) GetAgentMentionScopes(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]AgentMentionScope, error) {
 	if f.circleErr != nil {
 		return nil, f.circleErr
 	}
-	out := make(map[uuid.UUID]uuid.UUID, len(userIDs))
+	out := make(map[uuid.UUID]AgentMentionScope, len(userIDs))
 	for _, id := range userIDs {
-		if c, ok := f.agentCircles[id]; ok {
-			out[id] = c
+		if sc, ok := f.scopes[id]; ok {
+			out[id] = sc
 		}
 	}
 	return out, nil
 }
 
 // newMentionFacade 组装常规 fake：全部候选存在；ownCircleBot 绑定本圈，
-// otherCirclBot 绑定他圈，globalBotID/normalUserID 无绑定记录。
+// otherCirclBot 绑定他圈，globalBotID/normalUserID 无记录；disabledGBot / disabledCBot
+// 为不可 @ 的全局 / 本圈机器人。
 func newMentionFacade() *fakePostUserFacade {
 	return &fakePostUserFacade{
 		briefs: map[string]UserBrief{
@@ -82,10 +86,14 @@ func newMentionFacade() *fakePostUserFacade {
 			globalBotID.String():   {ID: globalBotID.String(), Username: "全局机器人"},
 			ownCircleBot.String():  {ID: ownCircleBot.String(), Username: "本圈机器人"},
 			otherCirclBot.String(): {ID: otherCirclBot.String(), Username: "他圈机器人"},
+			disabledGBot.String():  {ID: disabledGBot.String(), Username: "停用的全局机器人"},
+			disabledCBot.String():  {ID: disabledCBot.String(), Username: "停用的本圈机器人"},
 		},
-		agentCircles: map[uuid.UUID]uuid.UUID{
-			ownCircleBot:  postCircleID,
-			otherCirclBot: otherCircleID,
+		scopes: map[uuid.UUID]AgentMentionScope{
+			ownCircleBot:  {CircleID: postCircleID, Mentionable: true},
+			otherCirclBot: {CircleID: otherCircleID, Mentionable: true},
+			disabledGBot:  {CircleID: uuid.Nil, Mentionable: false},
+			disabledCBot:  {CircleID: postCircleID, Mentionable: false},
 		},
 	}
 }
@@ -109,7 +117,20 @@ func TestFilterMentionUserIDs_AgentScope(t *testing.T) {
 	}
 }
 
-// TestFilterMentionUserIDs_FailOpenOnScopeError GetAgentCircleIDs 失败 → fail-open
+// TestFilterMentionUserIDs_DisabledAgents 停用 / 已删除的机器人（全局、本圈）一律剔除（#171），
+// 不论帖子在哪个圈子（含 Nil 圈的草稿）。
+func TestFilterMentionUserIDs_DisabledAgents(t *testing.T) {
+	svc := &postServiceImpl{userFacade: newMentionFacade()}
+	for _, circleID := range []uuid.UUID{postCircleID, otherCircleID, uuid.Nil} {
+		got := svc.filterMentionUserIDs(context.Background(), mentionActor,
+			[]uuid.UUID{disabledGBot, normalUserID, disabledCBot}, circleID)
+		if len(got) != 1 || got[0] != normalUserID {
+			t.Fatalf("circle=%s: got %v, want only normalUserID", circleID, got)
+		}
+	}
+}
+
+// TestFilterMentionUserIDs_FailOpenOnScopeError GetAgentMentionScopes 失败 → fail-open
 // 跳过剔除（仅 ES 列表过滤生效），不报错、不清空名单。
 func TestFilterMentionUserIDs_FailOpenOnScopeError(t *testing.T) {
 	facade := newMentionFacade()

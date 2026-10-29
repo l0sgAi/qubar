@@ -125,3 +125,29 @@ func TestBuildUserSearchQuery_SortUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildUserSearchQuery_ExcludesUnmentionableAgents 停用 / 已删除的机器人（agent_mention_disabled=1）
+// 在全站和圈内两种场景、有无关键字都被排除（#171）；用 must_not term 1 兼容存量文档缺该字段。
+func TestBuildUserSearchQuery_ExcludesUnmentionableAgents(t *testing.T) {
+	for _, kw := range []string{"", "机器人"} {
+		for _, cid := range []uuid.UUID{uuid.Nil, testCircleID} {
+			var found bool
+			for _, c := range mustConditionsOf(t, buildUserSearchQuery(kw, 20, cid)) {
+				boolQ, ok := c.(map[string]interface{})["bool"].(map[string]interface{})
+				if !ok {
+					continue
+				}
+				mustNot, ok := boolQ["must_not"].(map[string]interface{})
+				if !ok {
+					continue
+				}
+				if term, ok := mustNot["term"].(map[string]interface{}); ok && term["agent_mention_disabled"] == 1 {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("keyword=%q circle=%s: must_not term agent_mention_disabled=1 missing", kw, cid)
+			}
+		}
+	}
+}
