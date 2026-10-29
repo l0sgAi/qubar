@@ -29,13 +29,17 @@ type SysUser struct {
 	// AgentCircleID 机器人绑定圈子ID（ai_agent.circle_id 的投影，供 @提及 作用域过滤）。
 	// nil=普通用户或全局机器人；仅 role=2 行有意义。不回显（内部机制）。
 	AgentCircleID *uuid.UUID `json:"-" gorm:"column:agent_circle_id;type:uuid"`
-	Gender        int        `json:"gender" gorm:"column:gender;default:0"`
-	Birthdate     *time.Time `json:"birthdate,omitempty" gorm:"column:birthdate"`
-	Status        int        `json:"status" gorm:"column:status;default:1"`
-	Role          int        `json:"role" gorm:"column:role;default:0"`
-	Deleted       int        `json:"deleted" gorm:"column:deleted;default:0"`
-	CreateTime    time.Time  `json:"create_time" gorm:"column:create_time;autoCreateTime"`
-	UpdateTime    time.Time  `json:"update_time" gorm:"column:update_time;autoUpdateTime"`
+	// AgentMentionDisabled 机器人不可被 @（ai_agent 停用/删除的投影，供 @提及 过滤）。
+	// 0=正常（普通用户恒为 0），1=机器人已停用或已删除。零值即安全一侧：GORM 省略零值、
+	// 旧 userinfo 缓存无该字段时都按"可被 @"处理。仅 role=2 行有意义，不回显。
+	AgentMentionDisabled int16      `json:"-" gorm:"column:agent_mention_disabled;default:0"`
+	Gender               int        `json:"gender" gorm:"column:gender;default:0"`
+	Birthdate            *time.Time `json:"birthdate,omitempty" gorm:"column:birthdate"`
+	Status               int        `json:"status" gorm:"column:status;default:1"`
+	Role                 int        `json:"role" gorm:"column:role;default:0"`
+	Deleted              int        `json:"deleted" gorm:"column:deleted;default:0"`
+	CreateTime           time.Time  `json:"create_time" gorm:"column:create_time;autoCreateTime"`
+	UpdateTime           time.Time  `json:"update_time" gorm:"column:update_time;autoUpdateTime"`
 }
 
 // TableName 指定表名（与旧 model.SysUser 保持一致）。

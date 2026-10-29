@@ -38,8 +38,14 @@ type UserListResponse struct {
 // searchAfter: 上一页返回的 search_after 值，用于获取下一页
 // circleID: 圈子作用域（@选人场景）。Nil=全站（排除所有圈内机器人）；
 // 非 Nil=圈内（可见普通用户+全局机器人+本圈机器人，排除他圈机器人）。
+// 停用/已删除的机器人两种场景都排除（agentMentionableCondition）。
 // 返回：用户列表响应（包含用户列表、总数、分页信息）
 func SearchUsers(ctx context.Context, keyword string, size int, searchAfter []interface{}, circleID uuid.UUID) (*UserListResponse, error) {
+	return searchUsersInIndex(ctx, GetUserIndexName(), keyword, size, searchAfter, circleID)
+}
+
+// searchUsersInIndex SearchUsers 的实现，索引名由调用方给出（集成测试用临时索引）。
+func searchUsersInIndex(ctx context.Context, userIndex, keyword string, size int, searchAfter []interface{}, circleID uuid.UUID) (*UserListResponse, error) {
 	// 默认每页 20 条
 	if size <= 0 || size > 100 {
 		size = 20
@@ -56,9 +62,6 @@ func SearchUsers(ctx context.Context, keyword string, size int, searchAfter []in
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal query: %w", err)
 	}
-
-	// 使用用户索引名称
-	userIndex := GetUserIndexName()
 
 	res, err := Client.Search(
 		Client.Search.WithContext(ctx),
@@ -78,7 +81,7 @@ func SearchUsers(ctx context.Context, keyword string, size int, searchAfter []in
 	return parseUserSearchResponse(res, size)
 }
 
-// userBaseFilterConditions 基础过滤条件：过滤已删除、仅启用状态用户。
+// userBaseFilterConditions 基础过滤条件：过滤已删除、仅启用状态用户、排除不可 @ 的机器人。
 func userBaseFilterConditions() []map[string]interface{} {
 	return []map[string]interface{}{
 		{
@@ -89,6 +92,20 @@ func userBaseFilterConditions() []map[string]interface{} {
 		{
 			"term": map[string]interface{}{
 				"status": 1, // 只返回启用的用户
+			},
+		},
+		agentMentionableCondition(),
+	}
+}
+
+// agentMentionableCondition 排除停用/已删除的机器人（users.agent_mention_disabled=1，ai_agent 状态投影，
+// CDC 自 PG 同步）。用 must_not term 而非 term 0：存量文档无该字段时天然命中（普通用户恒为 0），
+// 零重建索引。机器人账号 status 恒为 1（改 status 会让历史评论丢失作者信息），所以不能复用 status 过滤。
+func agentMentionableCondition() map[string]interface{} {
+	return map[string]interface{}{
+		"bool": map[string]interface{}{
+			"must_not": map[string]interface{}{
+				"term": map[string]interface{}{"agent_mention_disabled": 1},
 			},
 		},
 	}
