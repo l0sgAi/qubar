@@ -42,10 +42,18 @@ func (f *postUserFacade) GetBrief(ctx context.Context, userID string) (*postapp.
 	return &postapp.UserBrief{ID: b.ID, Username: b.Username, AvatarURL: b.AvatarURL}, nil
 }
 
-// GetAgentCircleIDs 批量返回 userID → 机器人绑定圈子ID（mention 兜底剔除越圈机器人用，
-// 入出参类型一致直接透传）。
-func (f *postUserFacade) GetAgentCircleIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
-	return f.delegate.GetAgentCircleIDs(ctx, userIDs)
+// GetAgentMentionScopes 批量返回 userID → 机器人 @提及 可见范围（mention 兜底剔除越圈、
+// 停用或已删除的机器人用）。
+func (f *postUserFacade) GetAgentMentionScopes(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]postapp.AgentMentionScope, error) {
+	scopes, err := f.delegate.GetAgentMentionScopes(ctx, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[uuid.UUID]postapp.AgentMentionScope, len(scopes))
+	for id, sc := range scopes {
+		result[id] = postapp.AgentMentionScope{CircleID: sc.CircleID, Mentionable: sc.Mentionable}
+	}
+	return result, nil
 }
 
 // ===== circle → post =====

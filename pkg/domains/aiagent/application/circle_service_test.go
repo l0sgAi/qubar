@@ -11,6 +11,7 @@ package application
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"interestBar/pkg/conf"
@@ -168,8 +169,10 @@ func (f *fakeAgentRepo) UpdateFields(ctx context.Context, id uuid.UUID, fields m
 	return nil
 }
 
+// SoftDelete 记录调用并模拟 PG：软删后 GetByID 不可见（ErrAgentNotFound）。
 func (f *fakeAgentRepo) SoftDelete(ctx context.Context, id uuid.UUID) error {
 	f.deleted = append(f.deleted, id)
+	delete(f.byID, id)
 	return nil
 }
 
@@ -251,27 +254,51 @@ func (f *fakeCircleRoles) GetCircleMembership(ctx context.Context, circleID, use
 	return m[0], m[1], true, nil
 }
 
-// fakeBotUserCreator 记录调用与圈子绑定参数的机器人账号创建 fake。
+// fakeBotUserCreator 记录调用与圈子绑定 / 可 @ 参数的机器人账号创建 fake。
 type fakeBotUserCreator struct {
-	created   int
-	gotCircle *uuid.UUID // 最后一次 CreateBotUser 收到的 circleID（nil=全局链路）
+	created        int
+	gotCircle      *uuid.UUID // 最后一次 CreateBotUser 收到的 circleID（nil=全局链路）
+	gotMentionable bool       // 最后一次 CreateBotUser 收到的 mentionable
 }
 
-func (f *fakeBotUserCreator) CreateBotUser(ctx context.Context, username, email, avatarURL string, circleID *uuid.UUID) (uuid.UUID, error) {
+func (f *fakeBotUserCreator) CreateBotUser(ctx context.Context, username, email, avatarURL string, circleID *uuid.UUID, mentionable bool) (uuid.UUID, error) {
 	f.created++
 	f.gotCircle = circleID
+	f.gotMentionable = mentionable
 	return uuid.New(), nil
 }
 
-// fakeBotUserScopeCleaner 记录清列调用的机器人圈子绑定清理 fake。
-type fakeBotUserScopeCleaner struct {
-	cleared  []uuid.UUID
-	clearErr error // 非 nil 时模拟清列失败（fail-open 断言用）
+// mentionCall 一次 SetBotUserMentionable 调用。
+type mentionCall struct {
+	userID      uuid.UUID
+	mentionable bool
 }
 
-func (f *fakeBotUserScopeCleaner) ClearBotCircleScope(ctx context.Context, userID uuid.UUID) error {
-	f.cleared = append(f.cleared, userID)
-	return f.clearErr
+// fakeBotUserMentionSyncer 记录可 @ 投影调用的 fake（并发安全：异步重试在后台 goroutine 调用）。
+// errs 按调用顺序依次返回（用尽后返回 nil），用于模拟首次失败、重试成功。
+type fakeBotUserMentionSyncer struct {
+	mu    sync.Mutex
+	calls []mentionCall
+	errs  []error
+}
+
+func (f *fakeBotUserMentionSyncer) SetBotUserMentionable(ctx context.Context, userID uuid.UUID, mentionable bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, mentionCall{userID: userID, mentionable: mentionable})
+	if len(f.errs) > 0 {
+		err := f.errs[0]
+		f.errs = f.errs[1:]
+		return err
+	}
+	return nil
+}
+
+// snapshot 返回调用记录副本。
+func (f *fakeBotUserMentionSyncer) snapshot() []mentionCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]mentionCall(nil), f.calls...)
 }
 
 // fakeUserRoleReader 全局 role 读取 fake（全局链守卫测试用，模拟平台超管 role=1）。

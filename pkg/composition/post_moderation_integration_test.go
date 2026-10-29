@@ -104,8 +104,8 @@ func (anyUserFacade) GetBrief(_ context.Context, id string) (*postapp.UserBrief,
 	return &postapp.UserBrief{ID: id, Username: "u"}, nil
 }
 
-func (anyUserFacade) GetAgentCircleIDs(context.Context, []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
-	return map[uuid.UUID]uuid.UUID{}, nil
+func (anyUserFacade) GetAgentMentionScopes(context.Context, []uuid.UUID) (map[uuid.UUID]postapp.AgentMentionScope, error) {
+	return map[uuid.UUID]postapp.AgentMentionScope{}, nil
 }
 
 type moderationEnv struct {
