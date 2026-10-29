@@ -75,7 +75,8 @@ type MemberRepository interface {
 	ListJoinedByRole(ctx context.Context, userID uuid.UUID, role int16, after *JoinedKey, limit int) ([]CircleMember, error)
 	// CountJoinedByRole 用户以指定角色加入的圈子数（status IN (正常, 禁言)）。
 	CountJoinedByRole(ctx context.Context, userID uuid.UUID, role int16) (int64, error)
-	// JoinCircle 用户加入圈子（含状态机：pending/left/banned → normal 等）。
+	// JoinCircle 用户自助加入圈子：仅公开圈（joinType=0）可从无记录 / 已退出变为正常；
+	// 非公开圈对无记录 / 已退出拒绝且不写库；已在圈 / 拉黑拒绝。不产生待审核（0）记录。
 	// 返回错误信息与旧 model.JoinCircle 一致（"user is already a member..." 等）。
 	JoinCircle(ctx context.Context, circleID, userID uuid.UUID, joinType int16) (*CircleMember, error)
 	// LeaveCircle 用户退出圈子（圈主不能退）。

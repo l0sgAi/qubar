@@ -148,7 +148,7 @@ GET /trending
 | `member_count` | int | 成员数 |
 | `post_count` | int | 累积帖子数 |
 | `hot` | int | 累积热度（终身，参考） |
-| `join_type` | int | 加入方式（0 直接 / 1 审核 / 2 私密） |
+| `join_type` | int | 加入方式（0 公开 / 2 私密；1 审核已下线，#168） |
 | `create_time` | string | 建圈时间（`"2006-01-02 15:04:05"`） |
 | `hot_score` | float | ★ 窗口内 `Σ hot`（真正的趋势信号，建议用它做热度展示） |
 
