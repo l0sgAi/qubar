@@ -162,7 +162,7 @@ func newMembershipFixture(joinType int16) *membershipFixture {
 		publisher: &fakePublisher{},
 		joined:    newFakeJoinedCache(),
 	}
-	f.svc = NewCircleService(f.circles, f.members, fakeBaseCache{}, f.stats, f.joined, nil, f.publisher).(*circleServiceImpl)
+	f.svc = NewCircleService(f.circles, f.members, fakeBaseCache{}, f.stats, f.joined, nil, f.publisher, nil).(*circleServiceImpl)
 	return f
 }
 

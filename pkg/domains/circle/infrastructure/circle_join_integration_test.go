@@ -86,7 +86,7 @@ func newJoinFixture(t *testing.T, joinType int16) *joinFixture {
 	testkit.CleanupKeys(t, redispkg.GetUserJoinedCirclesKey(f.ownerID))
 	f.svc = application.NewCircleService(
 		infrastructure.NewCircleRepository(db), f.members,
-		infrastructure.NewCircleBaseCache(), f.stats, f.joined, nil, f.publisher,
+		infrastructure.NewCircleBaseCache(), f.stats, f.joined, nil, f.publisher, infrastructure.NewPrivateCircleCache(),
 	)
 	return f
 }
