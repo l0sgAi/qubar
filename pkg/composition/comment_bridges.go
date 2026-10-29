@@ -59,6 +59,7 @@ func (f *commentUserFacade) GetAgentMentionScopes(ctx context.Context, userIDs [
 // comment 领域发评论时需要：
 //   - 校验帖子存在性/状态/锁定 → GetPost
 //   - 恢复帖子统计缓存 + 递增评论计数 → RestoreStatsAndIncrCommentCount
+//   - 私密圈可见性（评论读写对非成员 404）→ CanView
 type commentPostLookup struct {
 	delegate postapp.PostService
 }
@@ -78,4 +79,9 @@ func (l *commentPostLookup) GetPost(ctx context.Context, postID uuid.UUID) (*com
 
 func (l *commentPostLookup) RestoreStatsAndIncrCommentCount(ctx context.Context, postID uuid.UUID) error {
 	return l.delegate.RestoreStatsAndIncrCommentCount(ctx, postID)
+}
+
+// CanView 私密圈可见性：复用 post 域统一判断（PostService.CanViewPost）。
+func (l *commentPostLookup) CanView(ctx context.Context, viewerID, postID uuid.UUID) (bool, error) {
+	return l.delegate.CanViewPost(ctx, viewerID, postID)
 }

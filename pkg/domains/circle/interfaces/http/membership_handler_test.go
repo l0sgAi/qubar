@@ -141,7 +141,7 @@ func TestUpdateCircle_JoinTypeApproval400(t *testing.T) {
 func privateCircleErr(t *testing.T) error {
 	t.Helper()
 	circle := &domain.Circle{ID: uuid.MustParse(testCircle), JoinType: domain.CircleJoinTypePrivate, Status: domain.CircleStatusNormal}
-	svc := application.NewCircleService(stubCircleRepo{c: circle}, stubMemberRepo{}, nil, nil, nil, nil, nil)
+	svc := application.NewCircleService(stubCircleRepo{c: circle}, stubMemberRepo{}, nil, nil, nil, nil, nil, nil)
 	err := svc.JoinCircle(context.Background(), uuid.MustParse(testOperator), circle.ID)
 	if !application.IsPrivateCircleErr(err) {
 		t.Fatalf("setup: err = %v, want private circle error", err)
@@ -151,7 +151,7 @@ func privateCircleErr(t *testing.T) error {
 
 func invalidJoinTypeErr(t *testing.T) error {
 	t.Helper()
-	svc := application.NewCircleService(nil, nil, nil, nil, nil, nil, nil)
+	svc := application.NewCircleService(nil, nil, nil, nil, nil, nil, nil, nil)
 	err := svc.CreateCircle(context.Background(), uuid.MustParse(testOperator), application.CreateCircleInput{JoinType: domain.CircleJoinTypeApproval})
 	if !application.IsInvalidJoinTypeErr(err) {
 		t.Fatalf("setup: err = %v, want invalid join_type", err)

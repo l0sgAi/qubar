@@ -45,7 +45,7 @@ func (f *fakeManagedMemberRepo) ListManagedCircles(ctx context.Context, userID u
 
 // newManagedListSvc 构造仅用于 ListManagedCircles 的 service（其余依赖不触达，传 nil）。
 func newManagedListSvc(memberRepo *fakeManagedMemberRepo) *circleServiceImpl {
-	return NewCircleService(nil, memberRepo, nil, nil, nil, nil, nil).(*circleServiceImpl)
+	return NewCircleService(nil, memberRepo, nil, nil, nil, nil, nil, nil).(*circleServiceImpl)
 }
 
 // TestListManagedCircles_PageSizeClamp page<=0→1；size<=0||>100→20；offset=(page-1)*size。

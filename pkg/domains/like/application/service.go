@@ -30,6 +30,8 @@ type PostTarget interface {
 	// IsLiked 用户当前是否已赞该帖（缓存优先，miss 回源 DB 并回填缓存）。
 	// 用于点赞前解析真实状态：用户点赞 ZSET 有 TTL 和容量上限，miss 不等于未赞。
 	IsLiked(ctx context.Context, userID, postID uuid.UUID) (bool, error)
+	// CanView 用户能否看到该帖（私密圈仅成员可见）。帖子点赞与评论点赞都用它校验所属帖子。
+	CanView(ctx context.Context, userID, postID uuid.UUID) (bool, error)
 }
 
 // CommentTarget like 领域需要的评论查询能力。
@@ -136,6 +138,12 @@ func (s *likeServiceImpl) togglePostLike(ctx context.Context, userID, postID uui
 	if !exists {
 		return nil, domain.ErrPostNotFound
 	}
+	// 私密圈非成员按不存在处理：在缓存 / 事件之前拒绝，不产生计数、热度与通知。
+	if visible, err := s.postTarget.CanView(ctx, userID, postID); err != nil {
+		return nil, err
+	} else if !visible {
+		return nil, domain.ErrPostNotFound
+	}
 
 	if err := s.postTarget.RestoreStats(ctx, postID); err != nil {
 		logger.Log.Error("Failed to restore post stats cache: " + err.Error())
@@ -184,6 +192,16 @@ func (s *likeServiceImpl) toggleCommentLike(ctx context.Context, userID, comment
 	}
 	if !exists {
 		return nil, domain.ErrCommentNotFound
+	}
+	// 评论所属帖子在私密圈且用户不是成员：按评论不存在处理（同帖子点赞）。
+	if postIDPtr != nil && s.postTarget != nil {
+		visible, err := s.postTarget.CanView(ctx, userID, *postIDPtr)
+		if err != nil {
+			return nil, err
+		}
+		if !visible {
+			return nil, domain.ErrCommentNotFound
+		}
 	}
 
 	if err := s.commentTarget.RestoreStats(ctx, commentID); err != nil {

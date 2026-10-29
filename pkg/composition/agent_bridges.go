@@ -172,7 +172,8 @@ func (b *agentPostReader) GetPostBrief(ctx context.Context, postID uuid.UUID) (*
 //
 // 机器人以 linked_user_id 身份发评论；帖子校验/清洗/计数/热度事件全部复用
 // comment 域现有链路。机器人评论同样会回调 AgentReplyTrigger，由 aiagent 侧
-// ExistsByLinkedUserID 防回环。
+// ExistsByLinkedUserID 防回环。机器人是系统身份（SystemActor），不受私密圈可见性
+// 校验约束：机器人在私密圈的回复行为另行处理（#170 范围外，保持现状）。
 type agentCommentCreator struct {
 	delegate commentapp.CommentService
 }
@@ -184,6 +185,8 @@ func (b *agentCommentCreator) CreateComment(ctx context.Context, userID uuid.UUI
 		Content:   input.Content,
 		RootID:    input.RootID,
 		ReplyToID: input.ReplyToID,
+
+		SystemActor: true,
 	})
 }
 

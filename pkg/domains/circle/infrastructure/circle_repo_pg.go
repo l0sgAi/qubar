@@ -178,6 +178,18 @@ func (r *circleRepoPG) Update(ctx context.Context, circleID uuid.UUID, f domain.
 	return nil
 }
 
+// ListPrivateIDs 列出全部私密圈 ID（不过滤 deleted：已删圈子的帖子可能仍在 ES）。
+func (r *circleRepoPG) ListPrivateIDs(ctx context.Context) ([]uuid.UUID, error) {
+	var ids []uuid.UUID
+	err := r.db.WithContext(ctx).Model(&domain.Circle{}).
+		Where("join_type = ?", domain.CircleJoinTypePrivate).
+		Pluck("id", &ids).Error
+	if err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 // memberRepoPG 基于 GORM 的 MemberRepository 实现。
 type memberRepoPG struct {
 	db *gorm.DB

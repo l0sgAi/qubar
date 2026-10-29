@@ -120,6 +120,14 @@ func (s *collectServiceImpl) Toggle(ctx context.Context, userID uuid.UUID, input
 	if !exists {
 		return nil, domain.ErrPostNotFound
 	}
+	// 私密圈非成员按不存在处理：在流水 / 缓存 / 事件之前拒绝，不产生计数、热度与通知。
+	visible, err := s.postTarget.CanView(ctx, userID, input.PostID)
+	if err != nil {
+		return nil, err
+	}
+	if !visible {
+		return nil, domain.ErrPostNotFound
+	}
 
 	if err := s.postTarget.RestoreStats(ctx, input.PostID); err != nil {
 		logger.Log.Error("Failed to restore post stats cache: " + err.Error())

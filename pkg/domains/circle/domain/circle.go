@@ -93,3 +93,8 @@ const (
 
 // JoinedMemberStatuses 「已加入」口径：正常 + 禁言（禁言仍计为成员，拉黑/退出/申请中不算）。
 var JoinedMemberStatuses = []int16{MemberStatusNormal, MemberStatusMuted}
+
+// IsJoinedStatus 成员状态是否属于「已加入」口径（正常 / 禁言）。
+func IsJoinedStatus(status int16) bool {
+	return status == MemberStatusNormal || status == MemberStatusMuted
+}

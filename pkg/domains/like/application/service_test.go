@@ -85,6 +85,7 @@ func (p *fakePublisher) PublishCommentLike(_ context.Context, _, commentID, _ uu
 type fakeTarget struct {
 	dbLiked bool
 	dbErr   error
+	hidden  bool // 所属帖子在私密圈且用户不是成员
 }
 
 func (t *fakeTarget) Exists(context.Context, uuid.UUID) (bool, error) { return true, nil }
@@ -95,6 +96,26 @@ func (t *fakeTarget) ExistsWithPostID(context.Context, uuid.UUID) (*uuid.UUID, b
 func (t *fakeTarget) RestoreStats(context.Context, uuid.UUID) error { return nil }
 func (t *fakeTarget) IsLiked(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
 	return t.dbLiked, t.dbErr
+}
+func (t *fakeTarget) CanView(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
+	return !t.hidden, nil
+}
+
+// #170：私密圈非成员点赞帖子 / 评论按不存在处理，不改缓存、不发事件（无计数与通知）。
+func TestToggle_PrivateCircleNonMember_NotFound(t *testing.T) {
+	for typ, want := range map[string]error{"post": domain.ErrPostNotFound, "comment": domain.ErrCommentNotFound} {
+		t.Run(typ, func(t *testing.T) {
+			cache, pub := newFakeLikeCache(), &fakePublisher{}
+			_, err := newTestService(cache, &fakeTarget{hidden: true}, pub).
+				Toggle(context.Background(), uuid.New(), ToggleInput{Type: typ, TargetID: uuid.New()})
+			if !errors.Is(err, want) {
+				t.Fatalf("want %v, got %v", want, err)
+			}
+			if len(cache.setArgs) != 0 || len(pub.events) != 0 {
+				t.Fatalf("want no cache write / event, got set=%v events=%+v", cache.setArgs, pub.events)
+			}
+		})
+	}
 }
 
 func newTestService(cache *fakeLikeCache, target *fakeTarget, pub *fakePublisher) LikeService {

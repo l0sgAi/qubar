@@ -70,7 +70,7 @@ func newJoinedService(t *testing.T) application.CircleService {
 	db := testkit.PG(t)
 	return application.NewCircleService(
 		infrastructure.NewCircleRepository(db), infrastructure.NewMemberRepository(db),
-		nil, nil, infrastructure.NewJoinedCirclesCache(), stubMySearcher{}, nil,
+		nil, nil, infrastructure.NewJoinedCirclesCache(), stubMySearcher{}, nil, nil,
 	)
 }
 

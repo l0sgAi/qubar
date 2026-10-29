@@ -260,6 +260,9 @@ type PostService interface {
 	// GetPostMeta 获取帖子元信息（供 comment/like 领域校验用）。
 	// 未找到返回 nil, nil。
 	GetPostMeta(ctx context.Context, postID uuid.UUID) (*PostMeta, error)
+	// CanViewPost 查看者能否看到该帖（所属圈子非私密圈，或查看者是该圈正常 / 禁言成员；访客视为非成员）。
+	// 供 comment / like / collect 经桥接复用同一判断（见 visibility.go）；帖子不存在返回 false。
+	CanViewPost(ctx context.Context, viewerID, postID uuid.UUID) (bool, error)
 	// GetPostBrief 获取帖子内容摘要（供 aiagent 领域组装机器人回复 prompt 用）。
 	// 未找到返回 nil, nil。
 	GetPostBrief(ctx context.Context, postID uuid.UUID) (*PostBrief, error)
@@ -297,6 +300,8 @@ type PostService interface {
 	SetHistoryRecorder(r domain.HistoryRecorder)
 	// SetAgentTrigger 注入 AI 机器人回复触发端口（未注入则发帖 @机器人 不触发回复）。
 	SetAgentTrigger(t AgentPostTrigger)
+	// SetCircleVisibility 注入私密圈可见性端口（详情 / 举报 / CanViewPost 用）。
+	SetCircleVisibility(v CircleVisibility)
 
 	// ModeratePost 审核 worker 处理一条帖子审核事件（#117），见 moderation.go。
 	// 返回错误表示需要重试（不提交 offset）；帖子不存在 / 已处理返回 nil。
@@ -379,6 +384,7 @@ type postServiceImpl struct {
 	postCountPort CirclePostCountPort
 	historyRec    domain.HistoryRecorder
 	agentTrigger  AgentPostTrigger
+	visibility    CircleVisibility // 私密圈可见性，见 visibility.go
 
 	// AI 审核（#117），见 moderation.go
 	moderator     domain.ContentModerator
@@ -682,6 +688,14 @@ func (s *postServiceImpl) GetPostDetail(ctx context.Context, userID, postID uuid
 	// 权限：作者可看所有状态；其他人只能看已发布
 	// 匿名（userID==uuid.Nil）天然走"非作者"分支，只能看已发布帖——符合预期。
 	if userID != post.UserID && post.Status != domain.PostStatusPublished {
+		return nil, domain.ErrPostNotFound
+	}
+	// 私密圈：非成员（含访客、已不是成员的作者）与"不存在"一致返回 404，不暴露帖子存在。
+	visible, err := s.canViewCircle(ctx, userID, post.CircleID)
+	if err != nil {
+		return nil, err
+	}
+	if !visible {
 		return nil, domain.ErrPostNotFound
 	}
 
