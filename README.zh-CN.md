@@ -368,7 +368,7 @@ docker run -p 8888:8888 -v "$PWD/configs/config.yaml:/etc/qubar/config.yaml:ro" 
 | `POST` | `/circle/manage/transfer` | 转让圈主（owner） |
 | `POST` | `/circle/manage/mute` / `unmute` | 禁言 / 解除禁言（admin+） |
 | `POST` | `/circle/manage/ban` / `unban` | 拉黑 / 解除拉黑（admin+） |
-| `POST` | `/circle/manage/review` | 入圈审核（admin+） |
+| `POST` | `/circle/manage/remove` | 移出成员，不拉黑（admin+） |
 | `PUT` | `/circle/update` | 编辑圈子资料（owner/admin 分字段） |
 
 ### 帖子

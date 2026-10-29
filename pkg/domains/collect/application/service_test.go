@@ -88,10 +88,13 @@ func (p *fakeCollectPublisher) PublishPostCollect(_ context.Context, _, _ uuid.U
 	return nil
 }
 
-type fakePostTarget struct{}
+type fakePostTarget struct{ hidden bool }
 
 func (fakePostTarget) Exists(context.Context, uuid.UUID) (bool, error) { return true, nil }
 func (fakePostTarget) RestoreStats(context.Context, uuid.UUID) error   { return nil }
+func (t fakePostTarget) CanView(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
+	return !t.hidden, nil
+}
 
 func newCollectTestService(cache *fakeCollectCache, repo *fakeCollectRepo, pub *fakeCollectPublisher) CollectService {
 	svc := NewCollectService(cache, repo, pub)
@@ -197,5 +200,21 @@ func TestCollectToggle_PublishFailureRollsBack(t *testing.T) {
 	}
 	if len(cache.setArgs) != 2 || !cache.setArgs[0] || cache.setArgs[1] {
 		t.Fatalf("want cache Set(true) then rollback Set(false), got %v", cache.setArgs)
+	}
+}
+
+// #170：私密圈非成员收藏按不存在处理，不写流水、不改缓存、不发事件。
+func TestCollectToggle_PrivateCircleNonMember_NotFound(t *testing.T) {
+	cache, repo, pub := newFakes()
+	svc := NewCollectService(cache, repo, pub)
+	svc.SetPostTarget(fakePostTarget{hidden: true})
+
+	postID := uuid.New()
+	_, err := svc.Toggle(context.Background(), uuid.New(), ToggleInput{PostID: postID})
+	if !errors.Is(err, domain.ErrPostNotFound) {
+		t.Fatalf("want ErrPostNotFound, got %v", err)
+	}
+	if repo.rows[postID] || len(cache.setArgs) != 0 || len(pub.amounts) != 0 {
+		t.Fatal("hidden post must not touch rows, cache or events")
 	}
 }

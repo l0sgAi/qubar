@@ -38,9 +38,17 @@ type UserFacade interface {
 	GetBriefs(ctx context.Context, userIDs []string) (map[string]UserBrief, error)
 	// GetBrief 获取单个用户精简视图。未找到返回 nil, nil。
 	GetBrief(ctx context.Context, userID string) (*UserBrief, error)
-	// GetAgentCircleIDs 批量返回 userID → 机器人绑定圈子ID（仅含圈内机器人行，
-	// 普通用户/全局机器人不出现在 map）。mention 兜底剔除越圈机器人用。
-	GetAgentCircleIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
+	// GetAgentMentionScopes 批量返回 userID → 机器人 @提及 可见范围（仅含圈内机器人与不可 @ 的
+	// 机器人，普通用户/可 @ 的全局机器人不出现在 map）。mention 兜底剔除越圈、停用或已删除的机器人用。
+	GetAgentMentionScopes(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]AgentMentionScope, error)
+}
+
+// AgentMentionScope 机器人账号的 @提及 可见范围（user 域投影列的跨域视图）。
+type AgentMentionScope struct {
+	// CircleID 绑定圈子ID；uuid.Nil=全局机器人。
+	CircleID uuid.UUID
+	// Mentionable 能否被 @：机器人停用或已删除时为 false。
+	Mentionable bool
 }
 
 // PostInfo comment 领域需要的帖子信息（发评论时校验用）。
@@ -61,6 +69,8 @@ type PostLookup interface {
 	// RestoreStatsAndIncrCommentCount 恢复帖子统计缓存（如果不存在），
 	// 然后递增帖子评论计数（Redis Hash 实时 + DB 同步持久化）。
 	RestoreStatsAndIncrCommentCount(ctx context.Context, postID uuid.UUID) error
+	// CanView 查看者能否看到该帖（私密圈仅成员可见，访客视为非成员；帖子不存在返回 false）。
+	CanView(ctx context.Context, viewerID, postID uuid.UUID) (bool, error)
 }
 
 // AgentReplyTrigger AI 机器人回复触发端口（composition 桥接 aiagent.ReplyService）。
@@ -156,6 +166,9 @@ type CreateCommentInput struct {
 	RootID         *uuid.UUID
 	ReplyToID      *uuid.UUID
 	MentionUserIDs []uuid.UUID // @提及用户（前端选人传入；后端校验存在性/去自/截断）
+	// SystemActor 系统身份发评论（AI 机器人回复链路）：跳过私密圈可见性校验，
+	// 机器人在私密圈的行为另行处理（#170 范围外）。HTTP 入口恒为 false。
+	SystemActor bool
 }
 
 // AutoReplyCommentQuery 机器人自动回复的评论候选查询条件。
@@ -198,7 +211,8 @@ type CommentService interface {
 	// sort 语义同 GetRootComments；replySort 语义同 GetReplies（回复页计算用，
 	// 前端须与拉取回复时的 sort 一致，否则回复游标无效）。
 	// 评论或（回复目标的）根评论不存在/已删除时返回 ErrCommentNotFound。
-	LocateComment(ctx context.Context, commentID uuid.UUID, sort, replySort int) (*CommentLocateResult, error)
+	// 所属帖子对 viewerID 不可见（私密圈非成员）时同样返回 ErrCommentNotFound。
+	LocateComment(ctx context.Context, viewerID, commentID uuid.UUID, sort, replySort int) (*CommentLocateResult, error)
 	// GetCommentDetail 获取单条评论详情。
 	GetCommentDetail(ctx context.Context, userID, commentID uuid.UUID) (*CommentVO, error)
 
@@ -278,6 +292,12 @@ func (s *commentServiceImpl) CreateComment(ctx context.Context, userID uuid.UUID
 	}
 	if post == nil {
 		return uuid.Nil, domain.ErrPostNotFound
+	}
+	// 私密圈非成员按帖子不存在处理（先于状态 / 锁定校验，不泄露帖子信息）。
+	if !input.SystemActor {
+		if err := s.ensurePostVisible(ctx, userID, input.PostID, domain.ErrPostNotFound); err != nil {
+			return uuid.Nil, err
+		}
 	}
 	// 帖子状态必须为"已发布"才能评论（PostStatusPublished=1）
 	if post.Status != 1 {
@@ -392,6 +412,9 @@ func (s *commentServiceImpl) CreateComment(ctx context.Context, userID uuid.UUID
 
 // GetRootComments 获取帖子的顶层评论列表（游标分页）。
 func (s *commentServiceImpl) GetRootComments(ctx context.Context, userID, postID uuid.UUID, sort int, cursor string) (*CommentListResult, error) {
+	if err := s.ensurePostVisible(ctx, userID, postID, domain.ErrPostNotFound); err != nil {
+		return nil, err
+	}
 	comments, nextCursor, hasMore, err := s.repo.GetRootCommentsByCursor(ctx, postID, rootCommentPageSize, sort, cursor)
 	if err != nil {
 		return nil, err
@@ -411,6 +434,9 @@ func (s *commentServiceImpl) GetReplies(ctx context.Context, userID, rootID uuid
 	}
 	if rootComment.RootID != nil {
 		return nil, errNotRootComment
+	}
+	if err := s.ensurePostVisible(ctx, userID, rootComment.PostID, domain.ErrCommentNotFound); err != nil {
+		return nil, err
 	}
 
 	if limit <= 0 {
@@ -432,9 +458,12 @@ func (s *commentServiceImpl) GetReplies(ctx context.Context, userID, rootID uuid
 // 在列表中不可达，同样按不存在处理）→ 根评论在顶层列表的定位游标 → 回复时另算
 // 回复列表定位游标与页码。游标语义：目标所在页的「起始游标」（上一页末条 keyset），
 // 首页为 nil（JSON null），前端不传 cursor 直接拉首页。
-func (s *commentServiceImpl) LocateComment(ctx context.Context, commentID uuid.UUID, sort, replySort int) (*CommentLocateResult, error) {
+func (s *commentServiceImpl) LocateComment(ctx context.Context, viewerID, commentID uuid.UUID, sort, replySort int) (*CommentLocateResult, error) {
 	target, err := s.repo.GetByID(ctx, commentID)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.ensurePostVisible(ctx, viewerID, target.PostID, domain.ErrCommentNotFound); err != nil {
 		return nil, err
 	}
 
@@ -480,6 +509,9 @@ func (s *commentServiceImpl) LocateComment(ctx context.Context, commentID uuid.U
 func (s *commentServiceImpl) GetCommentDetail(ctx context.Context, userID, commentID uuid.UUID) (*CommentVO, error) {
 	comment, err := s.repo.GetByID(ctx, commentID)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.ensurePostVisible(ctx, userID, comment.PostID, domain.ErrCommentNotFound); err != nil {
 		return nil, err
 	}
 
@@ -877,9 +909,9 @@ func (s *commentServiceImpl) publishCommentNotifications(ctx context.Context, us
 }
 
 // filterMentionUserIDs 校验 @提及用户列表：去重 → 去自己 → 存在性（UserFacade）→
-// 剔除越圈机器人 → 截断上限。
-// 圈子作用域兜底：圈内机器人（GetAgentCircleIDs 命中且绑定圈子 ≠ 帖子圈子）静默剔除，
-// 只防手搓 ID 构造请求（@选人列表已在 ES 侧过滤）。校验失败（如 user 服务不可用）
+// 剔除不可 @ 的机器人 → 截断上限。
+// 机器人兜底：越圈的圈内机器人（绑定圈子 ≠ 帖子圈子）与停用/已删除的机器人
+// （GetAgentMentionScopes 命中）静默剔除，防手搓 ID 构造请求与 CDC 延迟窗口（@选人列表已在 ES 侧过滤）。校验失败（如 user 服务不可用）
 // 降级为不发 mention 通知，不影响评论主流程。
 func (s *commentServiceImpl) filterMentionUserIDs(ctx context.Context, actorID uuid.UUID, mentionUserIDs []uuid.UUID, postCircleID uuid.UUID) []uuid.UUID {
 	if len(mentionUserIDs) == 0 || s.userFacade == nil {
@@ -923,29 +955,31 @@ func (s *commentServiceImpl) filterMentionUserIDs(ctx context.Context, actorID u
 		}
 		valid = append(valid, id)
 	}
-	// 越圈机器人剔除先于截断：越圈机器人不占用 MentionMax 配额。
-	valid = stripOutOfScopeAgents(ctx, s.userFacade, valid, postCircleID)
+	// 机器人剔除先于截断：不可 @ 的机器人不占用 MentionMax 配额。
+	valid = stripUnmentionableAgents(ctx, s.userFacade, valid, postCircleID)
 	if len(valid) > max {
 		valid = valid[:max]
 	}
 	return valid
 }
 
-// stripOutOfScopeAgents 从 mention 候选中剔除越圈的圈内机器人：绑定圈子 ≠ postCircleID
-// 的机器人静默移除；普通用户/全局机器人（map 无记录）保留。查询失败 fail-open 跳过剔除。
+// stripUnmentionableAgents 从 mention 候选中剔除不可 @ 的机器人：停用/已删除的机器人，
+// 以及绑定圈子 ≠ postCircleID 的圈内机器人静默移除；普通用户/可 @ 的全局机器人（map 无记录）保留。
+// 查询失败 fail-open 跳过剔除。
 // post/comment 两域同构逻辑（各自 UserFacade 名义类型不同，无法共用实现）。
-func stripOutOfScopeAgents(ctx context.Context, facade UserFacade, candidates []uuid.UUID, postCircleID uuid.UUID) []uuid.UUID {
+func stripUnmentionableAgents(ctx context.Context, facade UserFacade, candidates []uuid.UUID, postCircleID uuid.UUID) []uuid.UUID {
 	if len(candidates) == 0 {
 		return candidates
 	}
-	agentCircles, err := facade.GetAgentCircleIDs(ctx, candidates)
+	scopes, err := facade.GetAgentMentionScopes(ctx, candidates)
 	if err != nil {
-		logger.Log.Warn("Failed to load agent circle scope, skip out-of-scope filtering: " + err.Error())
+		logger.Log.Warn("Failed to load agent mention scope, skip agent filtering: " + err.Error())
 		return candidates
 	}
 	kept := make([]uuid.UUID, 0, len(candidates))
 	for _, id := range candidates {
-		if bound, ok := agentCircles[id]; ok && bound != postCircleID {
+		if scope, ok := scopes[id]; ok &&
+			(!scope.Mentionable || (scope.CircleID != uuid.Nil && scope.CircleID != postCircleID)) {
 			continue
 		}
 		kept = append(kept, id)

@@ -26,8 +26,8 @@ type discoverPostHydrator struct {
 	delegate postapp.PostService
 }
 
-func (h *discoverPostHydrator) Hydrate(ctx context.Context, postIDs []uuid.UUID) ([]recommenddomain.FeedPostItem, error) {
-	items, err := h.delegate.SearchPostsByIDs(ctx, postIDs)
+func (h *discoverPostHydrator) Hydrate(ctx context.Context, viewerID uuid.UUID, postIDs []uuid.UUID) ([]recommenddomain.FeedPostItem, error) {
+	items, err := h.delegate.SearchPostsByIDs(ctx, viewerID, postIDs)
 	if err != nil {
 		return nil, err
 	}

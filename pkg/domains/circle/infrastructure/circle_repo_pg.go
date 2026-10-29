@@ -178,6 +178,18 @@ func (r *circleRepoPG) Update(ctx context.Context, circleID uuid.UUID, f domain.
 	return nil
 }
 
+// ListPrivateIDs 列出全部私密圈 ID（不过滤 deleted：已删圈子的帖子可能仍在 ES）。
+func (r *circleRepoPG) ListPrivateIDs(ctx context.Context) ([]uuid.UUID, error) {
+	var ids []uuid.UUID
+	err := r.db.WithContext(ctx).Model(&domain.Circle{}).
+		Where("join_type = ?", domain.CircleJoinTypePrivate).
+		Pluck("id", &ids).Error
+	if err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 // memberRepoPG 基于 GORM 的 MemberRepository 实现。
 type memberRepoPG struct {
 	db *gorm.DB
@@ -299,56 +311,77 @@ func (r *memberRepoPG) CountJoinedByRole(ctx context.Context, userID uuid.UUID, 
 	return n, err
 }
 
-// JoinCircle 用户加入圈子，与旧 model.JoinCircle 状态机完全一致。
+// JoinCircle 用户自助加入圈子（POST /circle/join 的状态机）。
+//
+//   - 已在圈（正常 1 / 禁言 2）→ "already a member"；拉黑（3）→ "banned"；
+//   - 公开圈（join_type=0）：无记录 → 新建 status=1；已退出（4）→ CAS 改回 1；
+//   - 非公开圈（2=私密；存量 1 已由迁移转为 2，这里同样按非公开兜底）：无记录 / 已退出
+//     一律 "private and requires invitation"，不写库——入圈只能走邀请。
+//
+// 入圈审核已下线：任何路径都只写 status=1，不产生待审核（0）记录；存量 0 按已退出处理。
+// 返回的成员行 CreateTime 为首次加入时间（重新加入不改），service 用作 joined ZSET score。
 func (r *memberRepoPG) JoinCircle(ctx context.Context, circleID, userID uuid.UUID, joinType int16) (*domain.CircleMember, error) {
 	var existing domain.CircleMember
 	err := r.db.WithContext(ctx).
 		Where("circle_id = ? AND user_id = ?", circleID, userID).
 		First(&existing).Error
-	if err == nil {
-		// 已存在成员记录
-		if existing.Status == domain.MemberStatusBanned {
-			return nil, fmt.Errorf("user is banned from this circle")
-		}
-		if existing.Status == domain.MemberStatusNormal {
-			return nil, fmt.Errorf("user is already a member of this circle")
-		}
-		if existing.Status == domain.MemberStatusPending || existing.Status == domain.MemberStatusLeft {
-			existing.Status = domain.MemberStatusNormal
-			if e := r.db.WithContext(ctx).Save(&existing).Error; e != nil {
-				return nil, e
-			}
-			return &existing, nil
-		}
-	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
 
-	var status int16 = domain.MemberStatusNormal
-	switch joinType {
-	case domain.CircleJoinTypeApproval:
-		status = domain.MemberStatusPending
-	case domain.CircleJoinTypePrivate:
-		return nil, fmt.Errorf("this circle is private and requires invitation")
+	if err == nil {
+		switch existing.Status {
+		case domain.MemberStatusNormal, domain.MemberStatusMuted:
+			return nil, errJoinAlreadyMember
+		case domain.MemberStatusBanned:
+			return nil, errJoinBanned
+		}
+		if joinType != domain.CircleJoinTypeDirect {
+			return nil, errJoinPrivate
+		}
+		// CAS 回圈：并发重复加入时只有一个请求命中，另一个视为已是成员（计数副作用不重复）。
+		res := r.db.WithContext(ctx).Model(&domain.CircleMember{}).
+			Where("id = ? AND status = ?", existing.ID, existing.Status).
+			Updates(map[string]interface{}{"status": domain.MemberStatusNormal, "mute_end_time": nil})
+		if res.Error != nil {
+			return nil, res.Error
+		}
+		if res.RowsAffected == 0 {
+			return nil, errJoinAlreadyMember
+		}
+		existing.Status = domain.MemberStatusNormal
+		existing.MuteEndTime = nil
+		return &existing, nil
 	}
 
+	if joinType != domain.CircleJoinTypeDirect {
+		return nil, errJoinPrivate
+	}
 	member := domain.CircleMember{
+		ID:        sharedomain.NewID(),
 		CircleID:  circleID,
 		UserID:    userID,
 		Role:      domain.MemberRoleMember,
-		Status:    status,
+		Status:    domain.MemberStatusNormal,
 		IsTop:     0,
 		IsDisturb: 0,
 	}
-	if member.ID == uuid.Nil {
-		member.ID = sharedomain.NewID()
-	}
 	if err := r.db.WithContext(ctx).Create(&member).Error; err != nil {
+		// 并发首次加入撞 idx_member_unique(circle_id, user_id)：另一个请求已建好记录。
+		if strings.Contains(err.Error(), "idx_member_unique") {
+			return nil, errJoinAlreadyMember
+		}
 		return nil, err
 	}
 	return &member, nil
 }
+
+// JoinCircle 的错误文案与 application.mapJoinLeaveError 的字符串匹配保持一致。
+var (
+	errJoinAlreadyMember = errors.New("user is already a member of this circle")
+	errJoinBanned        = errors.New("user is banned from this circle")
+	errJoinPrivate       = errors.New("this circle is private and requires invitation")
+)
 
 // LeaveCircle 与旧 model.LeaveCircle 一致。
 func (r *memberRepoPG) LeaveCircle(ctx context.Context, circleID, userID uuid.UUID) error {

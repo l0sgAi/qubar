@@ -84,7 +84,7 @@ func (s *postServiceImpl) SetReportRepository(r domain.PostReportRepository) { s
 
 // ReportPost 举报帖子（实现 PostService）。
 //
-// 顺序：校验原因 → 读帖子（不存在 / 未发布 404）→ 不能举报自己 → 24 小时上限 → 写入（重复 409）→ 达到阈值通知圈管。
+// 顺序：校验原因 → 读帖子（不存在 / 未发布 / 私密圈不可见 404）→ 不能举报自己 → 24 小时上限 → 写入（重复 409）→ 达到阈值通知圈管。
 func (s *postServiceImpl) ReportPost(ctx context.Context, reporterID uuid.UUID, in ReportPostInput) error {
 	if s.reportRepo == nil {
 		return errors.New("post report repository is not configured")
@@ -101,6 +101,13 @@ func (s *postServiceImpl) ReportPost(ctx context.Context, reporterID uuid.UUID, 
 	}
 	if post.Status != domain.PostStatusPublished {
 		return errReportPostNotFound // 审核中 / 驳回 / 屏蔽 / 草稿都不能举报，也不泄露其存在
+	}
+	visible, err := s.canViewCircle(ctx, reporterID, post.CircleID)
+	if err != nil {
+		return err
+	}
+	if !visible {
+		return errReportPostNotFound // 私密圈非成员同样按不存在处理
 	}
 	if post.UserID == reporterID {
 		return errCannotReportOwnPost

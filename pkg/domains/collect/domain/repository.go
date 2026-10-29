@@ -13,6 +13,8 @@ type PostTarget interface {
 	// RestoreStats 恢复帖子统计缓存（如果不存在）。
 	// 用于收藏前确保 Redis stats Hash 存在，避免 Lua 脚本读到空 stats。
 	RestoreStats(ctx context.Context, postID uuid.UUID) error
+	// CanView 用户能否看到该帖（私密圈仅成员可见）。
+	CanView(ctx context.Context, userID, postID uuid.UUID) (bool, error)
 }
 
 // PostCollectCache 帖子收藏缓存（Redis ZSET + stats Hash + Lua 原子设值）。

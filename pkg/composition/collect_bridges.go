@@ -34,11 +34,16 @@ func (t *collectPostTarget) RestoreStats(ctx context.Context, postID uuid.UUID) 
 	return t.delegate.RestoreStats(ctx, postID)
 }
 
+// CanView 私密圈可见性：复用 post 域统一判断（PostService.CanViewPost）。
+func (t *collectPostTarget) CanView(ctx context.Context, userID, postID uuid.UUID) (bool, error) {
+	return t.delegate.CanViewPost(ctx, userID, postID)
+}
+
 // collectPostFetcher 把 post.application.PostService 适配为 collect.application.PostFetcher。
 type collectPostFetcher struct {
 	delegate postapp.PostService
 }
 
-func (f *collectPostFetcher) GetPostsByIDs(ctx context.Context, postIDs []uuid.UUID) ([]postapp.PostListItem, error) {
-	return f.delegate.GetPostsByIDs(ctx, postIDs)
+func (f *collectPostFetcher) GetPostsByIDs(ctx context.Context, viewerID uuid.UUID, postIDs []uuid.UUID) ([]postapp.PostListItem, error) {
+	return f.delegate.GetPostsByIDs(ctx, viewerID, postIDs)
 }

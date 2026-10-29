@@ -25,6 +25,14 @@ const (
 	// 注：前缀从 user_joined_circles: 改为 circle:joined:，避免旧 string 类型 key
 	// 残留导致 ZSET 操作 WRONGTYPE（旧 key 任其 24h TTL 过期）。
 	UserJoinedCirclesPrefix = "circle:joined:"
+
+	// CirclePrivateIDsKey 私密圈（join_type=2）ID 集合缓存key（全局唯一）
+	// string: JSON 数组（circle_id 字符串），空集合存 "[]"；TTL CirclePrivateIDsTTL。
+	// 建圈、修改 join_type 时 DEL 失效；帖子 / 评论可见性过滤读取（私密圈很少，集合很小）。
+	CirclePrivateIDsKey = "circle:private:ids"
+
+	// CirclePrivateIDsTTL 私密圈 ID 集合缓存有效期（兜底失效与回填并发留下的旧值）。
+	CirclePrivateIDsTTL = 5 * time.Minute
 )
 
 // CircleBaseInfo 圈子基础信息（不含统计信息）

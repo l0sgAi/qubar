@@ -49,8 +49,9 @@ type PostListResponse struct {
 // circleID: 圈子ID，为0时搜索所有圈子
 // size: 每页数量，默认 20
 // searchAfter: 上一页返回的 search_after 值，用于获取下一页
+// excludeCircleIDs: 查看者不可见的私密圈（must_not，见 excludeCircles）
 // 返回：帖子列表响应（包含帖子列表、总数、分页信息）
-func SearchPosts(ctx context.Context, keyword string, circleID uuid.UUID, size int, searchAfter []interface{}) (*PostListResponse, error) {
+func SearchPosts(ctx context.Context, keyword string, circleID uuid.UUID, excludeCircleIDs []uuid.UUID, size int, searchAfter []interface{}) (*PostListResponse, error) {
 	// 默认每页 20 条
 	if size <= 0 || size > 100 {
 		size = 20
@@ -146,6 +147,8 @@ func SearchPosts(ctx context.Context, keyword string, circleID uuid.UUID, size i
 		searchQuery["search_after"] = searchAfter
 	}
 
+	excludeCircles(searchQuery, excludeCircleIDs)
+
 	queryJSON, err := json.Marshal(searchQuery)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal query: %w", err)
@@ -176,7 +179,7 @@ func SearchPosts(ctx context.Context, keyword string, circleID uuid.UUID, size i
 //
 // postIDs: 帖子ID列表(必传,核心过滤);用 terms 查询,过滤 deleted=0 + status=1。
 // size: 上限(<= len(postIDs))。顺序不保证(调用方按浏览时间重排),失效帖静默过滤。
-func SearchPostsByIDs(ctx context.Context, postIDs []string, size int) (*PostListResponse, error) {
+func SearchPostsByIDs(ctx context.Context, postIDs []string, excludeCircleIDs []uuid.UUID, size int) (*PostListResponse, error) {
 	if len(postIDs) == 0 {
 		return &PostListResponse{}, nil
 	}
@@ -197,6 +200,8 @@ func SearchPostsByIDs(ctx context.Context, postIDs []string, size int) (*PostLis
 		"size": size,
 		// 不设 sort:顺序由调用方按浏览时间(ZSET 序)重排
 	}
+
+	excludeCircles(searchQuery, excludeCircleIDs)
 
 	queryJSON, err := json.Marshal(searchQuery)
 	if err != nil {
@@ -231,7 +236,7 @@ func SearchPostsByIDs(ctx context.Context, postIDs []string, size int) (*PostLis
 // 失效帖(deleted/status)静默过滤。
 //
 // postIDs/keyword 任一为空 → 空结果(调用方已保证非空,此处防御)。
-func SearchPostsByIDsAndKeyword(ctx context.Context, postIDs []string, keyword string, size, offset int) (*PostListResponse, error) {
+func SearchPostsByIDsAndKeyword(ctx context.Context, postIDs []string, keyword string, excludeCircleIDs []uuid.UUID, size, offset int) (*PostListResponse, error) {
 	if len(postIDs) == 0 || keyword == "" {
 		return &PostListResponse{}, nil
 	}
@@ -263,6 +268,8 @@ func SearchPostsByIDsAndKeyword(ctx context.Context, postIDs []string, keyword s
 			{"id": map[string]interface{}{"order": "desc"}},
 		},
 	}
+
+	excludeCircles(searchQuery, excludeCircleIDs)
 
 	queryJSON, err := json.Marshal(searchQuery)
 	if err != nil {
@@ -304,7 +311,7 @@ func SearchPostsByIDsAndKeyword(ctx context.Context, postIDs []string, keyword s
 // 与 SearchPosts 的差异：
 //   - 过滤条件用 user_id（而非 circle_id）；
 //   - 关键字 multi_match 增加 fuzziness=AUTO，容忍拼写错误。
-func searchUserPostsInternal(ctx context.Context, userID uuid.UUID, keyword string, publishedOnly bool, size int, searchAfter []interface{}) (*PostListResponse, error) {
+func searchUserPostsInternal(ctx context.Context, userID uuid.UUID, keyword string, publishedOnly bool, excludeCircleIDs []uuid.UUID, size int, searchAfter []interface{}) (*PostListResponse, error) {
 	// 默认每页 20 条
 	if size <= 0 || size > 100 {
 		size = 20
@@ -398,6 +405,8 @@ func searchUserPostsInternal(ctx context.Context, userID uuid.UUID, keyword stri
 		searchQuery["search_after"] = searchAfter
 	}
 
+	excludeCircles(searchQuery, excludeCircleIDs)
+
 	queryJSON, err := json.Marshal(searchQuery)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal query: %w", err)
@@ -433,7 +442,7 @@ func searchUserPostsInternal(ctx context.Context, userID uuid.UUID, keyword stri
 //
 // 不过滤 status：作者可见自己全部状态（草稿/审核/已发布/拒绝/封禁），仅排除已删除。
 func SearchMyPosts(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostListResponse, error) {
-	return searchUserPostsInternal(ctx, userID, keyword, false, size, searchAfter)
+	return searchUserPostsInternal(ctx, userID, keyword, false, nil, size, searchAfter)
 }
 
 // SearchUserPosts 搜索指定用户已发布的帖子（查看「他人」发帖记录用）。
@@ -444,8 +453,10 @@ func SearchMyPosts(ctx context.Context, userID uuid.UUID, keyword string, size i
 // 返回：帖子列表响应（包含帖子列表、总数、分页信息）
 //
 // 与 SearchMyPosts 的差异：强制 status=1（仅已发布），他人不可见对方草稿/审核/拒绝/封禁帖。
-func SearchUserPosts(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostListResponse, error) {
-	return searchUserPostsInternal(ctx, userID, keyword, true, size, searchAfter)
+//
+// excludeCircleIDs：查看者不可见的私密圈（must_not，见 excludeCircles）。
+func SearchUserPosts(ctx context.Context, userID uuid.UUID, keyword string, excludeCircleIDs []uuid.UUID, size int, searchAfter []interface{}) (*PostListResponse, error) {
+	return searchUserPostsInternal(ctx, userID, keyword, true, excludeCircleIDs, size, searchAfter)
 }
 
 // parsePostSearchResponse 解析帖子搜索响应
@@ -579,7 +590,9 @@ type ActiveCircleAggResult struct {
 //
 // 前置条件：post 索引 circle_id 须为 keyword、create_time 须为 date
 // （见 docs/active-circles-design.md §4.2）。
-func AggregateActiveCircles(ctx context.Context, size, offset int) (*ActiveCircleAggResult, error) {
+//
+// excludeCircleIDs：不参与聚合的圈子（私密圈，活跃榜不展示）。
+func AggregateActiveCircles(ctx context.Context, size, offset int, excludeCircleIDs []uuid.UUID) (*ActiveCircleAggResult, error) {
 	if size <= 0 || size > 100 {
 		size = 20
 	}
@@ -624,6 +637,8 @@ func AggregateActiveCircles(ctx context.Context, size, offset int) (*ActiveCircl
 			},
 		},
 	}
+
+	excludeCircles(searchQuery, excludeCircleIDs)
 
 	queryJSON, err := json.Marshal(searchQuery)
 	if err != nil {
@@ -704,7 +719,9 @@ func parseActiveCirclesResponse(res *esapi.Response) (*ActiveCircleAggResult, er
 // circleIDs 为 nil/空 → 全局检索；非空 → terms 过滤（供 C1 兴趣圈子 / C3 行为圈子路）。
 // sort: "hot"=rank_score 时间衰减（hot/(age_h+2)^0.8），"latest"=create_time desc。
 // 供 recommend 域 C1/C2/C3/C4 召回路；返回 PostListResponse，调用方提取 PostDoc.ID 做纯 ID 合并。
-func SearchHomeFeed(ctx context.Context, sort string, circleIDs []uuid.UUID, size int, searchAfter []interface{}) (*PostListResponse, error) {
+//
+// excludeCircleIDs：查看者不可见的私密圈（must_not，见 excludeCircles）。
+func SearchHomeFeed(ctx context.Context, sort string, circleIDs, excludeCircleIDs []uuid.UUID, size int, searchAfter []interface{}) (*PostListResponse, error) {
 	if size <= 0 || size > 100 {
 		size = 20
 	}
@@ -764,6 +781,8 @@ func SearchHomeFeed(ctx context.Context, sort string, circleIDs []uuid.UUID, siz
 	if len(searchAfter) > 0 {
 		searchQuery["search_after"] = searchAfter
 	}
+
+	excludeCircles(searchQuery, excludeCircleIDs)
 
 	queryJSON, err := json.Marshal(searchQuery)
 	if err != nil {

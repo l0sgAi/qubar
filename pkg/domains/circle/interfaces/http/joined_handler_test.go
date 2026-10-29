@@ -31,7 +31,7 @@ func (f *fakeSvcForJoined) GetMyCircles(ctx context.Context, userID uuid.UUID, k
 	return &application.MyCircleSearchResult{Circles: []application.MyCircleDoc{}, Size: size}, nil
 }
 
-func (f *fakeSvcForJoined) GetUserCircles(ctx context.Context, targetUserID uuid.UUID, keyword string, role int16, size int, cursor string) (*application.MyCircleSearchResult, error) {
+func (f *fakeSvcForJoined) GetUserCircles(ctx context.Context, viewerID, targetUserID uuid.UUID, keyword string, role int16, size int, cursor string) (*application.MyCircleSearchResult, error) {
 	f.called, f.gotRole = true, role
 	return &application.MyCircleSearchResult{Circles: []application.MyCircleDoc{}, Size: size}, nil
 }
@@ -72,7 +72,7 @@ func TestJoinedCircles_RolePassThrough(t *testing.T) {
 // TestJoinedCircles_InvalidRole400 非数字 role（绑定失败）与越界 role（service 校验）均 400。
 func TestJoinedCircles_InvalidRole400(t *testing.T) {
 	// 越界值由真实 service 校验（校验先于任何依赖访问，依赖传 nil 即可）。
-	realSvc := application.NewCircleService(nil, nil, nil, nil, nil, nil, nil)
+	realSvc := application.NewCircleService(nil, nil, nil, nil, nil, nil, nil, nil)
 	for _, query := range []string{"role=abc", "role=5", "role=-1", "role=40"} {
 		for _, ep := range []string{"my", "user"} {
 			h := NewHandler(realSvc)

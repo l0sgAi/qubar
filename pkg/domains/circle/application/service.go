@@ -264,6 +264,28 @@ type CircleDetailVO struct {
 	MemberMuteEndTime *time.Time `json:"member_mute_end_time,omitempty"`
 	MemberIsTop       int16      `json:"member_is_top,omitempty"`
 	MemberIsDisturb   int16      `json:"member_is_disturb,omitempty"`
+
+	// Restricted 私密圈对非成员（含访客）只给精简视图：service 已清空其余字段，
+	// handler 按此标志改用 RestrictedView 序列化，不输出简介 / 圈规 / 创建人等。
+	Restricted bool `json:"-"`
+}
+
+// CircleRestrictedVO 私密圈对非成员的精简详情。
+type CircleRestrictedVO struct {
+	ID          uuid.UUID `json:"id"`
+	Name        string    `json:"name"`
+	AvatarURL   string    `json:"avatar_url,omitempty"`
+	JoinType    int16     `json:"join_type"`
+	MemberCount int       `json:"member_count"`
+	Restricted  bool      `json:"restricted"` // 恒 true：前端据此展示「私密圈，仅成员可见」
+}
+
+// RestrictedView 精简视图（仅 Restricted=true 时使用）。
+func (vo *CircleDetailVO) RestrictedView() *CircleRestrictedVO {
+	return &CircleRestrictedVO{
+		ID: vo.ID, Name: vo.Name, AvatarURL: vo.AvatarURL,
+		JoinType: vo.JoinType, MemberCount: vo.MemberCount, Restricted: true,
+	}
 }
 
 // CircleSearcher 圈子搜索抽象（由 infrastructure 提供 ES 实现）。
@@ -271,8 +293,8 @@ type CircleSearcher interface {
 	Search(ctx context.Context, keyword string, size int, searchAfter []interface{}) (*CircleSearchResult, error)
 	SearchMy(ctx context.Context, circleIDs []uuid.UUID, keyword string, size int, searchAfter []interface{}) (*MyCircleSearchResult, error)
 	SearchCirclePosts(ctx context.Context, circleID uuid.UUID, sortType, size int, searchAfter []interface{}) (*RawCirclePostResult, error)
-	// SearchActive 近期活跃圈子聚合（按窗口内发帖数排序，offset 分页）。
-	SearchActive(ctx context.Context, size, offset int) (*RawActiveCircleResult, error)
+	// SearchActive 近期活跃圈子聚合（按窗口内发帖数排序，offset 分页）；excludeCircleIDs 不参与聚合（私密圈）。
+	SearchActive(ctx context.Context, size, offset int, excludeCircleIDs []uuid.UUID) (*RawActiveCircleResult, error)
 	// SearchRandom 随机圈子查询（random_score 无 seed，每次结果不同；不分页）。
 	SearchRandom(ctx context.Context, size int) (*RawRandomCircleResult, error)
 }
@@ -281,15 +303,18 @@ type CircleSearcher interface {
 type CircleService interface {
 	CreateCircle(ctx context.Context, userID uuid.UUID, input CreateCircleInput) error
 	GetCircleDetail(ctx context.Context, userID, circleID uuid.UUID) (*CircleDetailVO, error)
-	JoinCircle(ctx context.Context, userID, circleID uuid.UUID) (joined bool, pending bool, err error)
+	// JoinCircle 自助加入圈子（仅公开圈；私密圈返回 IsPrivateCircleErr，入圈走邀请）。
+	JoinCircle(ctx context.Context, userID, circleID uuid.UUID) error
 	LeaveCircle(ctx context.Context, userID, circleID uuid.UUID) error
 	SearchCircles(ctx context.Context, keyword string, size int, searchAfter []interface{}) (*CircleSearchResult, error)
 	// GetMyCircles 获取我加入的圈子列表（含我的成员状态）。role 为角色筛选：0 全部，10/20/30 单选。
 	GetMyCircles(ctx context.Context, userID uuid.UUID, keyword string, role int16, size int, cursor string) (*MyCircleSearchResult, error)
 	// GetUserCircles 获取任意用户加入的圈子列表（查看「他人」加入的圈子）。
 	// 逻辑与 GetMyCircles 一致，仅 userID 来源不同（query 参数 vs 当前会话），且不回填成员状态。
-	GetUserCircles(ctx context.Context, targetUserID uuid.UUID, keyword string, role int16, size int, cursor string) (*MyCircleSearchResult, error)
-	GetCirclePosts(ctx context.Context, circleID uuid.UUID, sortType, size int, searchAfter []interface{}) (*CirclePostResult, error)
+	// 私密圈只在查看者本人也是该圈成员时展示（访客 viewerID==uuid.Nil 一律不展示）。
+	GetUserCircles(ctx context.Context, viewerID, targetUserID uuid.UUID, keyword string, role int16, size int, cursor string) (*MyCircleSearchResult, error)
+	// GetCirclePosts 圈内帖子列表。私密圈对非成员（含访客 viewerID==uuid.Nil）返回 errCircleContentForbidden。
+	GetCirclePosts(ctx context.Context, viewerID, circleID uuid.UUID, sortType, size int, searchAfter []interface{}) (*CirclePostResult, error)
 	// ListActiveCircles 近期活跃圈子分页列表（按近 N 天发帖数排序）。
 	ListActiveCircles(ctx context.Context, size, offset int) (*ActiveCircleResult, error)
 	// ListRandomCircles 随机圈子列表（侧栏推荐；返回格式同 ActiveCircleResult，
@@ -305,7 +330,7 @@ type CircleService interface {
 	// 登录即可调用：查询本身即权限过滤（WHERE role IN (20,30)），无 ensureAdmin 式门槛；
 	// keyword 非空时按圈子 name/description 子串过滤；含非正常状态圈子（UI 按 status 置灰）。
 	ListManagedCircles(ctx context.Context, operatorID uuid.UUID, keyword string, page, size int) (*ManagedCircleListResult, error)
-	// ListCircleMembers 管理端成员列表（admin+，可见全部状态含待审/拉黑，keyset 分页）。
+	// ListCircleMembers 管理端成员列表（admin+，可见全部状态含拉黑/退出，keyset 分页）。
 	// role/status 传 -1 表示不过滤；keyword 非空时按用户名搜索（拼写容错，
 	// 最多解析 100 个候选用户，超出时结果 Truncated=true），游标翻页须带同一 keyword。
 	ListCircleMembers(ctx context.Context, operatorID, circleID uuid.UUID, role, status int16, keyword, cursor string, size int) (*CircleMemberListResult, error)
@@ -319,10 +344,11 @@ type CircleService interface {
 	UnmuteMember(ctx context.Context, operatorID, circleID, targetUserID uuid.UUID) error
 	// BanMember 拉黑/踢出（admin+；normal/muted → banned，member_count-1）。
 	BanMember(ctx context.Context, operatorID, circleID, targetUserID uuid.UUID) error
-	// UnbanMember 解除拉黑（admin+；banned → left，需重新申请加入）。
+	// RemoveMember 移出成员（admin+；normal/muted → left，member_count-1）。不拉黑：
+	// 公开圈可再直接加入，私密圈需重新邀请。
+	RemoveMember(ctx context.Context, operatorID, circleID, targetUserID uuid.UUID) error
+	// UnbanMember 解除拉黑（admin+；banned → left；公开圈可再直接加入，私密圈需重新邀请）。
 	UnbanMember(ctx context.Context, operatorID, circleID, targetUserID uuid.UUID) error
-	// ReviewJoinRequest 入圈审核（admin+；pending → normal/left）。
-	ReviewJoinRequest(ctx context.Context, operatorID, circleID, targetUserID uuid.UUID, approve bool) error
 	// UpdateCircleProfile 编辑圈子资料（name/slug/join_type/category_id 仅圈主，其余 admin+）。
 	UpdateCircleProfile(ctx context.Context, operatorID, circleID uuid.UUID, input UpdateCircleProfileInput) error
 
@@ -348,6 +374,7 @@ type circleServiceImpl struct {
 	userFacade   UserFacade         // 可为 nil（GetCirclePosts 用）
 	postFetcher  PostMediaFetcher   // 可为 nil（GetCirclePosts 用）
 	agentCounter CircleAgentCounter // 可为 nil（ListManagedCircles agent_count 降级 0）
+	visibility   *circleVisibility  // 私密圈可见性（详情精简 / 圈内帖子 403 / 私密圈集合失效）
 }
 
 // NewCircleService 构造 CircleService。
@@ -362,6 +389,7 @@ func NewCircleService(
 	joinedCache domain.JoinedCirclesCache,
 	searcher CircleSearcher,
 	publisher domain.CircleEventPublisher,
+	privateCache domain.PrivateCircleCache,
 ) CircleService {
 	return &circleServiceImpl{
 		repo:        repo,
@@ -371,6 +399,7 @@ func NewCircleService(
 		joinedCache: joinedCache,
 		searcher:    searcher,
 		publisher:   publisher,
+		visibility:  newCircleVisibility(repo, memberRepo, privateCache),
 	}
 }
 
@@ -422,10 +451,15 @@ func (s *circleServiceImpl) SetPostFetcher(f PostMediaFetcher) { s.postFetcher =
 // SetAgentCounter 注入圈内 AI 代理计数端口（composition 层在装配后调用）。
 func (s *circleServiceImpl) SetAgentCounter(c CircleAgentCounter) { s.agentCounter = c }
 
+// validJoinType 可写入的加入方式：0 公开 / 2 私密。1（需审核）已下线，创建 / 编辑都拒绝。
+func validJoinType(t int16) bool {
+	return t == domain.CircleJoinTypeDirect || t == domain.CircleJoinTypePrivate
+}
+
 // CreateCircle 创建圈子。
 func (s *circleServiceImpl) CreateCircle(ctx context.Context, userID uuid.UUID, input CreateCircleInput) error {
-	// 校验 join_type
-	if input.JoinType < 0 || input.JoinType > 2 {
+	// 校验 join_type（只接受 0 公开 / 2 私密；1 需审核已下线）
+	if !validJoinType(input.JoinType) {
 		return errInvalidJoinType
 	}
 
@@ -474,6 +508,9 @@ func (s *circleServiceImpl) CreateCircle(ctx context.Context, userID uuid.UUID, 
 
 	// repo.Create 在事务内把创建者设为圈主成员（status=normal），增量写 ZSET。
 	s.tryAddJoined(ctx, userID, circle.ID, time.Now().UnixMilli())
+	if circle.JoinType == domain.CircleJoinTypePrivate {
+		s.visibility.invalidatePrivateIDs(ctx)
+	}
 	return nil
 }
 
@@ -518,6 +555,13 @@ func (s *circleServiceImpl) GetCircleDetail(ctx context.Context, userID, circleI
 	if err != nil && err != domain.ErrMemberNotFound {
 		return nil, err
 	}
+	// 私密圈对非成员（访客 / 申请中 / 已退出 / 被移出）只给精简视图。
+	if base.JoinType == domain.CircleJoinTypePrivate && (member == nil || !domain.IsJoinedStatus(member.Status)) {
+		return &CircleDetailVO{
+			ID: base.ID, Name: base.Name, AvatarURL: base.AvatarURL,
+			JoinType: base.JoinType, MemberCount: memberCount, Restricted: true,
+		}, nil
+	}
 	if member != nil {
 		vo.IsJoined = true
 		vo.MemberRole = member.Role
@@ -530,38 +574,31 @@ func (s *circleServiceImpl) GetCircleDetail(ctx context.Context, userID, circleI
 	return vo, nil
 }
 
-// JoinCircle 加入圈子。
-// 返回值：joined=是否直接加入成功，pending=是否进入待审核。
-func (s *circleServiceImpl) JoinCircle(ctx context.Context, userID, circleID uuid.UUID) (bool, bool, error) {
+// JoinCircle 加入圈子（自助加入，仅公开圈；状态机见 memberRepo.JoinCircle）。
+// 私密圈只能经邀请入圈，此处返回 errPrivateCircle 且不改数据。
+func (s *circleServiceImpl) JoinCircle(ctx context.Context, userID, circleID uuid.UUID) error {
 	circle, err := s.repo.GetByID(ctx, circleID)
 	if err != nil {
-		return false, false, err
+		return err
 	}
 	if circle.Status != domain.CircleStatusNormal {
-		return false, false, errCircleNotAvailable
+		return errCircleNotAvailable
 	}
 
 	member, err := s.memberRepo.JoinCircle(ctx, circleID, userID, circle.JoinType)
 	if err != nil {
-		return false, false, mapJoinLeaveError(err)
+		return mapJoinLeaveError(err)
 	}
 
-	if member.Status == domain.MemberStatusNormal {
-		// 直接加入成功：更新计数缓存 + 发布事件 + 清用户加入列表缓存
-		if err := s.incrMemberCountWithRecovery(ctx, circleID); err != nil {
-			logger.Log.Error("Failed to update Redis member count: " + err.Error())
-		}
-		if err := s.publisher.PublishMemberCount(ctx, circleID, 1); err != nil {
-			logger.Log.Error("Failed to publish join message: " + err.Error())
-		}
-		s.tryAddJoined(ctx, userID, circleID, member.CreateTime.UnixMilli())
-		return true, false, nil
+	// 加入成功（repo 只会返回 status=normal）：更新计数缓存 + 发布事件 + 写 joined ZSET。
+	if err := s.incrMemberCountWithRecovery(ctx, circleID); err != nil {
+		logger.Log.Error("Failed to update Redis member count: " + err.Error())
 	}
-
-	if member.Status == domain.MemberStatusPending {
-		return false, true, nil
+	if err := s.publisher.PublishMemberCount(ctx, circleID, 1); err != nil {
+		logger.Log.Error("Failed to publish join message: " + err.Error())
 	}
-	return false, false, nil
+	s.tryAddJoined(ctx, userID, circleID, member.CreateTime.UnixMilli())
+	return nil
 }
 
 // LeaveCircle 退出圈子。
@@ -605,8 +642,13 @@ func (s *circleServiceImpl) SearchCircles(ctx context.Context, keyword string, s
 // 1. searcher.SearchActive 在 post 索引聚合得 ranked circleIDs + 近期发帖数；
 // 2. repo.GetByIDs 批量取明细（name/counts/hot），保留聚合顺序；
 // 3. 跳过已删除（GetByIDs 已过滤 deleted=0）与非正常状态圈子。
+// 私密圈在聚合阶段排除（与 /circle/list、/circle/random 一致，不在公开榜单暴露私圈）。
 func (s *circleServiceImpl) ListActiveCircles(ctx context.Context, size, offset int) (*ActiveCircleResult, error) {
-	raw, err := s.searcher.SearchActive(ctx, size, offset)
+	privateIDs, err := s.visibility.privateIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := s.searcher.SearchActive(ctx, size, offset, privateIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -740,10 +782,34 @@ func (s *circleServiceImpl) GetMyCircles(ctx context.Context, userID uuid.UUID, 
 }
 
 // GetUserCircles 获取任意用户加入的圈子列表（查看「他人」加入的圈子；不回填成员状态）。
-func (s *circleServiceImpl) GetUserCircles(ctx context.Context, targetUserID uuid.UUID, keyword string, role int16, size int, cursor string) (*MyCircleSearchResult, error) {
-	return s.loadJoinedCircles(ctx, joinedListQuery{
+//
+// 私密圈按查看者过滤（底层 ZSET / 游标不变，被过滤的页可能不足 size 条）。
+func (s *circleServiceImpl) GetUserCircles(ctx context.Context, viewerID, targetUserID uuid.UUID, keyword string, role int16, size int, cursor string) (*MyCircleSearchResult, error) {
+	res, err := s.loadJoinedCircles(ctx, joinedListQuery{
 		userID: targetUserID, keyword: keyword, role: role, size: size, cursor: cursor,
 	})
+	if err != nil || len(res.Circles) == 0 {
+		return res, err
+	}
+	hidden, err := s.visibility.HiddenCircleIDs(ctx, viewerID)
+	if err != nil {
+		return nil, err
+	}
+	if len(hidden) == 0 {
+		return res, nil
+	}
+	hiddenSet := make(map[string]struct{}, len(hidden))
+	for _, id := range hidden {
+		hiddenSet[id.String()] = struct{}{}
+	}
+	visible := res.Circles[:0]
+	for _, c := range res.Circles {
+		if _, ok := hiddenSet[c.ID]; !ok {
+			visible = append(visible, c)
+		}
+	}
+	res.Circles = visible
+	return res, nil
 }
 
 // loadJoinedCircles 加载指定用户加入的圈子列表（GetMyCircles / GetUserCircles 共用）。
@@ -914,7 +980,14 @@ func (s *circleServiceImpl) tryAddJoined(ctx context.Context, userID, circleID u
 }
 
 // GetCirclePosts 获取圈内帖子列表（组装作者/圈子/图片信息）。
-func (s *circleServiceImpl) GetCirclePosts(ctx context.Context, circleID uuid.UUID, sortType, size int, searchAfter []interface{}) (*CirclePostResult, error) {
+func (s *circleServiceImpl) GetCirclePosts(ctx context.Context, viewerID, circleID uuid.UUID, sortType, size int, searchAfter []interface{}) (*CirclePostResult, error) {
+	visible, err := s.visibility.CanView(ctx, viewerID, circleID)
+	if err != nil {
+		return nil, err
+	}
+	if !visible {
+		return nil, errCircleContentForbidden
+	}
 	result, err := s.searcher.SearchCirclePosts(ctx, circleID, sortType, size, searchAfter)
 	if err != nil {
 		return nil, err
