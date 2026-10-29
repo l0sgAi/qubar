@@ -119,7 +119,7 @@ CREATE TABLE domains.circle (
     post_count INT NOT NULL DEFAULT 0, -- 帖子数量
 
     -- 5. 状态与权限
-    join_type SMALLINT NOT NULL DEFAULT 0, -- 加入方式：0=直接加入，1=需审核，2=私密(邀请制)
+    join_type SMALLINT NOT NULL DEFAULT 0, -- 加入方式：0=公开(直接加入)，2=私密(邀请制)；1=需审核已下线(#168，存量迁移为 2，不再写入)
     status SMALLINT NOT NULL DEFAULT 1, -- 状态：0=审核中，1=正常，2=被封禁/冻结
 
     deleted SMALLINT DEFAULT 0, -- 0=正常，1=已删除
@@ -144,7 +144,7 @@ COMMENT ON COLUMN domains.circle.category_id IS '所属分类ID(UUID)，NULL=未
 COMMENT ON COLUMN domains.circle.hot IS '综合热度值';
 COMMENT ON COLUMN domains.circle.member_count IS '成员总数(缓存字段)';
 COMMENT ON COLUMN domains.circle.post_count IS '帖子总数(缓存字段)';
-COMMENT ON COLUMN domains.circle.join_type IS '加入限制：0=公开，1=审核，2=私密';
+COMMENT ON COLUMN domains.circle.join_type IS '加入限制：0=公开，2=私密(邀请制)；1=审核已下线';
 COMMENT ON COLUMN domains.circle.status IS '圈子状态：0=待审，1=正常，2=封禁';
 COMMENT ON COLUMN domains.circle.deleted IS '逻辑删除：0=未删，1=已删';
 COMMENT ON COLUMN domains.circle.create_time IS '创建时间';
@@ -177,7 +177,8 @@ CREATE TABLE domains.circle_member (
     role SMALLINT NOT NULL DEFAULT 10,
 
     -- 成员状态 (控制访问权)
-    -- 0=待审核(申请中), 1=正常, 2=禁言(Muted), 3=拉黑/踢出(Banned) 4=暂时退出
+    -- 1=正常, 2=禁言(Muted), 3=拉黑(Banned), 4=已退出(主动退圈 / 被移出 / 解除拉黑)
+    -- 0=待审核(申请中)已下线(#168，存量迁移为 4，不再写入)
     status SMALLINT NOT NULL DEFAULT 1,
     -- 成员声望 帖子/评论被点赞+1 帖子被收藏+5 帖子/评论被别人回复+10
     reputation INT NOT NULL DEFAULT 0,
@@ -199,7 +200,7 @@ COMMENT ON TABLE domains.circle_member IS '圈子成员关系与权限表';
 COMMENT ON COLUMN domains.circle_member.circle_id IS '圈子ID(UUID)';
 COMMENT ON COLUMN domains.circle_member.user_id IS '用户ID(UUID)';
 COMMENT ON COLUMN domains.circle_member.role IS '角色: 10=成员, 20=管理员, 30=圈主';
-COMMENT ON COLUMN domains.circle_member.status IS '状态: 0=申请中, 1=正常, 2=禁言, 3=拉黑';
+COMMENT ON COLUMN domains.circle_member.status IS '状态: 1=正常, 2=禁言, 3=拉黑, 4=已退出/被移出；0=申请中已下线';
 COMMENT ON COLUMN domains.circle_member.mute_end_time IS '禁言截止时间';
 
 -- --- 索引优化---

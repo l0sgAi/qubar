@@ -27,7 +27,7 @@ import (
 //	POST /circle/manage/unmute   解除禁言（需登录；admin+）
 //	POST /circle/manage/ban      拉黑/踢出（需登录；admin+）
 //	POST /circle/manage/unban    解除拉黑（需登录；admin+）
-//	POST /circle/manage/review   入圈审核（需登录；admin+）
+//	POST /circle/manage/remove   移出成员（需登录；admin+，不拉黑）
 //	PUT  /circle/update          编辑圈子资料（需登录；分字段权限 owner/admin）
 //
 // 访客可读端点（list/active/random/detail/user/posts）挂 optionalCheck；写操作与个人列表挂 authCheck。
@@ -51,7 +51,7 @@ func RegisterRoutes(
 		pub.GET("/posts", h.GetCirclePosts)
 	}
 
-	// 需登录：建圈/我的圈子/加圈/退圈 + 圈子管理（成员列表/角色/禁言/拉黑/审核/资料编辑）。
+	// 需登录：建圈/我的圈子/加圈/退圈 + 圈子管理（成员列表/角色/禁言/拉黑/移出/资料编辑）。
 	priv := rg.Group("/circle", authCheck)
 	{
 		priv.POST("/create", h.CreateCircle)
@@ -67,7 +67,7 @@ func RegisterRoutes(
 		priv.POST("/manage/unmute", h.ManageUnmute)
 		priv.POST("/manage/ban", h.ManageBan)
 		priv.POST("/manage/unban", h.ManageUnban)
-		priv.POST("/manage/review", h.ManageReview)
+		priv.POST("/manage/remove", h.ManageRemove)
 		priv.PUT("/update", h.UpdateCircleProfile)
 	}
 }

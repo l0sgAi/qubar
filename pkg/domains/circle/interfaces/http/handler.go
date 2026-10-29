@@ -138,17 +138,10 @@ func (h *Handler) JoinCircle(c appctx.AppContext) {
 		return
 	}
 
-	joined, pending, err := h.svc.JoinCircle(c, userID, req.CircleID)
-	if err != nil {
+	if err := h.svc.JoinCircle(c, userID, req.CircleID); err != nil {
 		writeCircleError(c, err)
 		return
 	}
-
-	if pending {
-		httputil.SuccessWithMessage(c, "Join request submitted, awaiting approval", nil)
-		return
-	}
-	_ = joined
 	httputil.SuccessWithMessage(c, "Successfully joined the circle", nil)
 }
 
@@ -549,13 +542,39 @@ func (h *Handler) ManageBan(c appctx.AppContext) {
 	httputil.SuccessWithMessage(c, "Member banned", nil)
 }
 
+// RemoveMemberRequest 移出成员请求（admin+）。
+type RemoveMemberRequest struct {
+	CircleID     uuid.UUID `json:"circle_id" binding:"required"`
+	TargetUserID uuid.UUID `json:"target_user_id" binding:"required"`
+}
+
+// ManageRemove POST /circle/manage/remove —— 移出成员（不拉黑：公开圈可再加入，私密圈需重新邀请）。
+func (h *Handler) ManageRemove(c appctx.AppContext) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+
+	var req RemoveMemberRequest
+	if err := c.BindJSON(&req); err != nil {
+		httputil.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	if err := h.svc.RemoveMember(c, userID, req.CircleID, req.TargetUserID); err != nil {
+		writeCircleError(c, err)
+		return
+	}
+	httputil.SuccessWithMessage(c, "Member removed", nil)
+}
+
 // UnbanMemberRequest 解除拉黑请求（admin+）。
 type UnbanMemberRequest struct {
 	CircleID     uuid.UUID `json:"circle_id" binding:"required"`
 	TargetUserID uuid.UUID `json:"target_user_id" binding:"required"`
 }
 
-// ManageUnban POST /circle/manage/unban —— 解除拉黑（成员需重新申请加入）。
+// ManageUnban POST /circle/manage/unban —— 解除拉黑（公开圈可再加入，私密圈需重新邀请）。
 func (h *Handler) ManageUnban(c appctx.AppContext) {
 	userID, ok := requireUserID(c)
 	if !ok {
@@ -573,37 +592,6 @@ func (h *Handler) ManageUnban(c appctx.AppContext) {
 		return
 	}
 	httputil.SuccessWithMessage(c, "Member unbanned", nil)
-}
-
-// ReviewMemberRequest 入圈审核请求（admin+）。
-type ReviewMemberRequest struct {
-	CircleID     uuid.UUID `json:"circle_id" binding:"required"`
-	TargetUserID uuid.UUID `json:"target_user_id" binding:"required"`
-	Approve      bool      `json:"approve"`
-}
-
-// ManageReview POST /circle/manage/review —— 审核入圈申请。
-func (h *Handler) ManageReview(c appctx.AppContext) {
-	userID, ok := requireUserID(c)
-	if !ok {
-		return
-	}
-
-	var req ReviewMemberRequest
-	if err := c.BindJSON(&req); err != nil {
-		httputil.BadRequest(c, "Invalid request parameters")
-		return
-	}
-
-	if err := h.svc.ReviewJoinRequest(c, userID, req.CircleID, req.TargetUserID, req.Approve); err != nil {
-		writeCircleError(c, err)
-		return
-	}
-	if req.Approve {
-		httputil.SuccessWithMessage(c, "Join request approved", nil)
-		return
-	}
-	httputil.SuccessWithMessage(c, "Join request rejected", nil)
 }
 
 // UpdateCircleRequest 编辑圈子资料请求（分字段权限：name/slug/join_type/category_id 仅圈主）。
@@ -718,7 +706,7 @@ func writeCircleError(c appctx.AppContext, err error) {
 	case application.IsInvalidJoinedRoleFilterErr(err):
 		httputil.BadRequest(c, "role must be 30 (owner), 20 (admin), 10 (member) or 0 (all)")
 	case application.IsInvalidJoinTypeErr(err):
-		httputil.BadRequest(c, "join_type must be 0 (direct), 1 (approval), or 2 (private)")
+		httputil.BadRequest(c, "join_type must be 0 (public) or 2 (private); approval-based joining is no longer supported")
 	case application.IsCircleNameExistsErr(err):
 		httputil.Conflict(c, "Circle name already exists")
 	case application.IsCircleSlugExistsErr(err):
