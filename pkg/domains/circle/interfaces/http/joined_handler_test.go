@@ -31,7 +31,7 @@ func (f *fakeSvcForJoined) GetMyCircles(ctx context.Context, userID uuid.UUID, k
 	return &application.MyCircleSearchResult{Circles: []application.MyCircleDoc{}, Size: size}, nil
 }
 
-func (f *fakeSvcForJoined) GetUserCircles(ctx context.Context, targetUserID uuid.UUID, keyword string, role int16, size int, cursor string) (*application.MyCircleSearchResult, error) {
+func (f *fakeSvcForJoined) GetUserCircles(ctx context.Context, viewerID, targetUserID uuid.UUID, keyword string, role int16, size int, cursor string) (*application.MyCircleSearchResult, error) {
 	f.called, f.gotRole = true, role
 	return &application.MyCircleSearchResult{Circles: []application.MyCircleDoc{}, Size: size}, nil
 }

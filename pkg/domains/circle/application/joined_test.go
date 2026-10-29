@@ -183,6 +183,7 @@ func newJoinedFixture() *joinedFixture {
 		base:     time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC),
 	}
 	f.svc = NewCircleService(nil, f.repo, nil, nil, f.cache, f.searcher, nil, nil).(*circleServiceImpl)
+	f.svc.visibility = newCircleVisibility(&visRepo{}, f.repo, nil) // 无私密圈
 	return f
 }
 
@@ -250,7 +251,7 @@ func TestGetUserCircles_NoMemberStatus(t *testing.T) {
 	f := newJoinedFixture()
 	f.add("muted", domain.MemberRoleAdmin, domain.MemberStatusMuted, ptrTime(time.Now().Add(time.Hour)), true)
 
-	res, err := f.svc.GetUserCircles(context.Background(), f.user, "", 0, 20, "")
+	res, err := f.svc.GetUserCircles(context.Background(), f.user, f.user, "", 0, 20, "")
 	if err != nil {
 		t.Fatalf("GetUserCircles: %v", err)
 	}
@@ -316,7 +317,7 @@ func TestJoinedCircles_InvalidRole(t *testing.T) {
 		if _, err := f.svc.GetMyCircles(context.Background(), f.user, "", role, 20, ""); !IsInvalidJoinedRoleFilterErr(err) {
 			t.Errorf("GetMyCircles role=%d err = %v, want invalid role filter", role, err)
 		}
-		if _, err := f.svc.GetUserCircles(context.Background(), f.user, "", role, 20, ""); !IsInvalidJoinedRoleFilterErr(err) {
+		if _, err := f.svc.GetUserCircles(context.Background(), f.user, f.user, "", role, 20, ""); !IsInvalidJoinedRoleFilterErr(err) {
 			t.Errorf("GetUserCircles role=%d err = %v, want invalid role filter", role, err)
 		}
 	}

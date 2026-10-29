@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"interestBar/pkg/domains/post/domain"
 
@@ -15,6 +16,8 @@ import (
 type CircleVisibility interface {
 	// CanView 查看者能否看到该圈内容。circleID 为 uuid.Nil 视为可见。
 	CanView(ctx context.Context, viewerID, circleID uuid.UUID) (bool, error)
+	// HiddenCircleIDs 查看者不可见的圈子（所有私密圈 − 查看者已加入的私密圈），列表 / 检索过滤用。
+	HiddenCircleIDs(ctx context.Context, viewerID uuid.UUID) ([]uuid.UUID, error)
 }
 
 // SetCircleVisibility 注入私密圈可见性端口（未注入时不做私密圈过滤，仅单测场景）。
@@ -26,6 +29,29 @@ func (s *postServiceImpl) canViewCircle(ctx context.Context, viewerID, circleID 
 		return true, nil
 	}
 	return s.visibility.CanView(ctx, viewerID, circleID)
+}
+
+// hiddenCircleIDs 查看者不可见的私密圈（ES must_not / PG 回源过滤共用）。未注入时为空。
+func (s *postServiceImpl) hiddenCircleIDs(ctx context.Context, viewerID uuid.UUID) ([]uuid.UUID, error) {
+	if s.visibility == nil {
+		return nil, nil
+	}
+	return s.visibility.HiddenCircleIDs(ctx, viewerID)
+}
+
+// filterVisiblePosts 过滤掉查看者不可见的私密圈帖子（PG 回源路径，与 ES must_not 同一集合）。
+func (s *postServiceImpl) filterVisiblePosts(ctx context.Context, viewerID uuid.UUID, posts []domain.Post) ([]domain.Post, error) {
+	hidden, err := s.hiddenCircleIDs(ctx, viewerID)
+	if err != nil || len(hidden) == 0 {
+		return posts, err
+	}
+	out := posts[:0]
+	for _, p := range posts {
+		if !slices.Contains(hidden, p.CircleID) {
+			out = append(out, p)
+		}
+	}
+	return out, nil
 }
 
 // CanViewPost 查看者能否看到该帖子所属圈子的内容（实现 PostService）。

@@ -64,8 +64,8 @@ func (s *circleSearcherES) SearchCirclePosts(ctx context.Context, circleID uuid.
 }
 
 // SearchActive 近期活跃圈子聚合（ES terms 聚合 + 时间窗口，按发帖数排序）。
-func (s *circleSearcherES) SearchActive(ctx context.Context, size, offset int) (*application.RawActiveCircleResult, error) {
-	result, err := elasticsearch.AggregateActiveCircles(ctx, size, offset)
+func (s *circleSearcherES) SearchActive(ctx context.Context, size, offset int, excludeCircleIDs []uuid.UUID) (*application.RawActiveCircleResult, error) {
+	result, err := elasticsearch.AggregateActiveCircles(ctx, size, offset, excludeCircleIDs)
 	if err != nil {
 		return nil, err
 	}

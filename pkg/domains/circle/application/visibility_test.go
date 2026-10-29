@@ -121,3 +121,27 @@ func TestCircleRestrictedViewFields(t *testing.T) {
 		t.Fatalf("restricted view keys = %v, want %v", keys, want)
 	}
 }
+
+// activeSearcher 记录 SearchActive 收到的排除集合，返回空榜单。
+type activeSearcher struct {
+	CircleSearcher
+	excluded []uuid.UUID
+}
+
+func (s *activeSearcher) SearchActive(_ context.Context, size, offset int, exclude []uuid.UUID) (*RawActiveCircleResult, error) {
+	s.excluded = exclude
+	return &RawActiveCircleResult{}, nil
+}
+
+// 近期活跃圈子在聚合阶段排除全部私密圈（不论查看者是否成员）。
+func TestListActiveCircles_ExcludesPrivateCircles(t *testing.T) {
+	private := uuid.New()
+	searcher := &activeSearcher{}
+	svc := NewCircleService(&visRepo{ids: []uuid.UUID{private}}, &visMembers{}, nil, nil, nil, searcher, nil, nil)
+	if _, err := svc.ListActiveCircles(context.Background(), 20, 0); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(searcher.excluded, []uuid.UUID{private}) {
+		t.Fatalf("excluded = %v, want private circle", searcher.excluded)
+	}
+}

@@ -218,6 +218,8 @@ type GetUserCirclesRequest struct {
 
 // GetUserCircles GET /circle/user —— 查看任意用户加入的圈子（分页）。
 func (h *Handler) GetUserCircles(c appctx.AppContext) {
+	viewerID, _ := requireUserIDAllowAnon(c)
+
 	var req GetUserCirclesRequest
 	if err := c.BindQuery(&req); err != nil {
 		logger.Log.Error("Invalid request parameters: " + err.Error())
@@ -233,7 +235,7 @@ func (h *Handler) GetUserCircles(c appctx.AppContext) {
 
 	size := normalizeSize(req.Size)
 
-	result, err := h.svc.GetUserCircles(c, targetUserID, req.Keyword, req.Role, size, req.SearchAfter)
+	result, err := h.svc.GetUserCircles(c, viewerID, targetUserID, req.Keyword, req.Role, size, req.SearchAfter)
 	if err != nil {
 		writeCircleError(c, err)
 		return

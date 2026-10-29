@@ -14,7 +14,7 @@ import (
 //
 // searcher/seed/feed 为 recommend 同域 infra（直构，走全局 ES/Redis 客户端）；
 // circle/postMeta/hydrator/checker 为跨域桥接器（包 post/circle service）。
-func newRecommendService(postSvc postapp.PostService, circleSvc circleapp.CircleService) recommendapp.RecommendService {
+func newRecommendService(postSvc postapp.PostService, circleSvc circleapp.CircleService, vis circleapp.CircleVisibility) recommendapp.RecommendService {
 	return recommendapp.NewRecommendService(
 		recommendinfra.NewHomeFeedSearcher(),        // HomeFeedSearcher
 		&recommendCircleLookup{delegate: circleSvc}, // CircleLookup
@@ -24,6 +24,7 @@ func newRecommendService(postSvc postapp.PostService, circleSvc circleapp.Circle
 		&postInteractionChecker{delegate: postSvc},  // InteractionChecker（缓存 + DB 回源）
 		recommendinfra.NewFeedCache(),               // FeedCache
 		recommendinfra.NewInterestCircleCache(),     // InterestCircleCache
+		vis,                                         // CircleVisibility（私密圈 must_not；方法签名一致，直接注入）
 	)
 }
 
