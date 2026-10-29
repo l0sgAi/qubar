@@ -368,7 +368,7 @@ The image is distroless (nonroot, no shell) and contains no config. It has a bui
 | `POST` | `/circle/manage/transfer` | Transfer ownership (owner) |
 | `POST` | `/circle/manage/mute` / `unmute` | Mute / unmute member (admin+) |
 | `POST` | `/circle/manage/ban` / `unban` | Ban / unban member (admin+) |
-| `POST` | `/circle/manage/review` | Join-request review (admin+) |
+| `POST` | `/circle/manage/remove` | Remove a member without banning (admin+) |
 | `PUT` | `/circle/update` | Edit circle profile (owner/admin, field-level) |
 
 ### Post
