@@ -303,7 +303,8 @@ type CircleSearcher interface {
 type CircleService interface {
 	CreateCircle(ctx context.Context, userID uuid.UUID, input CreateCircleInput) error
 	GetCircleDetail(ctx context.Context, userID, circleID uuid.UUID) (*CircleDetailVO, error)
-	JoinCircle(ctx context.Context, userID, circleID uuid.UUID) (joined bool, pending bool, err error)
+	// JoinCircle 自助加入圈子（仅公开圈；私密圈返回 IsPrivateCircleErr，入圈走邀请）。
+	JoinCircle(ctx context.Context, userID, circleID uuid.UUID) error
 	LeaveCircle(ctx context.Context, userID, circleID uuid.UUID) error
 	SearchCircles(ctx context.Context, keyword string, size int, searchAfter []interface{}) (*CircleSearchResult, error)
 	// GetMyCircles 获取我加入的圈子列表（含我的成员状态）。role 为角色筛选：0 全部，10/20/30 单选。
@@ -328,7 +329,7 @@ type CircleService interface {
 	// 登录即可调用：查询本身即权限过滤（WHERE role IN (20,30)），无 ensureAdmin 式门槛；
 	// keyword 非空时按圈子 name/description 子串过滤；含非正常状态圈子（UI 按 status 置灰）。
 	ListManagedCircles(ctx context.Context, operatorID uuid.UUID, keyword string, page, size int) (*ManagedCircleListResult, error)
-	// ListCircleMembers 管理端成员列表（admin+，可见全部状态含待审/拉黑，keyset 分页）。
+	// ListCircleMembers 管理端成员列表（admin+，可见全部状态含拉黑/退出，keyset 分页）。
 	// role/status 传 -1 表示不过滤；keyword 非空时按用户名搜索（拼写容错，
 	// 最多解析 100 个候选用户，超出时结果 Truncated=true），游标翻页须带同一 keyword。
 	ListCircleMembers(ctx context.Context, operatorID, circleID uuid.UUID, role, status int16, keyword, cursor string, size int) (*CircleMemberListResult, error)
@@ -342,10 +343,11 @@ type CircleService interface {
 	UnmuteMember(ctx context.Context, operatorID, circleID, targetUserID uuid.UUID) error
 	// BanMember 拉黑/踢出（admin+；normal/muted → banned，member_count-1）。
 	BanMember(ctx context.Context, operatorID, circleID, targetUserID uuid.UUID) error
-	// UnbanMember 解除拉黑（admin+；banned → left，需重新申请加入）。
+	// RemoveMember 移出成员（admin+；normal/muted → left，member_count-1）。不拉黑：
+	// 公开圈可再直接加入，私密圈需重新邀请。
+	RemoveMember(ctx context.Context, operatorID, circleID, targetUserID uuid.UUID) error
+	// UnbanMember 解除拉黑（admin+；banned → left；公开圈可再直接加入，私密圈需重新邀请）。
 	UnbanMember(ctx context.Context, operatorID, circleID, targetUserID uuid.UUID) error
-	// ReviewJoinRequest 入圈审核（admin+；pending → normal/left）。
-	ReviewJoinRequest(ctx context.Context, operatorID, circleID, targetUserID uuid.UUID, approve bool) error
 	// UpdateCircleProfile 编辑圈子资料（name/slug/join_type/category_id 仅圈主，其余 admin+）。
 	UpdateCircleProfile(ctx context.Context, operatorID, circleID uuid.UUID, input UpdateCircleProfileInput) error
 
@@ -448,10 +450,15 @@ func (s *circleServiceImpl) SetPostFetcher(f PostMediaFetcher) { s.postFetcher =
 // SetAgentCounter 注入圈内 AI 代理计数端口（composition 层在装配后调用）。
 func (s *circleServiceImpl) SetAgentCounter(c CircleAgentCounter) { s.agentCounter = c }
 
+// validJoinType 可写入的加入方式：0 公开 / 2 私密。1（需审核）已下线，创建 / 编辑都拒绝。
+func validJoinType(t int16) bool {
+	return t == domain.CircleJoinTypeDirect || t == domain.CircleJoinTypePrivate
+}
+
 // CreateCircle 创建圈子。
 func (s *circleServiceImpl) CreateCircle(ctx context.Context, userID uuid.UUID, input CreateCircleInput) error {
-	// 校验 join_type
-	if input.JoinType < 0 || input.JoinType > 2 {
+	// 校验 join_type（只接受 0 公开 / 2 私密；1 需审核已下线）
+	if !validJoinType(input.JoinType) {
 		return errInvalidJoinType
 	}
 
@@ -566,38 +573,31 @@ func (s *circleServiceImpl) GetCircleDetail(ctx context.Context, userID, circleI
 	return vo, nil
 }
 
-// JoinCircle 加入圈子。
-// 返回值：joined=是否直接加入成功，pending=是否进入待审核。
-func (s *circleServiceImpl) JoinCircle(ctx context.Context, userID, circleID uuid.UUID) (bool, bool, error) {
+// JoinCircle 加入圈子（自助加入，仅公开圈；状态机见 memberRepo.JoinCircle）。
+// 私密圈只能经邀请入圈，此处返回 errPrivateCircle 且不改数据。
+func (s *circleServiceImpl) JoinCircle(ctx context.Context, userID, circleID uuid.UUID) error {
 	circle, err := s.repo.GetByID(ctx, circleID)
 	if err != nil {
-		return false, false, err
+		return err
 	}
 	if circle.Status != domain.CircleStatusNormal {
-		return false, false, errCircleNotAvailable
+		return errCircleNotAvailable
 	}
 
 	member, err := s.memberRepo.JoinCircle(ctx, circleID, userID, circle.JoinType)
 	if err != nil {
-		return false, false, mapJoinLeaveError(err)
+		return mapJoinLeaveError(err)
 	}
 
-	if member.Status == domain.MemberStatusNormal {
-		// 直接加入成功：更新计数缓存 + 发布事件 + 清用户加入列表缓存
-		if err := s.incrMemberCountWithRecovery(ctx, circleID); err != nil {
-			logger.Log.Error("Failed to update Redis member count: " + err.Error())
-		}
-		if err := s.publisher.PublishMemberCount(ctx, circleID, 1); err != nil {
-			logger.Log.Error("Failed to publish join message: " + err.Error())
-		}
-		s.tryAddJoined(ctx, userID, circleID, member.CreateTime.UnixMilli())
-		return true, false, nil
+	// 加入成功（repo 只会返回 status=normal）：更新计数缓存 + 发布事件 + 写 joined ZSET。
+	if err := s.incrMemberCountWithRecovery(ctx, circleID); err != nil {
+		logger.Log.Error("Failed to update Redis member count: " + err.Error())
 	}
-
-	if member.Status == domain.MemberStatusPending {
-		return false, true, nil
+	if err := s.publisher.PublishMemberCount(ctx, circleID, 1); err != nil {
+		logger.Log.Error("Failed to publish join message: " + err.Error())
 	}
-	return false, false, nil
+	s.tryAddJoined(ctx, userID, circleID, member.CreateTime.UnixMilli())
+	return nil
 }
 
 // LeaveCircle 退出圈子。

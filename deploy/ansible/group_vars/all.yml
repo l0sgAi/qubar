@@ -29,7 +29,7 @@ cdc_tables: [users, category, circle, circle_member, post, comment, comment_like
 es_sinks:
   circle: id,name,slug,avatar_url,cover_url,description,creator_id,category_id,hot,member_count,post_count,join_type,status,deleted,create_time,update_time
   post: id,circle_id,user_id,type,title,summary,media_extra,view_count,comment_count,like_count,collect_count,hot,is_pinned,is_essence,is_lock,status,deleted,create_time,update_time,last_reply_time
-  users: id,username,email,phone,motto,google_id,x_id,github_id,microsoft_id,avatar_url,gender,birthdate,status,role,agent_circle_id,deleted,create_time,update_time
+  users: id,username,email,phone,motto,google_id,x_id,github_id,microsoft_id,avatar_url,gender,birthdate,status,role,agent_circle_id,agent_mention_disabled,deleted,create_time,update_time
 
 # 应用 topic（与 config.yaml redpanda.* 一致）；Redpanda 也开着 auto-create，这里显式建好便于观测
 redpanda_topics:

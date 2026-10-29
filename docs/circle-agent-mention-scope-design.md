@@ -9,8 +9,9 @@
 > ④ mention 精确绑定已落库（post/comment_mention，名单前端传入、后端校验存在性/去自/截断）。
 > 本文所有 file:line 基于当前 develop 分支，动手前先 grep 校准。
 >
-> **已确认决策**：① 软删机器人时 users 行只清 `agent_circle_id` 列，不动 status；
-> ② mention 服务端兜底剔除纳入本期。
+> **已确认决策**：① ~~软删机器人时 users 行只清 `agent_circle_id` 列，不动 status~~
+> （**#171 推翻**：删除不再清 `agent_circle_id`，改为写 `users.agent_mention_disabled=1`；停用同样写 1、启用写 0；
+> 仍不动 status。见 §九）；② mention 服务端兜底剔除纳入本期。
 
 ---
 
@@ -142,6 +143,8 @@ CreateBotUser(ctx context.Context, username, email, avatarURL string, circleID *
 
 **新端口**（同文件，与 BotUserProfileUpdater 并列）：
 
+> ⚠️ #171 已替换为 `BotUserMentionSyncer`（停用 / 启用 / 删除投影可 @ 状态，删除不再清绑定），见 §九。
+
 ```go
 // BotUserScopeCleaner 跨域端口：机器人软删时清 users.agent_circle_id（恢复为"全局可见"语义）。
 // 决策①：只清列，不动 users.status（已删全局机器人仍可被@的存量行为不变）。
@@ -222,8 +225,9 @@ must: [deleted=0, status=1,
                                           └── CDC 秒级同步 ES user 文档
 
 删除: Delete*/DeleteCircleAgent ─► ai_agent SoftDelete（deleted=1,status=0）
-                                ─► ClearBotCircleScope ─► users.agent_circle_id = NULL
-                                                          + userinfo 缓存失效
+                                ─► SetBotUserMentionable(false) ─► users.agent_mention_disabled = 1
+                                   （#171：agent_circle_id 保留）     + userinfo 缓存刷新
+停用/启用: Update*/UpdateCircleAgent(status) ─► SetBotUserMentionable(status==1)
 ```
 
 ### mention 兜底（防构造请求）
@@ -241,13 +245,13 @@ must: [deleted=0, status=1,
 |---|---|---|
 | 双写漂移 | `ai_agent.circle_id` 权威，users 列投影；创建/删除同流程写入 | 极端漂移（人工改库）P1 加对账脚本，本期不做 |
 | CDC 延迟 | 新圈内机器人秒级窗口内全站@列表可见（列未到 ES） | 同 post.hot 既有延迟口径，接受 |
-| 删除清列失败 | 已删机器人短时仍在原圈@列表可见；幂等可补偿 | 只记日志不回滚（软删已生效，优先保证删除成功） |
+| 删除清列失败 | ~~已删机器人短时仍在原圈@列表可见~~ #171 起删除不清列，改为投影不可 @；投影失败见 §九 | fail-open + 异步重试 |
 | 上线顺序 | **ES mapping 先于 Go 部署**；DDL 先于 mapping | 字段无 mapping 时 exists 行为不可赌 |
 | userinfo 缓存旧实体 | 老缓存 JSON 无新字段 → nil = 非圈内机器人，方向安全；清列走 Service 方法强制缓存失效 | 创建路径新行无旧缓存问题 |
 | 翻页漂移 | 翻页中途机器人增删 → 结果集轻微漂移 | 软信号接受（ES search_after 语义本就弱一致） |
 | 被@后是否回复 | **不回复**（ListEnabled 护栏既定） | 圈内触发回复属后续阶段，届时匹配 post.circle_id==agent.circle_id |
 | 全局机器人 | 全站可@（agent_circle_id=NULL），现状保留 | — |
-| 已删全局机器人仍可被@ | 存量怪癖，本期不动（决策①：不动 status） | 如后续要修，禁用 users 行即可，与本期正交 |
+| 已删全局机器人仍可被@ | ~~存量怪癖，本期不动~~ **#171 已修**：停用 / 删除写 `agent_mention_disabled=1`，ES 与 mention 兜底都排除 | 不动 users.status（`GetBriefs` 跳过非正常用户，改 status 会让历史评论丢失作者信息） |
 
 ---
 
@@ -273,7 +277,7 @@ must: [deleted=0, status=1,
 |---|---|
 | 圈内机器人回复触发 | 触发链匹配 post.circle_id == agent.circle_id（含 @提及）；移除对应护栏分支 |
 | 双写对账脚本 | ai_agent.circle_id vs users.agent_circle_id 周期对账 |
-| 已删机器人用户禁用 | 如运营要求，软删时 status=0（全局口径变更，单独评估） |
+| 已删机器人用户禁用 | #171 已用 `agent_mention_disabled` 解决可 @ 问题，不改 status（见 §九） |
 
 ---
 
@@ -286,3 +290,46 @@ must: [deleted=0, status=1,
   部署前不存在圈内机器人时成立，不可假设
 - ❌ 全局机器人可见范围调整（仍全站可@）
 - ❌ @选人接口本身的性能/召回优化
+
+---
+
+## 九、#171 变更：停用 / 删除的机器人不可被 @
+
+> 现象：停用只改 `ai_agent.status`、删除只软删 `ai_agent`，`users` 行不变，ES @选人照样搜得到；
+> 删除圈内机器人时 `ClearBotCircleScope` 还把 `users.agent_circle_id` 清成 NULL，它落进"全局机器人"桶，
+> 在所有圈子都能被 @（最严重）。
+
+### 9.1 方案：再加一列投影 `users.agent_mention_disabled`
+
+| 项 | 决策 |
+|---|---|
+| 列 | `agent_mention_disabled SMALLINT NOT NULL DEFAULT 0`（迁移 `20261029191406`）。0=正常（普通用户恒为 0），1=机器人已停用或已删除 |
+| 为什么是"禁用标记"而不是 `agent_mentionable DEFAULT 1` | 零值必须落在安全一侧：GORM 对带 `default` tag 的零值字段会省略写入，`SysUser` 的 userinfo 缓存 JSON 不含该列（`json:"-"`），两处零值都等于"可被 @" |
+| 写入（aiagent 投影，权威仍是 `ai_agent`） | 创建：`CreateBotUser(..., mentionable = status==1)` 随建号写入；停用 / 启用：`Update*` 改了 status 就按更新后实体写；删除：软删后写 1。端口 `BotUserMentionSyncer` → user `SetAgentMentionable`（写列 + 刷新 userinfo 缓存） |
+| 删除圈内机器人 | **不再清 `agent_circle_id`**（`BotUserScopeCleaner` / `ClearAgentCircleScope` 删除）。即使投影失败，删除的圈内机器人也只会留在原圈 |
+| `users.status` | 恒为 1：`GetBriefs` 跳过非正常用户，改 status 会让机器人历史评论 / 帖子丢失作者信息（集成测试回归覆盖） |
+| ES @选人 | `userBaseFilterConditions` 追加 `must_not term agent_mention_disabled: 1`（全站、圈内、有无关键字都生效）。存量文档缺该字段天然命中，零重建索引；动态 mapping 推断为 long 即可 |
+| mention 兜底 | `GetAgentCircleIDs` 扩展为 `GetAgentMentionScopes`（`{CircleID, Mentionable}`），post / comment 的 `stripUnmentionableAgents` 剔除不可 @ 与越圈机器人：不落 mention、不发提醒、不触发回复（三者共用同一份过滤后名单） |
+| CDC | `deploy/ansible/group_vars/all.yml` 的 `es_sinks.users` 字段白名单加 `agent_mention_disabled`（source connector 按表全列采集，无列白名单） |
+
+### 9.2 投影写入失败策略：fail-open + 日志 + 异步重试
+
+投影与 `ai_agent` 更新不在同一事务。写失败**不回滚**已生效的状态变更 / 软删（删除后再调接口会 404，报错让调用方重试也做不到），
+记 Error 日志并起后台重试（3 次，指数退避 1s / 4s / 16s）。重试**每次从 `ai_agent` 重新推导目标值**（已删除 = 不可 @，
+否则看 status），不重放旧值，避免和随后的启用 / 停用互相覆盖。重试耗尽记 Error，按 user.md 回填 SQL 人工修正
+（无 outbox，进程退出即丢）。端口未注入只记 Warn（与 `botUserUpdater` 一致）。
+
+已知竞态：同一机器人的"启用"和"删除"并发时，后写的投影胜出，极端情况下已删除机器人被写成可 @；
+管理端低频操作，接受，回填 SQL 可修正。
+
+### 9.3 存量回填：发版后一次性脚本（不进迁移）
+
+发布流水线是 `migrate → deploy → register-connectors.sh`：迁移执行时 ES sink 还是旧字段白名单，迁移里的回填 UPDATE
+产生的 CDC 事件会丢掉新列，ES 永远收不到。所以迁移只加列，回填 SQL 放在
+[pgsql-ddl/user.md](pgsql-ddl/user.md)「agent_mention_disabled 存量回填」，**connector 重新注册之后**执行（幂等）。
+回填同时把旧版删除链路清掉的 `agent_circle_id` 按 `ai_agent.circle_id` 补回，并把孤儿机器人账号（无对应 ai_agent 行）标为不可 @。
+
+### 9.4 上线顺序
+
+1. 迁移加列（旧版本应用不读不写，兼容）；2. infra 下发新 sink 白名单 → deploy 新应用 → `register-connectors.sh`；
+3. 执行回填 SQL；4. 核对 SQL 返回 0 行。步骤 2→3 之间已停用 / 删除的存量机器人仍可见（与现状相同）。

@@ -40,9 +40,12 @@ func (Circle) TableName() string {
 }
 
 // CircleJoinType 加入方式常量。
+//
+// 只允许写入 0（公开）/ 2（私密）。1（需审核）已下线：存量由迁移转为 2，
+// 常量仅保留作历史取值说明，任何路径都不再写入。
 const (
-	CircleJoinTypeDirect   = 0 // 直接加入
-	CircleJoinTypeApproval = 1 // 需审核
+	CircleJoinTypeDirect   = 0 // 公开(直接加入)
+	CircleJoinTypeApproval = 1 // 需审核（已下线，不再写入）
 	CircleJoinTypePrivate  = 2 // 私密(邀请制)
 )
 
@@ -81,7 +84,7 @@ const (
 
 // CircleMemberStatus 成员状态常量。
 const (
-	MemberStatusPending = 0 // 待审核(申请中)
+	MemberStatusPending = 0 // 待审核(申请中)：入圈审核已下线，存量由迁移转为 4，不再写入
 	MemberStatusNormal  = 1 // 正常
 	MemberStatusMuted   = 2 // 禁言
 	MemberStatusBanned  = 3 // 拉黑/踢出

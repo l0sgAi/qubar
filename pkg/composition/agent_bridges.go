@@ -56,17 +56,23 @@ const botUserRole = 2
 // 机器人账号不登录不发帖，仅作为 ai_agent 以该身份发评论的载体。
 // username 用机器人 name（允许重复）；email 由调用方保证唯一；avatarURL 为机器人头像。
 // circleID 非 nil 时写入 users.agent_circle_id（圈内机器人 @提及 作用域投影；
-// 全局链路传 nil）。
-func (b *agentBotUserCreator) CreateBotUser(ctx context.Context, username, email, avatarURL string, circleID *uuid.UUID) (uuid.UUID, error) {
+// 全局链路传 nil）；mentionable=false（创建即停用）时写入 agent_mention_disabled=1。
+// status 恒为正常：GetBriefs 跳过非正常用户，机器人可见性只由投影列控制。
+func (b *agentBotUserCreator) CreateBotUser(ctx context.Context, username, email, avatarURL string, circleID *uuid.UUID, mentionable bool) (uuid.UUID, error) {
+	var mentionDisabled int16
+	if !mentionable {
+		mentionDisabled = 1
+	}
 	u := userdomain.SysUser{
-		ID:            sharedomain.NewID(),
-		Username:      username,
-		Email:         email,
-		AvatarURL:     avatarURL,
-		AgentCircleID: circleID,
-		Role:          botUserRole,
-		Status:        userdomain.UserStatusActive,
-		Deleted:       0,
+		ID:                   sharedomain.NewID(),
+		Username:             username,
+		Email:                email,
+		AvatarURL:            avatarURL,
+		AgentCircleID:        circleID,
+		AgentMentionDisabled: mentionDisabled,
+		Role:                 botUserRole,
+		Status:               userdomain.UserStatusActive,
+		Deleted:              0,
 	}
 	if err := b.db.WithContext(ctx).Create(&u).Error; err != nil {
 		return uuid.Nil, err
@@ -90,16 +96,16 @@ func (b *agentBotUserUpdater) UpdateBotUserProfile(ctx context.Context, userID u
 	return err
 }
 
-// agentBotUserScopeCleaner 桥接 aiagent.BotUserScopeCleaner -> user.UserService.ClearAgentCircleScope。
+// agentBotUserMentionSyncer 桥接 aiagent.BotUserMentionSyncer -> user.UserService.SetAgentMentionable。
 //
-// 走 user Service 而非直写库：清列后自动刷新 userinfo 缓存（避免 @列表/详情回显旧绑定）。
-type agentBotUserScopeCleaner struct {
+// 走 user Service 而非直写库：写列后自动刷新 userinfo 缓存。
+type agentBotUserMentionSyncer struct {
 	delegate userapp.UserService
 }
 
-// ClearBotCircleScope 机器人软删后清 users.agent_circle_id（幂等）。
-func (b *agentBotUserScopeCleaner) ClearBotCircleScope(ctx context.Context, userID uuid.UUID) error {
-	return b.delegate.ClearAgentCircleScope(ctx, userID)
+// SetBotUserMentionable 机器人启用/停用/删除后写 users.agent_mention_disabled（幂等）。
+func (b *agentBotUserMentionSyncer) SetBotUserMentionable(ctx context.Context, userID uuid.UUID, mentionable bool) error {
+	return b.delegate.SetAgentMentionable(ctx, userID, mentionable)
 }
 
 // 编译期保证：桥接器满足 aiagent 领域端口。
@@ -107,7 +113,7 @@ var (
 	_ agentapp.RoleReader            = (*agentRoleReader)(nil)
 	_ agentapp.BotUserCreator        = (*agentBotUserCreator)(nil)
 	_ agentapp.BotUserProfileUpdater = (*agentBotUserUpdater)(nil)
-	_ agentapp.BotUserScopeCleaner   = (*agentBotUserScopeCleaner)(nil)
+	_ agentapp.BotUserMentionSyncer  = (*agentBotUserMentionSyncer)(nil)
 	_ agentapp.PostReader            = (*agentPostReader)(nil)
 	_ agentapp.CommentCreator        = (*agentCommentCreator)(nil)
 	_ agentapp.CircleRoleReader      = (*circleRoleReaderForAgent)(nil)

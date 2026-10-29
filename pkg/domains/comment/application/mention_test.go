@@ -1,7 +1,8 @@
 // mention_test.go 评论 @提及 校验的圈子作用域兜底单元测试。
 //
 // 覆盖设计文档 P0-8 的"兜底剔除"（comment 侧）：越圈机器人剔除 / 本圈机器人保留 /
-// 全局机器人与普通用户保留 / GetAgentCircleIDs 失败 fail-open。与 post 域同构逻辑
+// 全局机器人与普通用户保留 / 停用或已删除的机器人剔除（#171）/ GetAgentMentionScopes 失败
+// fail-open。与 post 域同构逻辑
 // （UserFacade 名义类型不同，各自声明），故独立成套。
 package application
 
@@ -35,13 +36,15 @@ var (
 	cOwnCircleBotID = uuid.MustParse("0192a0d0-0000-7000-8000-000000000022")
 	cOtherCircleBot = uuid.MustParse("0192a0d0-0000-7000-8000-000000000023")
 	cGhostUserID    = uuid.MustParse("0192a0d0-0000-7000-8000-000000000024")
+	cDisabledGBot   = uuid.MustParse("0192a0d0-0000-7000-8000-000000000027") // 停用/已删除的全局机器人
+	cDisabledCBot   = uuid.MustParse("0192a0d0-0000-7000-8000-000000000028") // 停用/已删除的本圈机器人
 )
 
 // fakeCommentUserFacade UserFacade fake：预设存在性与机器人圈子绑定。
 type fakeCommentUserFacade struct {
-	briefs       map[string]UserBrief
-	agentCircles map[uuid.UUID]uuid.UUID
-	circleErr    error
+	briefs    map[string]UserBrief
+	scopes    map[uuid.UUID]AgentMentionScope
+	circleErr error
 }
 
 func (f *fakeCommentUserFacade) GetBriefs(ctx context.Context, userIDs []string) (map[string]UserBrief, error) {
@@ -61,20 +64,21 @@ func (f *fakeCommentUserFacade) GetBrief(ctx context.Context, userID string) (*U
 	return nil, nil
 }
 
-func (f *fakeCommentUserFacade) GetAgentCircleIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+func (f *fakeCommentUserFacade) GetAgentMentionScopes(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]AgentMentionScope, error) {
 	if f.circleErr != nil {
 		return nil, f.circleErr
 	}
-	out := make(map[uuid.UUID]uuid.UUID, len(userIDs))
+	out := make(map[uuid.UUID]AgentMentionScope, len(userIDs))
 	for _, id := range userIDs {
-		if c, ok := f.agentCircles[id]; ok {
-			out[id] = c
+		if sc, ok := f.scopes[id]; ok {
+			out[id] = sc
 		}
 	}
 	return out, nil
 }
 
-// newCommentMentionFacade 组装常规 fake：全部候选存在；本圈/他圈机器人绑定如名。
+// newCommentMentionFacade 组装常规 fake：全部候选存在；本圈/他圈机器人绑定如名，
+// cDisabledGBot / cDisabledCBot 为不可 @ 的全局 / 本圈机器人。
 func newCommentMentionFacade() *fakeCommentUserFacade {
 	return &fakeCommentUserFacade{
 		briefs: map[string]UserBrief{
@@ -84,10 +88,14 @@ func newCommentMentionFacade() *fakeCommentUserFacade {
 			cGlobalBotID.String():    {ID: cGlobalBotID.String(), Username: "全局机器人"},
 			cOwnCircleBotID.String(): {ID: cOwnCircleBotID.String(), Username: "本圈机器人"},
 			cOtherCircleBot.String(): {ID: cOtherCircleBot.String(), Username: "他圈机器人"},
+			cDisabledGBot.String():   {ID: cDisabledGBot.String(), Username: "停用的全局机器人"},
+			cDisabledCBot.String():   {ID: cDisabledCBot.String(), Username: "停用的本圈机器人"},
 		},
-		agentCircles: map[uuid.UUID]uuid.UUID{
-			cOwnCircleBotID: commentCircleID,
-			cOtherCircleBot: commentOtherCID,
+		scopes: map[uuid.UUID]AgentMentionScope{
+			cOwnCircleBotID: {CircleID: commentCircleID, Mentionable: true},
+			cOtherCircleBot: {CircleID: commentOtherCID, Mentionable: true},
+			cDisabledGBot:   {CircleID: uuid.Nil, Mentionable: false},
+			cDisabledCBot:   {CircleID: commentCircleID, Mentionable: false},
 		},
 	}
 }
@@ -111,6 +119,16 @@ func TestFilterMentionUserIDs_AgentScope(t *testing.T) {
 	}
 }
 
+// TestFilterMentionUserIDs_DisabledAgents 停用 / 已删除的机器人（全局、本圈）一律剔除（#171）。
+func TestFilterMentionUserIDs_DisabledAgents(t *testing.T) {
+	svc := &commentServiceImpl{userFacade: newCommentMentionFacade()}
+	got := svc.filterMentionUserIDs(context.Background(), commentActorID,
+		[]uuid.UUID{cDisabledGBot, cNormalUserID, cDisabledCBot}, commentCircleID)
+	if len(got) != 1 || got[0] != cNormalUserID {
+		t.Fatalf("got %v, want only cNormalUserID", got)
+	}
+}
+
 // TestFilterMentionUserIDs_FailOpenOnScopeError 作用域查询失败 → fail-open 跳过剔除。
 func TestFilterMentionUserIDs_FailOpenOnScopeError(t *testing.T) {
 	facade := newCommentMentionFacade()
@@ -123,9 +141,9 @@ func TestFilterMentionUserIDs_FailOpenOnScopeError(t *testing.T) {
 	}
 }
 
-// TestStripOutOfScopeAgents_MentionsQuota 剔除发生在截断前：越圈机器人不占用
+// TestStripUnmentionableAgents_MentionsQuota 剔除发生在截断前：越圈机器人不占用
 // MentionMax 配额（先剔除后截断的顺序语义）。
-func TestStripOutOfScopeAgents_MentionsQuota(t *testing.T) {
+func TestStripUnmentionableAgents_MentionsQuota(t *testing.T) {
 	conf.Config.Notice.MentionMax = 2
 	defer func() { conf.Config.Notice.MentionMax = 10 }()
 

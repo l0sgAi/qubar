@@ -1,11 +1,11 @@
-// manage.go 圈子管理用例（角色变更/禁言/拉黑/审核/资料编辑）。
+// manage.go 圈子管理用例（角色变更/禁言/拉黑/移出/资料编辑）。
 //
 // 权限核心规则：只能管理角色严格低于自己的成员（owner > admin > member），
 // owner 不可被禁言/拉黑/降级（转让除外）。
 //
-// 计数一致性：仅 status 跨 normal 边界的迁移触发 member_count 增减（拉黑 -1、
-// 审核通过 +1），复用 join/leave 的 write-behind 链路（Redis Incr/Decr 真值 +
-// Redpanda 事件落库 + joined ZSET 增删）。禁言仍是成员，不计数。
+// 计数一致性：仅 status 跨「在圈」边界的迁移触发 member_count 增减（拉黑 / 移出 -1），
+// 复用 join/leave 的 write-behind 链路（Redis Incr/Decr 真值 + Redpanda 事件落库 +
+// joined ZSET 增删）。禁言仍是成员，不计数。入圈审核已下线（#168）。
 // P1：通知扇出（notice 域）与审计表暂未接入。
 package application
 
@@ -218,7 +218,7 @@ type UpdateCircleProfileInput struct {
 
 // requireManageRole 校验操作者是圈内管理者并返回其成员记录。
 // requireRole 指定最低角色（admin/owner）；非成员视同无权限（不暴露成员身份）；
-// 非正常状态（待审/禁言/拉黑/退出）的管理者暂停管理权。
+// 非正常状态（禁言/拉黑/退出）的管理者暂停管理权。
 func (s *circleServiceImpl) requireManageRole(ctx context.Context, circleID, operatorID uuid.UUID, requireRole int16) (*domain.CircleMember, error) {
 	operator, err := s.memberRepo.GetMember(ctx, circleID, operatorID)
 	if err != nil {
@@ -263,13 +263,14 @@ func requireNormalTarget(target *domain.CircleMember) error {
 // ===== 成员列表 =====
 
 // validMemberFilter 校验列表过滤参数：role ∈ {-1,10,20,30}；status ∈ {-1,0..4}。
+// status=0（待审核）已废弃：入圈审核下线后恒为空列表，为兼容旧前端仍接受。
 func validMemberFilter(role, status int16) bool {
 	roleOK := role == -1 ||
 		role == domain.MemberRoleMember || role == domain.MemberRoleAdmin || role == domain.MemberRoleOwner
 	return roleOK && status >= -1 && status <= domain.MemberStatusLeft
 }
 
-// ListCircleMembers 管理端成员列表（admin+，可见全部状态含待审/拉黑）。
+// ListCircleMembers 管理端成员列表（admin+，可见全部状态含拉黑/退出）。
 // 按角色（高→低）、加入时间（新→旧）keyset 分页；用户信息经 UserFacade 组装。
 // keyword 非空时按用户名搜索（拼写容错，email 分词匹配亦参与召回）：先经 user 域
 // 解析为候选用户集（≤memberSearchMaxUsers 个，username 权重 3 倍于 email，按相关性
@@ -445,9 +446,21 @@ func (s *circleServiceImpl) UnmuteMember(ctx context.Context, operatorID, circle
 // ===== 拉黑/解禁 =====
 
 // BanMember 拉黑/踢出（admin+；normal/muted → banned）。
-// 拉黑保留记录防重进（JoinCircle 对 banned 拒绝）；原状态为在圈（计数态）时
-// member_count-1 + 发布事件 + joined ZSET 移除，与 LeaveCircle 同链路。
+// 拉黑保留记录防重进（JoinCircle 对 banned 拒绝），计数副作用见 evictMember。
 func (s *circleServiceImpl) BanMember(ctx context.Context, operatorID, circleID, targetUserID uuid.UUID) error {
+	return s.evictMember(ctx, operatorID, circleID, targetUserID, domain.MemberStatusBanned)
+}
+
+// RemoveMember 移出成员（admin+；normal/muted → left）。
+// 与拉黑的区别是不留黑名单：公开圈可再直接加入，私密圈需重新被邀请。
+func (s *circleServiceImpl) RemoveMember(ctx context.Context, operatorID, circleID, targetUserID uuid.UUID) error {
+	return s.evictMember(ctx, operatorID, circleID, targetUserID, domain.MemberStatusLeft)
+}
+
+// evictMember 把在圈成员（normal/muted）迁到 toStatus（banned 或 left），拉黑与移出共用。
+// 权限：admin+，且只能处理角色严格低于自己的人（不能处理自己 / 圈主）。
+// 原状态都在圈（计数态）：member_count-1 + 发布事件 + joined ZSET 移除，与 LeaveCircle 同链路。
+func (s *circleServiceImpl) evictMember(ctx context.Context, operatorID, circleID, targetUserID uuid.UUID, toStatus int16) error {
 	if _, err := s.repo.GetByID(ctx, circleID); err != nil {
 		return err
 	}
@@ -463,12 +476,11 @@ func (s *circleServiceImpl) BanMember(ctx context.Context, operatorID, circleID,
 		return domain.ErrMemberStateConflict
 	}
 
-	err = s.memberRepo.UpdateMemberStatus(ctx, circleID, targetUserID,
-		target.Status, domain.MemberStatusBanned, time.Time{})
+	err = s.memberRepo.UpdateMemberStatus(ctx, circleID, targetUserID, target.Status, toStatus, time.Time{})
 	if errors.Is(err, domain.ErrMemberStateConflict) && target.Status == domain.MemberStatusNormal {
 		// 并发窗口：读到的 normal 已被并发禁言，按 muted 再 CAS 一次（两个源态都计数，副作用等价）。
 		err = s.memberRepo.UpdateMemberStatus(ctx, circleID, targetUserID,
-			domain.MemberStatusMuted, domain.MemberStatusBanned, time.Time{})
+			domain.MemberStatusMuted, toStatus, time.Time{})
 	}
 	if err != nil {
 		return err
@@ -478,7 +490,7 @@ func (s *circleServiceImpl) BanMember(ctx context.Context, operatorID, circleID,
 		logger.Log.Error("Failed to update Redis member count: " + err.Error())
 	}
 	if err := s.publisher.PublishMemberCount(ctx, circleID, -1); err != nil {
-		logger.Log.Error("Failed to publish ban message: " + err.Error())
+		logger.Log.Error("Failed to publish member evict message: " + err.Error())
 	}
 	if err := s.joinedCache.Remove(ctx, targetUserID, circleID); err != nil {
 		logger.Log.Error("Failed to remove joined circle from cache: " + err.Error())
@@ -486,8 +498,8 @@ func (s *circleServiceImpl) BanMember(ctx context.Context, operatorID, circleID,
 	return nil
 }
 
-// UnbanMember 解除拉黑（admin+；banned → left）。不回圈不计数：用户需重新申请加入
-// （JoinCircle 对 left → normal 已有路径）。
+// UnbanMember 解除拉黑（admin+；banned → left）。不回圈不计数：公开圈用户可再直接加入，
+// 私密圈需重新被邀请（JoinCircle 对非公开圈的 left 拒绝）。
 func (s *circleServiceImpl) UnbanMember(ctx context.Context, operatorID, circleID, targetUserID uuid.UUID) error {
 	if _, err := s.repo.GetByID(ctx, circleID); err != nil {
 		return err
@@ -505,46 +517,6 @@ func (s *circleServiceImpl) UnbanMember(ctx context.Context, operatorID, circleI
 	}
 	return s.memberRepo.UpdateMemberStatus(ctx, circleID, targetUserID,
 		domain.MemberStatusBanned, domain.MemberStatusLeft, time.Time{})
-}
-
-// ===== 入圈审核 =====
-
-// ReviewJoinRequest 入圈审核（admin+；pending → normal/left）。
-// 通过：member_count+1 + 发布事件 + joined ZSET 写入（与 JoinCircle 同链路）。
-func (s *circleServiceImpl) ReviewJoinRequest(ctx context.Context, operatorID, circleID, targetUserID uuid.UUID, approve bool) error {
-	if _, err := s.repo.GetByID(ctx, circleID); err != nil {
-		return err
-	}
-	operator, err := s.requireManageRole(ctx, circleID, operatorID, domain.MemberRoleAdmin)
-	if err != nil {
-		return err
-	}
-	target, err := s.loadManagedTarget(ctx, operator, circleID, targetUserID)
-	if err != nil {
-		return err
-	}
-	if target.Status != domain.MemberStatusPending {
-		return domain.ErrMemberStateConflict
-	}
-
-	if !approve {
-		return s.memberRepo.UpdateMemberStatus(ctx, circleID, targetUserID,
-			domain.MemberStatusPending, domain.MemberStatusLeft, time.Time{})
-	}
-	if err := s.memberRepo.UpdateMemberStatus(ctx, circleID, targetUserID,
-		domain.MemberStatusPending, domain.MemberStatusNormal, time.Time{}); err != nil {
-		return err
-	}
-
-	if err := s.incrMemberCountWithRecovery(ctx, circleID); err != nil {
-		logger.Log.Error("Failed to update Redis member count: " + err.Error())
-	}
-	if err := s.publisher.PublishMemberCount(ctx, circleID, 1); err != nil {
-		logger.Log.Error("Failed to publish review-approve message: " + err.Error())
-	}
-	// score 用申请记录的 create_time（加入时间语义与 JoinCircle 一致）。
-	s.tryAddJoined(ctx, targetUserID, circleID, target.CreateTime.UnixMilli())
-	return nil
 }
 
 // ===== 编辑圈子资料 =====
@@ -636,10 +608,8 @@ func (s *circleServiceImpl) UpdateCircleProfile(ctx context.Context, operatorID,
 		}
 		fields.CoverURL = &v
 	}
-	if fields.JoinType != nil {
-		if *fields.JoinType < 0 || *fields.JoinType > 2 {
-			return errInvalidJoinType
-		}
+	if fields.JoinType != nil && !validJoinType(*fields.JoinType) {
+		return errInvalidJoinType
 	}
 
 	if err := s.repo.Update(ctx, circleID, fields); err != nil {

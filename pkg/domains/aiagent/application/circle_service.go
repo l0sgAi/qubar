@@ -71,9 +71,9 @@ type CircleAgentService interface {
 	SetBotUserCreator(c BotUserCreator)
 	// SetBotUserProfileUpdater 注入跨域机器人资料同步端口（复用全局链路端口）。
 	SetBotUserProfileUpdater(u BotUserProfileUpdater)
-	// SetBotUserScopeCleaner 注入跨域机器人圈子绑定清理端口（复用全局链路端口；
-	// 未注入时删除机器人跳过清列，仅记日志，见 clearBotCircleScope fail-open）。
-	SetBotUserScopeCleaner(c BotUserScopeCleaner)
+	// SetBotUserMentionSyncer 注入跨域机器人可 @ 状态投影端口（复用全局链路端口；
+	// 未注入时跳过投影，仅记日志，见 syncBotUserMentionable fail-open）。
+	SetBotUserMentionSyncer(m BotUserMentionSyncer)
 }
 
 type circleAgentServiceImpl struct {
@@ -81,7 +81,7 @@ type circleAgentServiceImpl struct {
 	circleRoles    CircleRoleReader      // 注入前 nil，鉴权 fail-closed
 	botUserCreator BotUserCreator        // 注入前 nil，创建时 fail-fast
 	botUserUpdater BotUserProfileUpdater // 注入前 nil，改名/换头像时跳过同步
-	scopeCleaner   BotUserScopeCleaner   // 注入前 nil，删除时跳过清列（fail-open）
+	mentionSyncer  BotUserMentionSyncer  // 注入前 nil，状态变更时跳过投影（fail-open）
 }
 
 // NewCircleAgentService 构造 CircleAgentService（跨域依赖 setter 注入）。
@@ -94,7 +94,9 @@ func (s *circleAgentServiceImpl) SetBotUserCreator(c BotUserCreator)     { s.bot
 func (s *circleAgentServiceImpl) SetBotUserProfileUpdater(u BotUserProfileUpdater) {
 	s.botUserUpdater = u
 }
-func (s *circleAgentServiceImpl) SetBotUserScopeCleaner(c BotUserScopeCleaner) { s.scopeCleaner = c }
+func (s *circleAgentServiceImpl) SetBotUserMentionSyncer(m BotUserMentionSyncer) {
+	s.mentionSyncer = m
+}
 
 // requireCircleManager 校验操作者是该圈 admin+（role>=20）且成员状态正常。
 // 端口未注入/非成员/圈子不存在/状态非 normal（禁言/拉黑/待审/退出）一律拒绝
@@ -175,9 +177,10 @@ func (s *circleAgentServiceImpl) CreateCircleAgent(ctx context.Context, operator
 	agentID := sharedomain.NewID()
 	botEmail := botEmailForID(agentID)
 	// 圈内机器人：users.agent_circle_id 写入圈子ID（ai_agent.circle_id 的投影，
-	// CDC 同步 ES 后供 @选人 作用域过滤）。与 CreateInCircle 非同一事务（跨库行
-	// 本就独立写，孤儿行语义与全局链路一致）。
-	linkedUserID, err := s.botUserCreator.CreateBotUser(ctx, agent.Name, botEmail, agent.AvatarURL, &circleID)
+	// CDC 同步 ES 后供 @选人 作用域过滤）；创建即停用时同时写不可 @。与 CreateInCircle
+	// 非同一事务（跨库行本就独立写，孤儿行语义与全局链路一致）。
+	linkedUserID, err := s.botUserCreator.CreateBotUser(ctx, agent.Name, botEmail, agent.AvatarURL, &circleID,
+		agent.Status == domain.AgentStatusEnabled)
 	if err != nil {
 		return nil, err
 	}
@@ -269,13 +272,19 @@ func (s *circleAgentServiceImpl) UpdateCircleAgent(ctx context.Context, operator
 
 	// 改名/换头像同步机器人系统用户（含异步重试补偿），与全局链路同构。
 	syncBotUserProfile(ctx, s.botUserUpdater, updated.LinkedUserID, fields)
+	// 启用/停用时同步机器人账号能否被 @（按更新后实体投影），与全局链路同构。
+	if _, ok := fields["status"]; ok {
+		syncBotUserMentionable(ctx, s.mentionSyncer, s.repo, updated.ID, updated.LinkedUserID,
+			updated.Status == domain.AgentStatusEnabled)
+	}
 
 	vo := toVO(updated)
 	return &vo, nil
 }
 
 // DeleteCircleAgent 软删（仅圈主：破坏性操作，对齐转让/任免的 owner-only 惯例）。
-// 软删生效后清机器人账号的圈子绑定（fail-open，语义同全局链 DeleteAgent）。
+// 软删生效后把机器人账号投影为不可 @（fail-open，语义同全局链 DeleteAgent）。
+// 不再清 users.agent_circle_id：清空后机器人会落入"全局机器人"桶、在所有圈子可见（#171）。
 func (s *circleAgentServiceImpl) DeleteCircleAgent(ctx context.Context, operatorID, agentID uuid.UUID) error {
 	agent, err := s.loadCircleAgent(ctx, agentID)
 	if err != nil {
@@ -287,6 +296,6 @@ func (s *circleAgentServiceImpl) DeleteCircleAgent(ctx context.Context, operator
 	if err := s.repo.SoftDelete(ctx, agentID); err != nil {
 		return err
 	}
-	clearBotCircleScope(ctx, s.scopeCleaner, agent.LinkedUserID)
+	syncBotUserMentionable(ctx, s.mentionSyncer, s.repo, agent.ID, agent.LinkedUserID, false)
 	return nil
 }
