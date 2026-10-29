@@ -18,9 +18,10 @@ func newCircleService(deps *Deps) (circleapp.CircleService, circledomain.CircleR
 	joinedCache := circleinfra.NewJoinedCirclesCache()
 	searcher := circleinfra.NewCircleSearcher()
 	publisher := circleinfra.NewCircleEventPublisher()
+	privateCache := circleinfra.NewPrivateCircleCache()
 
 	svc := circleapp.NewCircleService(
-		circleRepo, memberRepo, baseCache, statsCache, joinedCache, searcher, publisher,
+		circleRepo, memberRepo, baseCache, statsCache, joinedCache, searcher, publisher, privateCache,
 	)
 	return svc, circleRepo, memberRepo
 }

@@ -9,6 +9,7 @@ import (
 	agentapp "interestBar/pkg/domains/aiagent/application"
 	categoryinfra "interestBar/pkg/domains/category/infrastructure"
 	circleapp "interestBar/pkg/domains/circle/application"
+	circleinfra "interestBar/pkg/domains/circle/infrastructure"
 	noticeapp "interestBar/pkg/domains/notice/application"
 	userapp "interestBar/pkg/domains/user/application"
 	"interestBar/pkg/logger"
@@ -33,6 +34,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 
 	circleSvc, circleRepo, memberRepo := newCircleService(deps)
 	circleFacade := circleapp.NewCircleFacade(circleRepo)
+	circleVisibility := circleapp.NewCircleVisibility(circleRepo, memberRepo, circleinfra.NewPrivateCircleCache())
 
 	postSvc := newPostService(deps)
 
@@ -53,6 +55,8 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	postSvc.SetMemberChecker(&circleMemberCheckerForPost{memberRepo: memberRepo})
 	postSvc.SetStatusChecker(&circleStatusCheckerForPost{circleRepo: circleRepo})
 	postSvc.SetPostCountPort(&circlePostCountPortForPost{svc: circleSvc})
+	// post 统一判断私密圈可见性（comment / like / collect 经 CanViewPost 复用，见 post_bridges.go）
+	postSvc.SetCircleVisibility(circleVisibility)
 	postSvc.SetModerationCircleReader(&postModerationCircleReader{
 		circleRepo:   circleRepo,
 		categoryRepo: categoryinfra.NewCategoryRepository(deps.DB.Get()),

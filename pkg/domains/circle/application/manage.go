@@ -649,5 +649,8 @@ func (s *circleServiceImpl) UpdateCircleProfile(ctx context.Context, operatorID,
 	if err := s.baseCache.DeleteBase(ctx, circleID); err != nil {
 		logger.Log.Error("Failed to invalidate circle base cache: " + err.Error())
 	}
+	if fields.JoinType != nil && *fields.JoinType != circle.JoinType {
+		s.visibility.invalidatePrivateIDs(ctx)
+	}
 	return nil
 }

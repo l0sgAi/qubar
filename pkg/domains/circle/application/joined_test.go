@@ -182,7 +182,7 @@ func newJoinedFixture() *joinedFixture {
 		cache:    newFakeJoinedCache(),
 		base:     time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC),
 	}
-	f.svc = NewCircleService(nil, f.repo, nil, nil, f.cache, f.searcher, nil).(*circleServiceImpl)
+	f.svc = NewCircleService(nil, f.repo, nil, nil, f.cache, f.searcher, nil, nil).(*circleServiceImpl)
 	return f
 }
 

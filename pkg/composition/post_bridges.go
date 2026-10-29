@@ -108,6 +108,10 @@ func (c *circleStatusCheckerForPost) IsCircleAvailable(ctx context.Context, circ
 	return circle.Status == circledomain.CircleStatusNormal, nil
 }
 
+// circle.application.CircleVisibility 与 post.application.CircleVisibility 方法签名一致（uuid 入参），
+// 直接注入，无需桥接结构体；此 guard 保证两侧签名漂移时编译失败。
+var _ postapp.CircleVisibility = circleapp.CircleVisibility(nil)
+
 // circlePostCountPortForPost 把 circle CircleService 适配为 post 的 CirclePostCountPort。
 type circlePostCountPortForPost struct {
 	svc circleapp.CircleService

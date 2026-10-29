@@ -117,6 +117,10 @@ func (h *Handler) GetCircleDetail(c appctx.AppContext) {
 		httputil.InternalError(c, "Failed to get circle")
 		return
 	}
+	if vo.Restricted {
+		httputil.Success(c, vo.RestrictedView())
+		return
+	}
 	httputil.Success(c, vo)
 }
 
@@ -254,6 +258,8 @@ type GetCirclePostsRequest struct {
 
 // GetCirclePosts GET /circle/posts
 func (h *Handler) GetCirclePosts(c appctx.AppContext) {
+	viewerID, _ := requireUserIDAllowAnon(c)
+
 	var req GetCirclePostsRequest
 	if err := c.BindQuery(&req); err != nil {
 		logger.Log.Error("Invalid request parameters: " + err.Error())
@@ -273,8 +279,12 @@ func (h *Handler) GetCirclePosts(c appctx.AppContext) {
 		return
 	}
 
-	result, err := h.svc.GetCirclePosts(c, circleID, req.Type, size, searchAfter)
+	result, err := h.svc.GetCirclePosts(c, viewerID, circleID, req.Type, size, searchAfter)
 	if err != nil {
+		if application.IsCircleContentForbiddenErr(err) {
+			httputil.Forbidden(c, "This circle is private; its posts are visible to members only")
+			return
+		}
 		logger.Log.Error("Failed to search circle posts: " + err.Error())
 		httputil.SearchError(c, err, "Failed to search circle posts")
 		return

@@ -135,6 +135,8 @@
 | 帖子→circle_id 反查 | `PostMetaReader.ListCircleIDsByPostIDs` | `recommend/domain/ports.go:70` |
 | 帖子→circle_id 映射（含已删 / 任意状态） | `PostService.GetCircleIDsByPostIDs(ctx,[]uuid) map[uuid]uuid` | `post/application/service.go` |
 | 用户已加圈子 IDs | `CircleLookup.ListJoinedCircleIDs` | `recommend/domain/ports.go:75` |
+| 私密圈内容可见性（单圈判断 / 查看者不可见圈子集合） | `CircleVisibility.CanView` / `HiddenCircleIDs`（Redis 缓存私密圈 ID 集合，成员身份直查 PG） | `circle/application/visibility.go` |
+| 帖子对查看者是否可见（私密圈） | `PostService.CanViewPost`（comment / like / collect 经桥接复用） | `post/application/visibility.go` |
 | ES 窗口化 terms 聚合榜 | `AggregateActiveCircles`（范式蓝本） | `elasticsearch/post.go:586` |
 | ES 时间衰减热度排序 | `SearchHomeFeed`（rank_score 脚本） | `elasticsearch/post.go:711` |
 | Redis 原子计数 helper | `IncrementCircle{Member,Post,Hot}` 等 | `redis/cache.go:234+` |

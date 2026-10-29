@@ -22,6 +22,9 @@ var (
 	errPrivateCircle    = errors.New("this circle is private and requires invitation")
 	errOwnerCannotLeave = errors.New("circle owner cannot leave the circle")
 	errNotMember        = errors.New("not a member of this circle")
+
+	// errCircleContentForbidden 私密圈内容仅成员可见（圈内帖子列表对非成员 403）。
+	errCircleContentForbidden = errors.New("this circle is private and its content is visible to members only")
 )
 
 // 圈子管理（circle management）的错误。
@@ -47,6 +50,9 @@ func IsBannedFromCircleErr(err error) bool   { return errors.Is(err, errBannedFr
 func IsPrivateCircleErr(err error) bool      { return errors.Is(err, errPrivateCircle) }
 func IsOwnerCannotLeaveErr(err error) bool   { return errors.Is(err, errOwnerCannotLeave) }
 func IsNotMemberErr(err error) bool          { return errors.Is(err, errNotMember) }
+
+// IsCircleContentForbiddenErr 私密圈内容对非成员不可见（→ 403）。
+func IsCircleContentForbiddenErr(err error) bool { return errors.Is(err, errCircleContentForbidden) }
 
 // 管理操作错误判断函数。
 func IsNotCircleAdminErr(err error) bool        { return errors.Is(err, errNotCircleAdmin) }

@@ -2,6 +2,7 @@ package infrastructure
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -45,6 +46,44 @@ func (c *circleBaseCacheRedis) SetBase(ctx context.Context, circleID uuid.UUID, 
 // DeleteBase 删除圈子基础信息缓存（编辑圈子资料后失效；TTL 24h 兜底残余）。
 func (c *circleBaseCacheRedis) DeleteBase(ctx context.Context, circleID uuid.UUID) error {
 	return redispkg.Client.Del(ctx, redispkg.GetCircleInfoKey(circleID)).Err()
+}
+
+// privateCircleCacheRedis 基于 Redis string(JSON 数组) 的 PrivateCircleCache 实现。
+type privateCircleCacheRedis struct{}
+
+// NewPrivateCircleCache 构造 PrivateCircleCache。
+func NewPrivateCircleCache() domain.PrivateCircleCache {
+	return &privateCircleCacheRedis{}
+}
+
+func (c *privateCircleCacheRedis) Get(ctx context.Context) ([]uuid.UUID, bool, error) {
+	raw, err := redispkg.Client.Get(ctx, redispkg.CirclePrivateIDsKey).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	ids := []uuid.UUID{}
+	if err := json.Unmarshal(raw, &ids); err != nil {
+		return nil, false, err
+	}
+	return ids, true, nil
+}
+
+func (c *privateCircleCacheRedis) Set(ctx context.Context, ids []uuid.UUID) error {
+	if ids == nil {
+		ids = []uuid.UUID{} // 空集合存 "[]"，与未命中区分
+	}
+	raw, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	return redispkg.Client.Set(ctx, redispkg.CirclePrivateIDsKey, raw, redispkg.CirclePrivateIDsTTL).Err()
+}
+
+func (c *privateCircleCacheRedis) Delete(ctx context.Context) error {
+	return redispkg.Client.Del(ctx, redispkg.CirclePrivateIDsKey).Err()
 }
 
 // circleStatsCacheRedis 基于 Redis Hash 的 CircleStatsCache 实现。
