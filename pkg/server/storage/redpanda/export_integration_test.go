@@ -2,7 +2,14 @@
 
 package redpanda
 
-import "github.com/google/uuid"
+import (
+	"context"
+	"encoding/json"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/segmentio/kafka-go"
+)
 
 // 供外部测试包 redpanda_test 的集成测试调用（testkit 依赖本包，包内测试无法导入 testkit）。
 
@@ -12,7 +19,8 @@ func PersistPostStatsForTest(ids []uuid.UUID, delta int64) error {
 	for _, id := range ids {
 		buf[id] = &postStatDelta{ViewCount: delta, LikeCount: delta}
 	}
-	return batchUpdatePostStats(buf)
+	_, err := batchUpdatePostStats(buf)
+	return err
 }
 
 // UpdatePostHotForTest 帖子热度消费者落库：按 ids 给定顺序构造行，每帖 hot +delta。
@@ -67,3 +75,41 @@ func UpsertNotificationForTest(id, recipientID, actorID uuid.UUID, noticeType in
 		ID: id, RecipientID: recipientID, ActorID: actorID, NoticeType: noticeType, PostID: &postID, Snippet: snippet,
 	}})
 }
+
+// PostStatsConsumerForTest 帖子统计消费者（生产 spec，不带 reader / ticker）：测试逐条喂消息、手动 flush。
+type PostStatsConsumerForTest struct {
+	c *batchConsumer[PostStatisticsMessage, postStatsBuf]
+}
+
+// NewPostStatsConsumerForTest afterPersist 在真实落库成功之后调用；返回非 nil 时本次 flush 按失败处理
+// （缓冲合并回、offset 不提交），模拟「已落库但未确认」后的重试。
+func NewPostStatsConsumerForTest(committer interface {
+	CommitMessages(ctx context.Context, msgs ...kafka.Message) error
+}, afterPersist func() error) *PostStatsConsumerForTest {
+	spec := postStatsSpec
+	spec.persist = func(b postStatsBuf) error {
+		if err := persistPostStats(b); err != nil {
+			return err
+		}
+		if afterPersist != nil {
+			return afterPersist()
+		}
+		return nil
+	}
+	c := newBatchConsumer(spec, committer, time.Hour)
+	c.ticker.Stop() // 不启动 run()，flush 由测试驱动
+	return &PostStatsConsumerForTest{c: c}
+}
+
+// Add 与读循环一致：解析消息并合并进缓冲（解析失败只推进 offset）。
+func (p *PostStatsConsumerForTest) Add(km kafka.Message) {
+	var msg PostStatisticsMessage
+	if err := json.Unmarshal(km.Value, &msg); err != nil {
+		p.c.addMessage(nil, km)
+		return
+	}
+	p.c.addMessage(&msg, km)
+}
+
+// Flush 落库 → 提交 offset（失败时合并回缓冲，下次 Flush 重试）。
+func (p *PostStatsConsumerForTest) Flush() { p.c.flush() }

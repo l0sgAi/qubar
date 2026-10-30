@@ -67,7 +67,7 @@ type PostLookup interface {
 	// GetPost 返回帖子信息。未找到返回 nil, nil。
 	GetPost(ctx context.Context, postID uuid.UUID) (*PostInfo, error)
 	// RestoreStatsAndIncrCommentCount 恢复帖子统计缓存（如果不存在），
-	// 然后递增帖子评论计数（Redis Hash 实时 + DB 同步持久化）。
+	// 然后递增帖子评论计数（Redis Hash 实时 + 帖子统计事件批量落库，#130）。
 	RestoreStatsAndIncrCommentCount(ctx context.Context, postID uuid.UUID) error
 	// CanView 查看者能否看到该帖（私密圈仅成员可见，访客视为非成员；帖子不存在返回 false）。
 	CanView(ctx context.Context, viewerID, postID uuid.UUID) (bool, error)
@@ -280,7 +280,7 @@ func (s *commentServiceImpl) SetAgentTrigger(t AgentReplyTrigger) { s.agentTrigg
 //  2. 如果是回复，校验 root_id 属于同一帖子，校验 reply_to_id 在同一楼层，获取被回复用户ID；
 //  3. 清洗 content（SanitizeForPg，剔除 NULL 字节等非法 UTF8）；
 //  4. 创建评论（事务内：插入评论 + 如为回复则递增根评论 reply_count）；
-//  5. 实时递增帖子评论计数（Redis Hash + DB 同步持久化）。
+//  5. 实时递增帖子评论计数（Redis Hash 实时 + 帖子统计事件批量落库）。
 func (s *commentServiceImpl) CreateComment(ctx context.Context, userID uuid.UUID, input CreateCommentInput) (uuid.UUID, error) {
 	// 1. 校验帖子
 	if s.postLookup == nil {
@@ -374,7 +374,7 @@ func (s *commentServiceImpl) CreateComment(ctx context.Context, userID uuid.UUID
 		return uuid.Nil, err
 	}
 
-	// 5. 实时递增帖子评论计数（Redis Hash + 恢复缓存 + DB 同步持久化）
+	// 5. 实时递增帖子评论计数（Redis Hash + 恢复缓存 + 帖子统计事件批量落库）
 	if err := s.postLookup.RestoreStatsAndIncrCommentCount(ctx, input.PostID); err != nil {
 		logger.Log.Error("Failed to increment post comment count: " + err.Error())
 	}

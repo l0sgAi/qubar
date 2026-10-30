@@ -8,6 +8,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -276,7 +277,7 @@ type PostService interface {
 	// 已发布未锁定、热度达标、时间窗口内、作者非机器人账号、在圈子范围内，按热度降序 top-N。
 	ListAutoReplyCandidates(ctx context.Context, q AutoReplyPostQuery) ([]AutoReplyPostCandidate, error)
 	// RestoreStatsAndIncrCommentCount 恢复帖子统计缓存（如果不存在），
-	// 然后递增帖子评论计数（Redis Hash + Redpanda 异步持久化）。
+	// 然后递增帖子评论计数（Redis Hash 实时 + 帖子统计事件批量落库）。
 	// 供 comment 领域发评论后调用。
 	RestoreStatsAndIncrCommentCount(ctx context.Context, postID uuid.UUID) error
 	// RestoreStats 恢复帖子统计缓存（如果不存在）。
@@ -1018,8 +1019,8 @@ func (s *postServiceImpl) asyncIncrementView(postID, userID uuid.UUID) {
 
 // restorePostStats 从 DB 恢复帖子统计缓存。
 //
-// 与旧 controller/comment.go 中的 restorePostStatsIfNeed 行为一致。
-// 这里直接读 Post 实体的计数字段写入 Redis。
+// 读 Post 实体的计数字段回种 Redis。用 SetIfAbsent（HSetNX）：调用方先查 Exists 再回种，
+// 并发请求（如同一帖子同时有多条评论）可能都看到「不存在」，普通 HSet 会冲掉先到者已经 HINCRBY 的增量。
 func (s *postServiceImpl) restorePostStats(postID uuid.UUID) {
 	post, err := s.repo.GetByID(context.Background(), postID)
 	if err != nil {
@@ -1032,7 +1033,7 @@ func (s *postServiceImpl) restorePostStats(postID uuid.UUID) {
 		LikeCount:    post.LikeCount,
 		CollectCount: post.CollectCount,
 	}
-	if err := s.statsCache.Set(context.Background(), postID, stats); err != nil {
+	if err := s.statsCache.SetIfAbsent(context.Background(), postID, stats); err != nil {
 		logger.Log.Error("Failed to restore post stats cache: " + err.Error())
 	}
 }
@@ -1462,13 +1463,25 @@ func (s *postServiceImpl) GetPostBrief(ctx context.Context, postID uuid.UUID) (*
 }
 
 // RestoreStatsAndIncrCommentCount 恢复帖子统计缓存（如果不存在），
-// 然后递增帖子评论计数（Redis Hash 实时 + DB 同步持久化）。
+// 然后递增帖子评论计数（Redis Hash 实时 + 帖子统计事件批量落库）。
 //
-// 评论计数不再走 Redpanda 异步聚合：评论是低频、本就带 DB 事务的写入，
-// 同步 UPDATE 比批量聚合更简单且消除 DB 滞后导致的缓存回源少算问题。
-// view/like/collect 仍走聚合器（高频，需批量）。
+// 评论计数不再同步 UPDATE post（#130）：每条评论一次单行 UPDATE 会让热帖成为热点行，
+// 且每次都经 CDC 触发 ES 整篇重建索引。改为与浏览量同一条批量 UPDATE，落库时按评论明细重算（幂等）。
+// 读路径以 Redis 为真值；缓存回源读到落库前旧值的问题由消费者落库后校准兜底（同点赞 #128）。
 func (s *postServiceImpl) RestoreStatsAndIncrCommentCount(ctx context.Context, postID uuid.UUID) error {
-	// 1. 缓存恢复（如果统计 Hash 不存在，先从 DB 恢复）
+	// 1. 缓存恢复（如果统计 Hash 不存在，先从 DB 恢复）+ 实时递增 Redis 评论计数
+	cacheErr := s.incrCachedCommentCount(ctx, postID)
+
+	// 2. 发布评论数变化事件（批量落库）。缓存失败也要发，否则 DB 计数要等该帖下一条评论才会更新。
+	var publishErr error
+	if s.publisher != nil {
+		publishErr = s.publisher.PublishCommentCount(ctx, postID)
+	}
+	return errors.Join(cacheErr, publishErr)
+}
+
+// incrCachedCommentCount 确保统计 Hash 存在后递增 comment_count。
+func (s *postServiceImpl) incrCachedCommentCount(ctx context.Context, postID uuid.UUID) error {
 	exists, err := s.statsCache.Exists(ctx, postID)
 	if err != nil {
 		return err
@@ -1476,14 +1489,7 @@ func (s *postServiceImpl) RestoreStatsAndIncrCommentCount(ctx context.Context, p
 	if !exists {
 		s.restorePostStats(postID)
 	}
-
-	// 2. 实时递增帖子评论计数（Redis Hash）
-	if err := s.statsCache.IncrCommentCount(ctx, postID); err != nil {
-		return err
-	}
-
-	// 3. 同步递增 DB 评论计数（实时持久化）
-	return s.repo.IncrCommentCount(ctx, postID)
+	return s.statsCache.IncrCommentCount(ctx, postID)
 }
 
 // RestoreStats 恢复帖子统计缓存（如果不存在）。
