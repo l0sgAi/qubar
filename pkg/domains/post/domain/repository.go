@@ -32,9 +32,6 @@ type PostRepository interface {
 	ListActiveLikes(ctx context.Context, userID uuid.UUID, limit int) ([]InteractionEntry, error)
 	// ListActiveCollects 列出用户的有效收藏（最多 limit 条，新→旧），供收藏 ZSET 首次全量装载（#129）。
 	ListActiveCollects(ctx context.Context, userID uuid.UUID, limit int) ([]InteractionEntry, error)
-	// IncrCommentCount 同步递增帖子评论计数（DB UPDATE comment_count + 1）。
-	// 供 comment 领域发评论后调用，替代旧的 Redpanda 异步聚合。
-	IncrCommentCount(ctx context.Context, postID uuid.UUID) error
 	// CreateMentions 批量写入帖子 @提及 名单（发帖时的最终落库名单）。
 	// 名单须先经 application 层校验（存在/去自/截断）；重复行幂等忽略。
 	CreateMentions(ctx context.Context, postID uuid.UUID, userIDs []uuid.UUID) error
@@ -139,6 +136,9 @@ type PostCollectCache interface {
 type PostEventPublisher interface {
 	// PublishViewCount 发布浏览量变化事件。
 	PublishViewCount(ctx context.Context, postID uuid.UUID) error
+	// PublishCommentCount 发布评论数变化事件（评论创建 / 删除后调用）。
+	// 消费者批量落库时按评论明细重算 comment_count，不累加增量（#130）。
+	PublishCommentCount(ctx context.Context, postID uuid.UUID) error
 	// PublishMentionNotice 发布 @提及 通知事件（消息中心）。
 	// mentionUserIDs 由调用方校验（存在性/去自/截断）后传入；snippet 为帖子标题。
 	PublishMentionNotice(ctx context.Context, actorID, postID uuid.UUID, mentionUserIDs []uuid.UUID, snippet string) error

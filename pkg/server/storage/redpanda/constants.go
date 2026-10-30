@@ -15,6 +15,9 @@ const (
 	StatisticsTypePostView    = "post_view_count"
 	StatisticsTypePostLike    = "post_like_count"
 	StatisticsTypePostCollect = "post_collect_count"
+	// StatisticsTypePostComment 帖子评论数变化（#130）：只标记「该帖评论有变化」，Value 不参与计算，
+	// 落库时按 domains.comment 明细重算 comment_count（幂等，见 consumer.go batchUpdatePostStats）。
+	StatisticsTypePostComment = "post_comment_count"
 )
 
 // CircleStatisticsMessage 圈子统计消息
