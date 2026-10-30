@@ -198,6 +198,30 @@ func TestPostStatsBuf_MergeAddsAllFields(t *testing.T) {
 	}
 }
 
+// 评论数事件只做标记（#130）：value 不累加，合并 / 重放后仍是同一个标记，空标记不落库。
+func TestPostStatsBuf_CommentMarksDirtyWithoutSumming(t *testing.T) {
+	id, other := uuid.New(), uuid.New()
+	dst := make(postStatsBuf)
+	dst.add(PostStatisticsMessage{Type: StatisticsTypePostComment, PostID: id, Value: 1})
+	dst.add(PostStatisticsMessage{Type: StatisticsTypePostComment, PostID: id, Value: 1})
+	dst.add(PostStatisticsMessage{Type: StatisticsTypePostView, PostID: other, Value: 1})
+
+	src := make(postStatsBuf)
+	src.add(PostStatisticsMessage{Type: StatisticsTypePostComment, PostID: id, Value: -1})
+	src.add(PostStatisticsMessage{Type: StatisticsTypePostComment, PostID: other, Value: 1})
+	dst.merge(src)
+
+	if d := dst[id]; !d.CommentDirty || d.ViewCount != 0 || d.empty() {
+		t.Fatalf("id: got %+v, want comment dirty only", *d)
+	}
+	if d := dst[other]; !d.CommentDirty || d.ViewCount != 1 {
+		t.Fatalf("other: got %+v, want comment dirty + view 1", *d)
+	}
+	if !(&postStatDelta{}).empty() {
+		t.Fatal("zero delta should be empty")
+	}
+}
+
 func TestHistorySpec_SkipsNilIDsAndCountsViews(t *testing.T) {
 	u, p := uuid.New(), uuid.New()
 	b := historySpec.newBuf()

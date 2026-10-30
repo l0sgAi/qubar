@@ -19,7 +19,7 @@ import (
 //
 // 统一做法：同一事务内先 lockRowsByID（SELECT ... ORDER BY id FOR NO KEY UPDATE，LockRows 在排序之上，
 // 按主键升序逐行加锁），再执行 UPDATE（锁已持有，不再等待）。所有批量写入方按同一全序取锁，彼此只会排队、不会成环。
-// 单行写入（如评论创建同步 IncrCommentCount）只锁一行，与之也不会成环。
+// 评论数并入帖子统计消费者（#130），已没有对 domains.post 的单行同步写入。
 // Go 侧行切片同样按 id 排序（sortByID），JSON 与日志确定、便于排查。
 
 // compareID 与 PostgreSQL uuid 排序一致（按 16 字节逐字节比较）。

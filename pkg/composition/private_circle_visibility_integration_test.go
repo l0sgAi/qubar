@@ -26,6 +26,7 @@ import (
 	postapp "interestBar/pkg/domains/post/application"
 	postdomain "interestBar/pkg/domains/post/domain"
 	postinfra "interestBar/pkg/domains/post/infrastructure"
+	redispkg "interestBar/pkg/server/storage/redis"
 	sharedomain "interestBar/pkg/shared/domain"
 	"interestBar/pkg/shared/testkit"
 
@@ -155,6 +156,7 @@ func newVisCircle(t *testing.T, env *visibilityEnv, joinType int16) visCircle {
 		testkit.CleanupRows(t, table, "post_id", p.ID)
 	}
 	testkit.CleanupRows(t, "domains.post", "id", p.ID)
+	testkit.CleanupKeys(t, redispkg.GetPostStatsKey(p.ID))
 
 	commentID, err := env.commentSvc.CreateComment(ctx, c.owner, commentapp.CreateCommentInput{PostID: p.ID, Content: "圈主的评论"})
 	if err != nil {
@@ -276,8 +278,12 @@ func TestPrivateCircle_WritesRejectedForNonMembers(t *testing.T) {
 			assertRowCount(t, env.db, `SELECT count(*) FROM domains.post_report WHERE post_id = ? AND reporter_id = ?`, 0, c.postID, v.id)
 		})
 	}
-	// 只有圈主那条评论计入评论数
-	assertRowCount(t, env.db, `SELECT comment_count FROM domains.post WHERE id = ?`, 1, c.postID)
+	// 只有圈主那条评论计入评论数。评论数改为批量落库（#130），落库前以 Redis 实时计数为准，按详情读路径断言。
+	assertRowCount(t, env.db, `SELECT count(*) FROM domains.comment WHERE post_id = ? AND deleted = 0`, 1, c.postID)
+	detail, err := env.postSvc.GetPostDetail(ctx, c.owner, c.postID)
+	if err != nil || detail.CommentCount != 1 {
+		t.Fatalf("detail comment_count = %+v, %v; want 1", detail, err)
+	}
 }
 
 func TestPrivateCircle_MemberWrites(t *testing.T) {
