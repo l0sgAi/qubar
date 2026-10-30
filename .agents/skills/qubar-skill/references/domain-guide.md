@@ -29,6 +29,7 @@
 | circle | GET | `/circle/user` | 某用户的圈子 |
 | circle | POST | `/circle/join` | 加圈 |
 | circle | POST | `/circle/leave` | 退圈 |
+| circle | POST | `/circle/invite/link/create` | 私密圈邀请链接（另有 link/list、link/revoke、preview、accept；见 docs/api/circle-invite-api.md） |
 | circle | GET | `/circle/posts` | 圈内帖子 |
 | post | POST | `/post/create` | 发帖 |
 | post | GET | `/post/list` | 帖子列表(ES) |
