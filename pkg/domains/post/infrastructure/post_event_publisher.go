@@ -23,6 +23,11 @@ func (p *postEventPublisherRedpanda) PublishViewCount(ctx context.Context, postI
 	return redpanda.PublishPostViewCount(postID)
 }
 
+// PublishCommentCount 发布评论数变化事件（帖子统计 topic，消费者按明细重算 comment_count）。
+func (p *postEventPublisherRedpanda) PublishCommentCount(ctx context.Context, postID uuid.UUID) error {
+	return redpanda.PublishPostCommentCount(postID, 1)
+}
+
 // PublishMentionNotice 发布 @提及 通知事件（消息中心，best-effort 不阻断主流程）。
 func (p *postEventPublisherRedpanda) PublishMentionNotice(ctx context.Context, actorID, postID uuid.UUID, mentionUserIDs []uuid.UUID, snippet string) error {
 	_ = ctx
