@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"context"
+	"net/url"
+	"strings"
 	"time"
 
 	"interestBar/pkg/logger"
@@ -22,7 +24,7 @@ func Logger() app.HandlerFunc {
 			c.Next(ctx) // 探针高频调用，不记访问日志
 			return
 		}
-		query := string(c.Request.URI().QueryString())
+		query := redactQuery(string(c.Request.URI().QueryString()))
 
 		c.Next(ctx)
 
@@ -43,4 +45,33 @@ func Logger() app.HandlerFunc {
 // middleware 不反向依赖 server 包，故此处重复声明）。
 func isProbePath(path string) bool {
 	return path == "/healthz" || path == "/readyz"
+}
+
+// redactedQueryKeys 访问日志中需要打码的查询参数（如邀请预览 GET /circle/invite/preview?token=）。
+var redactedQueryKeys = map[string]bool{"token": true}
+
+// redactQuery 把敏感查询参数的值替换为 REDACTED，其余参数原样保留（不重排、不重新编码）。
+func redactQuery(q string) string {
+	if q == "" || !strings.Contains(q, "=") {
+		return q
+	}
+	parts := strings.Split(q, "&")
+	changed := false
+	for i, p := range parts {
+		k, _, ok := strings.Cut(p, "=")
+		if !ok {
+			continue
+		}
+		if dk, err := url.QueryUnescape(k); err == nil {
+			k = dk
+		}
+		if redactedQueryKeys[strings.ToLower(k)] {
+			parts[i] = k + "=REDACTED"
+			changed = true
+		}
+	}
+	if !changed {
+		return q
+	}
+	return strings.Join(parts, "&")
 }

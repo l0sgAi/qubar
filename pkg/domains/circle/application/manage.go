@@ -621,6 +621,10 @@ func (s *circleServiceImpl) UpdateCircleProfile(ctx context.Context, operatorID,
 	}
 	if fields.JoinType != nil && *fields.JoinType != circle.JoinType {
 		s.visibility.invalidatePrivateIDs(ctx)
+		// 私密圈改为公开：已有邀请链接全部失效（#169）。
+		if circle.JoinType == domain.CircleJoinTypePrivate {
+			s.revokeInviteLinksOnPublic(ctx, operatorID, circleID)
+		}
 	}
 	return nil
 }

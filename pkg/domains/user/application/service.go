@@ -54,6 +54,9 @@ type UserFacade interface {
 	// 不可被 @ 的机器人，普通用户/可 @ 的全局机器人不出现在 map 里）。
 	// 供 post/comment 域 mention 兜底剔除越圈、停用或已删除的机器人。
 	GetAgentMentionScopes(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]AgentMentionScope, error)
+	// GetEmail 返回正常状态用户的 email（原样，不做规整）；用户不存在 / 非正常状态返回空串。
+	// 供 circle 域按 email 匹配私密圈邀请（#169）。
+	GetEmail(ctx context.Context, userID uuid.UUID) (string, error)
 }
 
 // AgentMentionScope 机器人账号的 @提及 可见范围（users.agent_circle_id / agent_mention_disabled 投影）。
@@ -250,6 +253,15 @@ func (f *userFacadeAdapter) SearchBriefs(ctx context.Context, keyword string, li
 // GetAgentMentionScopes 批量返回 userID → 机器人 @提及 可见范围（薄转发 UserService 同名方法）。
 func (f *userFacadeAdapter) GetAgentMentionScopes(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]AgentMentionScope, error) {
 	return f.svc.GetAgentMentionScopes(ctx, userIDs)
+}
+
+// GetEmail 复用 GetByID（缓存优先，已过滤非正常 / 已删除用户）。
+func (f *userFacadeAdapter) GetEmail(ctx context.Context, userID uuid.UUID) (string, error) {
+	user, err := f.svc.GetByID(ctx, userID)
+	if err != nil || user == nil {
+		return "", err
+	}
+	return user.Email, nil
 }
 
 // GetByID 获取用户详情，先查缓存再回源 DB。

@@ -20,6 +20,8 @@
 | 移出成员（不拉黑） | `POST /circle/manage/remove` | 圈主 + 管理员 |
 | ~~入圈审核~~（**已删除**，#168） | ~~`POST /circle/manage/review`~~ | 调用返回 404 |
 | 编辑圈子资料 | `PUT /circle/update` | 圈主（全部字段）/ 管理员（部分字段） |
+| 私密圈邀请链接（生成 / 列表 / 撤销） | `POST /circle/invite/link/create` 等 | 圈主 + 管理员（详见 `docs/api/circle-invite-api.md`，#169） |
+| 私密圈 email 邀请（添加 / 列表 / 撤销） | `POST /circle/invite/email/add` 等 | 圈主 + 管理员（同上） |
 | 待审帖子列表（AI 转人工） | `GET /circle/moderation/posts` | 圈主 + 管理员（详见 `docs/api/post-moderation-review-api.md`） |
 | 帖子人工审核（通过/驳回） | `POST /circle/moderation/review` | 圈主 + 管理员（同上） |
 | 被举报帖子列表 | `GET /circle/moderation/reports` | 圈主 + 管理员（同上，#153） |

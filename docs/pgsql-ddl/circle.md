@@ -218,3 +218,38 @@ CREATE INDEX idx_member_user ON domains.circle_member(user_id, role, status);
 -- 场景：圈主管理成员，或者展示成员列表
 CREATE INDEX idx_member_circle_role ON domains.circle_member(circle_id, role DESC, create_time DESC);
 ```
+
+## 邀请表（#169）
+
+> 权威 DDL 见 `migrations/20261030113603_add_circle_invite.up.sql`，这里只说明字段语义。两张表都只在 PG 内读写，不进 CDC / ES。
+
+### `domains.circle_invite_link` 邀请链接
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | uuid | UUIDv7，应用层 `sharedomain.NewID()` 生成 |
+| `circle_id` | uuid | 圈子 ID（仅私密圈可创建） |
+| `creator_id` | uuid | 创建人（创建时须为圈主 / 管理员） |
+| `token_hash` | varchar(64) | token 的 SHA-256 小写 hex；token = 32 字节随机数的 base64url（无填充），明文只在创建响应中出现一次 |
+| `expire_time` | timestamptz | 过期时间，默认创建后 7 天，最长 30 天 |
+| `max_uses` | integer | 最大使用次数，NULL = 不限 |
+| `used_count` | integer | 已用次数；接受时 `UPDATE ... WHERE max_uses IS NULL OR used_count < max_uses` 原子递增，已是成员不消耗 |
+| `revoked` | smallint | 0 = 有效，1 = 已撤销（手动撤销，或私密圈改公开时批量撤销） |
+| `create_time` / `update_time` / `update_by` | | 审计字段；`update_by` 为撤销人，`creator_id` 即创建人 |
+
+索引：`uk_circle_invite_link_token_hash (token_hash)`（token 等值校验）、`idx_circle_invite_link_circle (circle_id, create_time DESC)`（管理端列表）。
+
+### `domains.circle_invite_email` 指定 email 邀请
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | uuid | UUIDv7，应用层生成 |
+| `circle_id` | uuid | 圈子 ID（仅私密圈可添加） |
+| `inviter_id` | uuid | 最近一次添加 / 重新邀请的圈主或管理员 |
+| `email` | varchar(100) | 被邀请邮箱，存储前 trim + 小写，与 `users.email` 等值匹配；可以还没有对应注册用户 |
+| `status` | smallint | 0 = 待接受，1 = 已接受，2 = 已撤销，3 = 已拒绝；已撤销 / 已拒绝再次添加时重置为 0 |
+| `create_time` / `update_time` / `update_by` | | 审计字段；`update_by` 为最后操作人（管理者或被邀请人） |
+
+索引：`uk_circle_invite_email_circle_email (circle_id, email)`（唯一 + 管理端列表）、`idx_circle_invite_email_pending (email, create_time DESC) WHERE status = 0`（`GET /circle/invite/my`）。
+
+两张表都没有 `deleted` 列：生命周期由 `revoked` / `status` 表达，行不做删除。

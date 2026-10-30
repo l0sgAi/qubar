@@ -201,6 +201,18 @@ func PublishPostCollectCount(postID uuid.UUID, value int64) error {
 	})
 }
 
+// PublishPostCommentCount 发布帖子评论数变化消息（评论创建 / 删除后调用；消费者按明细重算，不累加 value）
+func PublishPostCommentCount(postID uuid.UUID, value int64) error {
+	if postWriter == nil {
+		return fmt.Errorf("post stats writer is not initialized")
+	}
+	return publishPostMessage(PostStatisticsMessage{
+		Type:   StatisticsTypePostComment,
+		PostID: postID,
+		Value:  value,
+	})
+}
+
 // publishPostMessage 发送帖子统计消息到Redpanda
 func publishPostMessage(message PostStatisticsMessage) error {
 	value, err := json.Marshal(message)
