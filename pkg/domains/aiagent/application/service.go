@@ -3,11 +3,12 @@
 // 职责：
 //   - 管理端机器人 CRUD 用例编排（role=1 管理员专用，service 层统一鉴权防绕过）；
 //   - api_key 应用层加密（AES-256-GCM，密钥 conf.Security.DataKey），响应只回掩码；
-//   - 通过 RoleReader / BotUserCreator 端口跨域访问 user 领域（composition 桥接注入）。
+//   - 通过 RoleReader / BotUserCreator / BotUserMentionSyncer 等端口跨域访问 user 领域（composition 桥接注入）。
 package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -38,15 +39,18 @@ type BotUserCreator interface {
 	// username 用机器人 name（users.username 无唯一约束，允许重复）；
 	// email 由调用方保证全局唯一（users.email 有唯一索引）。
 	// circleID 非 nil 时写入 users.agent_circle_id（圈内机器人 @提及 作用域投影；
-	// 全局链路传 nil）。其余语义不变。
-	CreateBotUser(ctx context.Context, username, email, avatarURL string, circleID *uuid.UUID) (uuid.UUID, error)
+	// 全局链路传 nil）。mentionable=false 时写入 users.agent_mention_disabled=1
+	// （创建即停用的机器人不出现在 @选人列表）。其余语义不变。
+	CreateBotUser(ctx context.Context, username, email, avatarURL string, circleID *uuid.UUID, mentionable bool) (uuid.UUID, error)
 }
 
-// BotUserScopeCleaner 跨域端口：机器人软删时清 users.agent_circle_id（恢复"全局可见"语义）。
-// 只清列，不动 users.status（已删全局机器人仍可被@的存量行为不变，决策①见
-// docs/circle-agent-mention-scope-design.md）。实现方需同步失效 userinfo 缓存。
-type BotUserScopeCleaner interface {
-	ClearBotCircleScope(ctx context.Context, userID uuid.UUID) error
+// BotUserMentionSyncer 跨域端口：把机器人启用状态投影到关联系统用户
+// （users.agent_mention_disabled，CDC 同步 ES 后供 @选人过滤，mention 兜底也按它剔除）。
+// 停用/删除写不可 @，启用写可 @；只动投影列，不动 users.status（GetBriefs 跳过非正常用户，
+// 改 status 会让机器人历史评论丢失作者信息）与 agent_circle_id（删除后仍按原圈收口）。
+// 实现方需同步刷新 userinfo 缓存，且必须幂等（失败重试会重复写）。
+type BotUserMentionSyncer interface {
+	SetBotUserMentionable(ctx context.Context, userID uuid.UUID, mentionable bool) error
 }
 
 // BotUserProfileUpdater 跨域端口：同步机器人资料到关联系统用户。
@@ -87,6 +91,18 @@ type CreateAgentInput struct {
 	MaxRepliesPerHour int                    `json:"max_replies_per_hour"`
 	MinIntervalSec    int                    `json:"min_interval_sec"`
 	Status            *int                   `json:"status"` // nil=默认启用；显式 0=停用
+	AutoConfig        *AutoConfigInput       `json:"auto_config"`
+}
+
+// AutoConfigInput 自主行为配置入参（auto_config）。子对象按顶层 key 独立写入：
+// 传了 auto_reply 即整体替换该子对象，未传的子对象（含其他自主行为）保持不变。
+type AutoConfigInput struct {
+	AutoReply *domain.AutoReplyConfig `json:"auto_reply"`
+}
+
+// AutoConfigVO 自主行为配置视图（未配置的子对象回显零值，即 enabled=false）。
+type AutoConfigVO struct {
+	AutoReply domain.AutoReplyConfig `json:"auto_reply"`
 }
 
 // UpdateAgentInput 更新机器人入参（指针字段，部分更新语义，同 user.UpdateProfileInput）。
@@ -105,6 +121,7 @@ type UpdateAgentInput struct {
 	MaxRepliesPerHour *int                   `json:"max_replies_per_hour"`
 	MinIntervalSec    *int                   `json:"min_interval_sec"`
 	Status            *int                   `json:"status"`
+	AutoConfig        *AutoConfigInput       `json:"auto_config"`
 }
 
 // AgentVO 机器人视图（api_key 只回掩码，永不回明文/密文）。
@@ -126,6 +143,7 @@ type AgentVO struct {
 	TriggerKeywords   []string               `json:"trigger_keywords"`
 	MaxRepliesPerHour int                    `json:"max_replies_per_hour"`
 	MinIntervalSec    int                    `json:"min_interval_sec"`
+	AutoConfig        AutoConfigVO           `json:"auto_config"`
 	Status            int                    `json:"status"`
 	CreateTime        time.Time              `json:"create_time"`
 	UpdateTime        time.Time              `json:"update_time"`
@@ -161,9 +179,9 @@ type AgentService interface {
 	SetBotUserCreator(c BotUserCreator)
 	// SetBotUserProfileUpdater 注入跨域机器人资料同步端口（composition 桥接）。
 	SetBotUserProfileUpdater(u BotUserProfileUpdater)
-	// SetBotUserScopeCleaner 注入跨域机器人圈子绑定清理端口（composition 桥接；
-	// 未注入时删除机器人跳过清列，仅记日志，见 clearBotCircleScope fail-open）。
-	SetBotUserScopeCleaner(c BotUserScopeCleaner)
+	// SetBotUserMentionSyncer 注入跨域机器人可 @ 状态投影端口（composition 桥接；
+	// 未注入时跳过投影，仅记日志，见 syncBotUserMentionable fail-open）。
+	SetBotUserMentionSyncer(m BotUserMentionSyncer)
 }
 
 type agentServiceImpl struct {
@@ -171,7 +189,7 @@ type agentServiceImpl struct {
 	roleReader     RoleReader            // 注入前 nil，鉴权 fail-closed
 	botUserCreator BotUserCreator        // 注入前 nil，创建时 fail-fast
 	botUserUpdater BotUserProfileUpdater // 注入前 nil，改名/换头像时跳过同步
-	scopeCleaner   BotUserScopeCleaner   // 注入前 nil，删除时跳过清列（fail-open）
+	mentionSyncer  BotUserMentionSyncer  // 注入前 nil，状态变更时跳过投影（fail-open）
 }
 
 // NewAgentService 构造一个 AgentService（跨域依赖 setter 注入）。
@@ -184,7 +202,7 @@ func (s *agentServiceImpl) SetBotUserCreator(c BotUserCreator) { s.botUserCreato
 func (s *agentServiceImpl) SetBotUserProfileUpdater(u BotUserProfileUpdater) {
 	s.botUserUpdater = u
 }
-func (s *agentServiceImpl) SetBotUserScopeCleaner(c BotUserScopeCleaner) { s.scopeCleaner = c }
+func (s *agentServiceImpl) SetBotUserMentionSyncer(m BotUserMentionSyncer) { s.mentionSyncer = m }
 
 // ensureAdmin 校验操作者是 role=1 管理员。端口未注入/用户不存在均拒绝（fail-closed）。
 func (s *agentServiceImpl) ensureAdmin(ctx context.Context, adminID uuid.UUID) error {
@@ -225,7 +243,8 @@ func (s *agentServiceImpl) CreateAgent(ctx context.Context, adminID uuid.UUID, i
 		return nil, errNotAdmin // 端口未注入视为装配错误，拒绝创建
 	}
 	agentID := sharedomain.NewID()
-	linkedUserID, err := s.botUserCreator.CreateBotUser(ctx, agent.Name, botEmailForID(agentID), agent.AvatarURL, nil)
+	linkedUserID, err := s.botUserCreator.CreateBotUser(ctx, agent.Name, botEmailForID(agentID), agent.AvatarURL, nil,
+		agent.Status == domain.AgentStatusEnabled)
 	if err != nil {
 		return nil, err
 	}
@@ -307,6 +326,11 @@ func (s *agentServiceImpl) UpdateAgent(ctx context.Context, adminID, agentID uui
 
 	// 改名/换头像时同步到关联系统用户（users.username/avatar_url）。
 	syncBotUserProfile(ctx, s.botUserUpdater, updated.LinkedUserID, fields)
+	// 启用/停用时同步机器人账号能否被 @（按更新后实体投影）。
+	if _, ok := fields["status"]; ok {
+		syncBotUserMentionable(ctx, s.mentionSyncer, s.repo, updated.ID, updated.LinkedUserID,
+			updated.Status == domain.AgentStatusEnabled)
+	}
 
 	vo := toVO(updated)
 	return &vo, nil
@@ -365,9 +389,8 @@ func retryBotUserProfileSync(updater BotUserProfileUpdater, userID uuid.UUID, us
 		botProfileSyncMaxAttempts, userID))
 }
 
-// DeleteAgent 软删（deleted=1 且 status=0）。软删生效后清机器人账号的圈子绑定
-// （清列失败不回滚，仅记日志：软删已优先生效，最坏后果=已删机器人仍在原圈@列表
-// 短暂可见，与 CDC 延迟窗口同级，见设计文档风险表）。
+// DeleteAgent 软删（deleted=1 且 status=0）。软删生效后把机器人账号投影为不可 @
+// （投影失败不回滚软删，fail-open + 异步重试，见 syncBotUserMentionable）。
 func (s *agentServiceImpl) DeleteAgent(ctx context.Context, adminID, agentID uuid.UUID) error {
 	if err := s.ensureAdmin(ctx, adminID); err != nil {
 		return err
@@ -379,25 +402,71 @@ func (s *agentServiceImpl) DeleteAgent(ctx context.Context, adminID, agentID uui
 	if err := s.repo.SoftDelete(ctx, agentID); err != nil {
 		return err
 	}
-	clearBotCircleScope(ctx, s.scopeCleaner, agent.LinkedUserID)
+	syncBotUserMentionable(ctx, s.mentionSyncer, s.repo, agent.ID, agent.LinkedUserID, false)
 	return nil
 }
 
-// clearBotCircleScope 机器人软删后清 users.agent_circle_id 的统一入口（全局/圈内共用）。
-// fail-open：端口未注入或清列失败均只记日志不报错——软删已生效，列未清可幂等补偿
-// （重试/人工清），不阻断删除主流程。
-func clearBotCircleScope(ctx context.Context, cleaner BotUserScopeCleaner, linkedUserID uuid.UUID) {
-	if cleaner == nil {
-		logger.Log.Warn("BotUserScopeCleaner not injected, skip clearing agent_circle_id: user=" + linkedUserID.String())
-		return
-	}
+// botMentionSyncMaxAttempts 可 @ 状态投影失败后的异步重试次数（不含首次同步调用）。
+const botMentionSyncMaxAttempts = 3
+
+// botMentionSyncBackoff 异步重试的首次退避（之后每次 ×4）；包级变量便于单测缩短。
+var botMentionSyncBackoff = time.Second
+
+// syncBotUserMentionable 把机器人启用状态投影到关联系统用户（users.agent_mention_disabled）的统一入口
+// （全局/圈内的创建后停用、启用、删除共用）。投影与 ai_agent 更新不在同一事务：
+// fail-open——端口未注入或写入失败都不让已生效的状态变更 / 软删报错回滚，失败时记日志并转异步重试。
+// 重试每次按 ai_agent 当前状态重新推导（已删除=不可 @），不重放旧值，避免和随后的启用/停用互相覆盖。
+func syncBotUserMentionable(ctx context.Context, syncer BotUserMentionSyncer, repo domain.AgentRepository,
+	agentID, linkedUserID uuid.UUID, mentionable bool) {
 	if linkedUserID == uuid.Nil {
 		return
 	}
-	if err := cleaner.ClearBotCircleScope(ctx, linkedUserID); err != nil {
-		logger.Log.Error("Clear bot agent_circle_id failed (soft-delete already applied, retry/manual fix needed): user=" +
-			linkedUserID.String() + ": " + err.Error())
+	if syncer == nil {
+		logger.Log.Warn("BotUserMentionSyncer not injected, skip syncing agent_mention_disabled: user=" + linkedUserID.String())
+		return
 	}
+	if err := syncer.SetBotUserMentionable(ctx, linkedUserID, mentionable); err != nil {
+		logger.Log.Error("Sync bot mentionable failed, scheduling async retry: user=" + linkedUserID.String() + ": " + err.Error())
+		go retryBotUserMentionableSync(syncer, repo, agentID, linkedUserID, botMentionSyncBackoff)
+	}
+}
+
+// retryBotUserMentionableSync 可 @ 状态投影失败后的异步补偿：指数退避重试，每次从 ai_agent 重新推导目标值。
+// 重试耗尽后记 Error 日志，待人工按 docs/pgsql-ddl/user.md 的回填 SQL 修正（当前无 outbox 表，进程退出即丢）。
+func retryBotUserMentionableSync(syncer BotUserMentionSyncer, repo domain.AgentRepository, agentID, linkedUserID uuid.UUID,
+	backoff time.Duration) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Log.Error(fmt.Sprintf("bot mentionable sync retry panic: user=%s: %v", linkedUserID, r))
+		}
+	}()
+	for attempt := 1; attempt <= botMentionSyncMaxAttempts; attempt++ {
+		time.Sleep(backoff)
+		backoff *= 4
+		// 脱离请求 ctx：接口已返回，重试不应随请求取消而中断。
+		ctx := context.Background()
+		agent, err := repo.GetByID(ctx, agentID)
+		var mentionable bool
+		switch {
+		case errors.Is(err, domain.ErrAgentNotFound):
+			mentionable = false // 已软删
+		case err != nil:
+			logger.Log.Warn(fmt.Sprintf("Bot mentionable sync retry %d/%d: load agent failed: agent=%s: %s",
+				attempt, botMentionSyncMaxAttempts, agentID, err.Error()))
+			continue
+		default:
+			mentionable = agent.Status == domain.AgentStatusEnabled
+		}
+		if err := syncer.SetBotUserMentionable(ctx, linkedUserID, mentionable); err != nil {
+			logger.Log.Warn(fmt.Sprintf("Bot mentionable sync retry %d/%d failed: user=%s: %s",
+				attempt, botMentionSyncMaxAttempts, linkedUserID, err.Error()))
+			continue
+		}
+		logger.Log.Info(fmt.Sprintf("Bot mentionable sync recovered on retry %d: user=%s", attempt, linkedUserID))
+		return
+	}
+	logger.Log.Error(fmt.Sprintf("Bot mentionable sync permanently failed after %d retries, manual backfill required: user=%s",
+		botMentionSyncMaxAttempts, linkedUserID))
 }
 
 // loadGlobalAgent 加载**全局**机器人：不存在或为圈子级机器人（CircleID != nil）一律
@@ -449,6 +518,14 @@ func toVO(a *domain.AiAgent) AgentVO {
 	}
 	if vo.TriggerKeywords == nil {
 		vo.TriggerKeywords = []string{}
+	}
+	if ar, err := a.AutoConfig.AutoReply(); err == nil {
+		vo.AutoConfig.AutoReply = ar
+	} else {
+		logger.Log.Warn(fmt.Sprintf("agent %s: invalid auto_config.auto_reply ignored: %s", a.ID, err.Error()))
+	}
+	if vo.AutoConfig.AutoReply.Targets == nil {
+		vo.AutoConfig.AutoReply.Targets = []string{}
 	}
 	return vo
 }
@@ -512,6 +589,14 @@ func validateAndBuildAgent(ctx context.Context, input CreateAgentInput) (*domain
 			return nil, err
 		}
 	}
+	autoConfig := domain.AutoConfigJSON{}
+	if input.AutoConfig != nil && input.AutoConfig.AutoReply != nil {
+		raw, err := buildAutoReply(*input.AutoConfig.AutoReply)
+		if err != nil {
+			return nil, err
+		}
+		autoConfig[domain.AutoConfigKeyAutoReply] = raw
+	}
 
 	// api_key 加密（自部署免鉴权网关可免 key）
 	apiKeyEnc := ""
@@ -540,6 +625,7 @@ func validateAndBuildAgent(ctx context.Context, input CreateAgentInput) (*domain
 		TriggerKeywords:   toKeywords(input.TriggerKeywords),
 		MaxRepliesPerHour: input.MaxRepliesPerHour,
 		MinIntervalSec:    input.MinIntervalSec,
+		AutoConfig:        autoConfig,
 	}
 	// 触发模式关键词默认值补齐
 	if input.TriggerKeywords == nil {
@@ -662,6 +748,14 @@ func buildAgentUpdateFields(ctx context.Context, repo domain.AgentRepository, ag
 		}
 		fields["status"] = *input.Status
 	}
+	if input.AutoConfig != nil && input.AutoConfig.AutoReply != nil {
+		raw, err := buildAutoReply(*input.AutoConfig.AutoReply)
+		if err != nil {
+			return nil, err
+		}
+		// 顶层 key 合并补丁：只替换 auto_reply，其他自主行为子对象保持不变。
+		fields["auto_config"] = domain.AutoConfigPatch{domain.AutoConfigKeyAutoReply: raw}
+	}
 	return fields, nil
 }
 
@@ -776,6 +870,54 @@ func validateFilterPrompt(s string) error {
 		return errInvalidFilter
 	}
 	return nil
+}
+
+// 自动回复配置取值范围（每个机器人的配置；平台级上限见 conf aiagent.autonomy）。
+const (
+	autoReplyMaxWindowHours = 168     // 时间窗口最长 7 天
+	autoReplyMaxPerHour     = 1000    // 每小时上限的合法范围上界（防误填）
+	autoReplyMaxThreshold   = 1 << 30 // 门槛上界（防溢出 / 误填）
+)
+
+// buildAutoReply 校验自动回复配置并序列化为 auto_config.auto_reply 子对象。
+//
+// 规则：targets 只能是 post / comment 且不重复；门槛、窗口、上限均非负且有上界；
+// 启用时至少一个目标、window_hours 必须 >= 1，且每个启用的目标都要有生效门槛
+// （帖子 post_hot_min >= 1；评论 comment_like_min / comment_reply_min 至少一个 >= 1）——
+// 门槛全 0 等于"窗口内全部内容"，属于 trigger_mode=1 的语义，不在自动回复范围内。
+func buildAutoReply(cfg domain.AutoReplyConfig) (json.RawMessage, error) {
+	seen := make(map[string]bool, len(cfg.Targets))
+	targets := make([]string, 0, len(cfg.Targets))
+	for _, t := range cfg.Targets {
+		t = strings.TrimSpace(t)
+		if (t != domain.AutoReplyTargetPost && t != domain.AutoReplyTargetComment) || seen[t] {
+			return nil, errInvalidAutoConfig
+		}
+		seen[t] = true
+		targets = append(targets, t)
+	}
+	cfg.Targets = targets
+	for _, v := range []int{cfg.PostHotMin, cfg.CommentLikeMin, cfg.CommentReplyMin} {
+		if v < 0 || v > autoReplyMaxThreshold {
+			return nil, errInvalidAutoConfig
+		}
+	}
+	if cfg.WindowHours < 0 || cfg.WindowHours > autoReplyMaxWindowHours ||
+		cfg.MaxPerHour < 0 || cfg.MaxPerHour > autoReplyMaxPerHour {
+		return nil, errInvalidAutoConfig
+	}
+	if cfg.Enabled {
+		if len(targets) == 0 || cfg.WindowHours < 1 {
+			return nil, errInvalidAutoConfig
+		}
+		if seen[domain.AutoReplyTargetPost] && cfg.PostHotMin < 1 {
+			return nil, errInvalidAutoConfig
+		}
+		if seen[domain.AutoReplyTargetComment] && cfg.CommentLikeMin < 1 && cfg.CommentReplyMin < 1 {
+			return nil, errInvalidAutoConfig
+		}
+	}
+	return json.Marshal(cfg)
 }
 
 func validateStatus(status int) error {

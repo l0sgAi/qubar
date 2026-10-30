@@ -9,6 +9,7 @@ import (
 	agentapp "interestBar/pkg/domains/aiagent/application"
 	categoryinfra "interestBar/pkg/domains/category/infrastructure"
 	circleapp "interestBar/pkg/domains/circle/application"
+	circleinfra "interestBar/pkg/domains/circle/infrastructure"
 	noticeapp "interestBar/pkg/domains/notice/application"
 	userapp "interestBar/pkg/domains/user/application"
 	"interestBar/pkg/logger"
@@ -33,6 +34,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 
 	circleSvc, circleRepo, memberRepo := newCircleService(deps)
 	circleFacade := circleapp.NewCircleFacade(circleRepo)
+	circleVisibility := circleapp.NewCircleVisibility(circleRepo, memberRepo, circleinfra.NewPrivateCircleCache())
 
 	postSvc := newPostService(deps)
 
@@ -45,6 +47,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	// 互注跨领域 Facade
 	// circle 需要 user Facade + post 媒体查询器
 	circleSvc.SetUserFacade(&circleUserFacade{delegate: userFacade})
+	circleSvc.SetUserEmailReader(&circleUserEmailReader{delegate: userFacade})
 	circleSvc.SetPostFetcher(&postMediaFetcherForCircle{delegate: postSvc})
 
 	// post 需要 user Facade + circle Facade + 成员/状态校验器 + 帖子计数端口
@@ -53,6 +56,8 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	postSvc.SetMemberChecker(&circleMemberCheckerForPost{memberRepo: memberRepo})
 	postSvc.SetStatusChecker(&circleStatusCheckerForPost{circleRepo: circleRepo})
 	postSvc.SetPostCountPort(&circlePostCountPortForPost{svc: circleSvc})
+	// post 统一判断私密圈可见性（comment / like / collect 经 CanViewPost 复用，见 post_bridges.go）
+	postSvc.SetCircleVisibility(circleVisibility)
 	postSvc.SetModerationCircleReader(&postModerationCircleReader{
 		circleRepo:   circleRepo,
 		categoryRepo: categoryinfra.NewCategoryRepository(deps.DB.Get()),
@@ -88,7 +93,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	}
 
 	// recommend 需要 post（hydrate + circle_id 反查）+ circle（joined IDs），均为只读消费者，无反向注入。
-	recommendSvc := newRecommendService(postSvc, circleSvc)
+	recommendSvc := newRecommendService(postSvc, circleSvc, circleVisibility)
 
 	// trending 需要 post（hydrate + 交互态）+ circle（GetByIDs）+ user（GetBriefs），均为只读消费者。
 	trendingSvc := newTrendingService(postSvc, circleRepo, userFacade)
@@ -103,17 +108,17 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	agentSvc.SetRoleReader(&agentRoleReader{delegate: userSvc})
 	agentSvc.SetBotUserCreator(&agentBotUserCreator{db: deps.DB.Get()})
 	agentSvc.SetBotUserProfileUpdater(&agentBotUserUpdater{delegate: userSvc})
-	agentSvc.SetBotUserScopeCleaner(&agentBotUserScopeCleaner{delegate: userSvc})
+	agentSvc.SetBotUserMentionSyncer(&agentBotUserMentionSyncer{delegate: userSvc})
 
 	// aiagent 圈内机器人管理：圈内角色读取（circle Facade 直查 member，权限即时生效）
-	// + 机器人账号创建/资料同步/圈子绑定清理（复用全局端口桥接器）。
+	// + 机器人账号创建/资料同步/可 @ 状态投影（复用全局端口桥接器）。
 	circleAgentSvc := agentapp.NewCircleAgentService(agentRepo)
 	circleAgentSvc.SetCircleRoleReader(&circleRoleReaderForAgent{
 		delegate: circleapp.NewCircleMemberRoleReader(memberRepo),
 	})
 	circleAgentSvc.SetBotUserCreator(&agentBotUserCreator{db: deps.DB.Get()})
 	circleAgentSvc.SetBotUserProfileUpdater(&agentBotUserUpdater{delegate: userSvc})
-	circleAgentSvc.SetBotUserScopeCleaner(&agentBotUserScopeCleaner{delegate: userSvc})
+	circleAgentSvc.SetBotUserMentionSyncer(&agentBotUserMentionSyncer{delegate: userSvc})
 
 	// circle -> aiagent：可管理圈子列表的 agent_count 回填（方向反转桥接，失败降级 0）。
 	circleSvc.SetAgentCounter(&circleAgentCounterForCircle{repo: agentRepo})
@@ -150,6 +155,9 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 
 	// 启动 Discover pool syncer（需要 discoverSvc 复用 RebuildPool；其它无依赖 syncer 在 apps/server.go）。
 	go redpanda.StartDiscoverSyncerWithRetry(discoverSvc)
+
+	// 启动机器人自动回复扫描器（需要 replySvc 执行扫描；aiagent.autonomy.enabled=false 时不启动）。
+	go redpanda.StartAgentAutoReplySyncerWithRetry(replySvc)
 
 	// 启动帖子 AI 审核 worker（#117）：仅 moderation 启用时；未启用时发帖直接发布，不需要 worker。
 	if conf.Config.Moderation.Active() {

@@ -141,34 +141,45 @@ func BackfillCommentLikes(ctx context.Context, userID uuid.UUID, likedCommentIDs
 	return err
 }
 
-// raiseStatsLikeCountScript 仅当 post:stats 缓存存在且 like_count 低于落库后的 PG 值时抬高到 PG 值。
-// 只升不降：缓存里可能还有未落库的点赞增量（缓存值 ≥ PG 值），降下来会让刚点的赞短暂消失。
-const raiseStatsLikeCountScript = `
-local cur = redis.call('HGET', KEYS[1], 'like_count')
+// raiseStatsCountScript 仅当 post:stats 缓存存在且计数字段（ARGV[2]）低于落库后的 PG 值时抬高到 PG 值。
+// 只升不降：缓存里可能还有未落库的增量（缓存值 ≥ PG 值），降下来会让刚点的赞 / 刚发的评论短暂消失。
+const raiseStatsCountScript = `
+local cur = redis.call('HGET', KEYS[1], ARGV[2])
 if not cur then
     return 0
 end
 local want = tonumber(ARGV[1])
 if tonumber(cur) < want then
-    redis.call('HSET', KEYS[1], 'like_count', want)
+    redis.call('HSET', KEYS[1], ARGV[2], want)
     return 1
 end
 return 0
 `
 
-var raiseStatsLikeCount = redis.NewScript(raiseStatsLikeCountScript)
+var raiseStatsCount = redis.NewScript(raiseStatsCountScript)
 
 // ReconcilePostLikeCounts 点赞落库后校正缓存：缓存若在落库前由 PG 回填，会漏掉当时未落库的点赞而永久少计，
 // 这里在每次落库后把低于 PG 的 like_count 抬回 PG 值（缓存不存在则跳过，下次回填自然读到新值）。
 // 返回被校正的帖子数。
 func ReconcilePostLikeCounts(counts map[uuid.UUID]int64) (int, error) {
+	return reconcilePostStatsField("like_count", counts)
+}
+
+// ReconcilePostCommentCounts 评论数落库后校正缓存（#130，口径同 ReconcilePostLikeCounts）：
+// 评论数批量落库后，缓存回填可能读到落库前的旧值，这里把低于 PG 的 comment_count 抬回 PG 值。
+func ReconcilePostCommentCounts(counts map[uuid.UUID]int64) (int, error) {
+	return reconcilePostStatsField("comment_count", counts)
+}
+
+// reconcilePostStatsField 对每个帖子执行 raiseStatsCountScript。field 仅限内部常量。
+func reconcilePostStatsField(field string, counts map[uuid.UUID]int64) (int, error) {
 	fixed := 0
 	var firstErr error
 	for postID, n := range counts {
-		r, err := raiseStatsLikeCount.Run(ctx, Client, []string{GetPostStatsKey(postID)}, n).Int64()
+		r, err := raiseStatsCount.Run(ctx, Client, []string{GetPostStatsKey(postID)}, n, field).Int64()
 		if err != nil {
 			if firstErr == nil {
-				firstErr = fmt.Errorf("failed to reconcile like_count of post %s: %w", postID, err)
+				firstErr = fmt.Errorf("failed to reconcile %s of post %s: %w", field, postID, err)
 			}
 			continue
 		}

@@ -19,8 +19,8 @@ func NewPostSearcher() application.PostSearcher {
 }
 
 // Search 搜索帖子（circleID 为 uuid.Nil 时搜索所有圈子）。
-func (s *postSearcherES) Search(ctx context.Context, keyword string, circleID uuid.UUID, size int, searchAfter []interface{}) (*application.RawPostSearchResult, error) {
-	result, err := elasticsearch.SearchPosts(ctx, keyword, circleID, size, searchAfter)
+func (s *postSearcherES) Search(ctx context.Context, keyword string, circleID uuid.UUID, excludeCircleIDs []uuid.UUID, size int, searchAfter []interface{}) (*application.RawPostSearchResult, error) {
+	result, err := elasticsearch.SearchPosts(ctx, keyword, circleID, excludeCircleIDs, size, searchAfter)
 	if err != nil {
 		return nil, err
 	}
@@ -37,8 +37,8 @@ func (s *postSearcherES) SearchMy(ctx context.Context, userID uuid.UUID, keyword
 }
 
 // SearchByUser 搜索指定用户已发布的帖子（查看「他人」发帖用，强制 status=1）。
-func (s *postSearcherES) SearchByUser(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*application.RawPostSearchResult, error) {
-	result, err := elasticsearch.SearchUserPosts(ctx, userID, keyword, size, searchAfter)
+func (s *postSearcherES) SearchByUser(ctx context.Context, userID uuid.UUID, keyword string, excludeCircleIDs []uuid.UUID, size int, searchAfter []interface{}) (*application.RawPostSearchResult, error) {
+	result, err := elasticsearch.SearchUserPosts(ctx, userID, keyword, excludeCircleIDs, size, searchAfter)
 	if err != nil {
 		return nil, err
 	}
@@ -46,12 +46,12 @@ func (s *postSearcherES) SearchByUser(ctx context.Context, userID uuid.UUID, key
 }
 
 // SearchByIDs 按 ID 列表批量查询帖子(ES terms 查询,供 history「最近浏览」列表用)。
-func (s *postSearcherES) SearchByIDs(ctx context.Context, postIDs []uuid.UUID, size int) (*application.RawPostSearchResult, error) {
+func (s *postSearcherES) SearchByIDs(ctx context.Context, postIDs, excludeCircleIDs []uuid.UUID, size int) (*application.RawPostSearchResult, error) {
 	idStrs := make([]string, 0, len(postIDs))
 	for _, id := range postIDs {
 		idStrs = append(idStrs, id.String())
 	}
-	result, err := elasticsearch.SearchPostsByIDs(ctx, idStrs, size)
+	result, err := elasticsearch.SearchPostsByIDs(ctx, idStrs, excludeCircleIDs, size)
 	if err != nil {
 		return nil, err
 	}
@@ -60,12 +60,12 @@ func (s *postSearcherES) SearchByIDs(ctx context.Context, postIDs []uuid.UUID, s
 
 // SearchByIDsAndKeyword 在 ID 集合内按关键字搜索帖子(供 history「最近浏览」关键字搜索用)。
 // 多一层 multi_match(title^3/summary) 过滤,按 _score 排序,offset 分页。
-func (s *postSearcherES) SearchByIDsAndKeyword(ctx context.Context, postIDs []uuid.UUID, keyword string, size, offset int) (*application.RawPostSearchResult, error) {
+func (s *postSearcherES) SearchByIDsAndKeyword(ctx context.Context, postIDs []uuid.UUID, keyword string, excludeCircleIDs []uuid.UUID, size, offset int) (*application.RawPostSearchResult, error) {
 	idStrs := make([]string, 0, len(postIDs))
 	for _, id := range postIDs {
 		idStrs = append(idStrs, id.String())
 	}
-	result, err := elasticsearch.SearchPostsByIDsAndKeyword(ctx, idStrs, keyword, size, offset)
+	result, err := elasticsearch.SearchPostsByIDsAndKeyword(ctx, idStrs, keyword, excludeCircleIDs, size, offset)
 	if err != nil {
 		return nil, err
 	}

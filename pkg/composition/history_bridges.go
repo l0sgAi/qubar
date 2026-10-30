@@ -17,10 +17,10 @@ type historyPostFetcher struct {
 	delegate postapp.PostService
 }
 
-func (f *historyPostFetcher) SearchByIDs(ctx context.Context, postIDs []uuid.UUID) ([]postapp.PostListItem, error) {
-	return f.delegate.SearchPostsByIDs(ctx, postIDs)
+func (f *historyPostFetcher) SearchByIDs(ctx context.Context, viewerID uuid.UUID, postIDs []uuid.UUID) ([]postapp.PostListItem, error) {
+	return f.delegate.SearchPostsByIDs(ctx, viewerID, postIDs)
 }
 
-func (f *historyPostFetcher) SearchByIDsAndKeyword(ctx context.Context, postIDs []uuid.UUID, keyword string, size, offset int) ([]postapp.PostListItem, int64, error) {
-	return f.delegate.SearchPostsByIDsAndKeyword(ctx, postIDs, keyword, size, offset)
+func (f *historyPostFetcher) SearchByIDsAndKeyword(ctx context.Context, viewerID uuid.UUID, postIDs []uuid.UUID, keyword string, size, offset int) ([]postapp.PostListItem, int64, error) {
+	return f.delegate.SearchPostsByIDsAndKeyword(ctx, viewerID, postIDs, keyword, size, offset)
 }

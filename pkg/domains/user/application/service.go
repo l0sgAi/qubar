@@ -50,9 +50,21 @@ type UserFacade interface {
 	// keyword 为空返回空列表。
 	// 供跨领域"按用户名/邮箱过滤成员"类场景使用（如圈子成员管理搜索）。
 	SearchBriefs(ctx context.Context, keyword string, limit int) ([]UserBrief, int64, error)
-	// GetAgentCircleIDs 批量返回 userID → 机器人绑定圈子ID（仅含圈内机器人行）。
-	// 供 post/comment 域 mention 兜底剔除越圈机器人。
-	GetAgentCircleIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
+	// GetAgentMentionScopes 批量返回 userID → 机器人 @提及 可见范围（仅含圈内机器人与
+	// 不可被 @ 的机器人，普通用户/可 @ 的全局机器人不出现在 map 里）。
+	// 供 post/comment 域 mention 兜底剔除越圈、停用或已删除的机器人。
+	GetAgentMentionScopes(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]AgentMentionScope, error)
+	// GetEmail 返回正常状态用户的 email（原样，不做规整）；用户不存在 / 非正常状态返回空串。
+	// 供 circle 域按 email 匹配私密圈邀请（#169）。
+	GetEmail(ctx context.Context, userID uuid.UUID) (string, error)
+}
+
+// AgentMentionScope 机器人账号的 @提及 可见范围（users.agent_circle_id / agent_mention_disabled 投影）。
+type AgentMentionScope struct {
+	// CircleID 绑定圈子ID；uuid.Nil=全局机器人。
+	CircleID uuid.UUID
+	// Mentionable 能否被 @：机器人停用或已删除时为 false。
+	Mentionable bool
 }
 
 // UserListItemVO 用户列表项（搜索结果用）。
@@ -120,13 +132,15 @@ type UserService interface {
 	// Search 搜索用户。searchAfter 为已解析的分页游标（可为 nil）。
 	// circleID 为圈子作用域（Nil=全站；非 Nil=圈内@选人，见 UserSearcher.Search）。
 	Search(ctx context.Context, keyword string, size int, searchAfter []interface{}, circleID uuid.UUID) (*UserSearchResult, error)
-	// GetAgentCircleIDs 批量返回 userID → 机器人绑定圈子ID（仅含 agent_circle_id 非 NULL 的行，
-	// 普通用户/全局机器人不出现在 map 里）。直查 repo 不走缓存（mention 校验低频，数据新鲜度优先）。
-	// 供 post/comment 域 mention 兜底剔除越圈机器人。
-	GetAgentCircleIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
-	// ClearAgentCircleScope 清除机器人账号的圈子绑定（users.agent_circle_id 置 NULL，
-	// 恢复"全局可见"语义），并刷新 userinfo 缓存。供 aiagent 域删除机器人后调用（幂等）。
-	ClearAgentCircleScope(ctx context.Context, userID uuid.UUID) error
+	// GetAgentMentionScopes 批量返回 userID → 机器人 @提及 可见范围（仅含 agent_circle_id 非 NULL
+	// 或 agent_mention_disabled=1 的行，普通用户/可 @ 的全局机器人不出现在 map 里）。
+	// 直查 repo 不走缓存（mention 校验低频，数据新鲜度优先）。
+	// 供 post/comment 域 mention 兜底剔除越圈、停用或已删除的机器人。
+	GetAgentMentionScopes(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]AgentMentionScope, error)
+	// SetAgentMentionable 写机器人账号能否被 @（users.agent_mention_disabled，ai_agent 状态的投影），
+	// 并刷新 userinfo 缓存。供 aiagent 域创建后停用/启用/删除机器人时调用（幂等）。
+	// 不动 users.status：GetBriefs 跳过非正常用户，改 status 会让机器人历史评论丢失作者信息。
+	SetAgentMentionable(ctx context.Context, userID uuid.UUID, mentionable bool) error
 }
 
 type userServiceImpl struct {
@@ -236,9 +250,18 @@ func (f *userFacadeAdapter) SearchBriefs(ctx context.Context, keyword string, li
 	return out, res.Total, nil
 }
 
-// GetAgentCircleIDs 批量返回 userID → 机器人绑定圈子ID（薄转发 UserService 同名方法）。
-func (f *userFacadeAdapter) GetAgentCircleIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
-	return f.svc.GetAgentCircleIDs(ctx, userIDs)
+// GetAgentMentionScopes 批量返回 userID → 机器人 @提及 可见范围（薄转发 UserService 同名方法）。
+func (f *userFacadeAdapter) GetAgentMentionScopes(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]AgentMentionScope, error) {
+	return f.svc.GetAgentMentionScopes(ctx, userIDs)
+}
+
+// GetEmail 复用 GetByID（缓存优先，已过滤非正常 / 已删除用户）。
+func (f *userFacadeAdapter) GetEmail(ctx context.Context, userID uuid.UUID) (string, error) {
+	user, err := f.svc.GetByID(ctx, userID)
+	if err != nil || user == nil {
+		return "", err
+	}
+	return user.Email, nil
 }
 
 // GetByID 获取用户详情，先查缓存再回源 DB。
@@ -388,10 +411,11 @@ func (s *userServiceImpl) Search(ctx context.Context, keyword string, size int, 
 	return s.searcher.Search(ctx, keyword, size, searchAfter, circleID)
 }
 
-// GetAgentCircleIDs 批量返回 userID → 机器人绑定圈子ID（仅含 agent_circle_id 非 NULL 的行）。
-// 直查 repo.GetByIDs 不走缓存：mention 兜底校验低频，数据新鲜度优先（防越圈@依赖投影列即时一致）。
-func (s *userServiceImpl) GetAgentCircleIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
-	result := make(map[uuid.UUID]uuid.UUID, len(userIDs))
+// GetAgentMentionScopes 批量返回 userID → 机器人 @提及 可见范围（仅含 agent_circle_id 非 NULL
+// 或 agent_mention_disabled=1 的行）。直查 repo.GetByIDs 不走缓存：mention 兜底校验低频，
+// 数据新鲜度优先（防越圈 / 停用机器人被 @ 依赖投影列即时一致）。
+func (s *userServiceImpl) GetAgentMentionScopes(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]AgentMentionScope, error) {
+	result := make(map[uuid.UUID]AgentMentionScope, len(userIDs))
 	if len(userIDs) == 0 {
 		return result, nil
 	}
@@ -400,18 +424,27 @@ func (s *userServiceImpl) GetAgentCircleIDs(ctx context.Context, userIDs []uuid.
 		return nil, err
 	}
 	for id, u := range users {
-		if u != nil && u.AgentCircleID != nil {
-			result[id] = *u.AgentCircleID
+		if u == nil || (u.AgentCircleID == nil && u.AgentMentionDisabled == 0) {
+			continue
 		}
+		scope := AgentMentionScope{Mentionable: u.AgentMentionDisabled == 0}
+		if u.AgentCircleID != nil {
+			scope.CircleID = *u.AgentCircleID
+		}
+		result[id] = scope
 	}
 	return result, nil
 }
 
-// ClearAgentCircleScope 清除机器人账号的圈子绑定（users.agent_circle_id 置 NULL）。
-// 幂等：列本为 NULL 时更新无副作用。清列后重读最新行覆盖 userinfo 缓存，
-// 避免 GetByID 短期内回显旧实体（缓存刷新失败不影响结果，TTL 到期自愈）。
-func (s *userServiceImpl) ClearAgentCircleScope(ctx context.Context, userID uuid.UUID) error {
-	if err := s.repo.UpdateFields(ctx, userID, map[string]interface{}{"agent_circle_id": nil}); err != nil {
+// SetAgentMentionable 写机器人账号能否被 @（users.agent_mention_disabled：可 @ 写 0，不可 @ 写 1）。
+// 幂等：重复写同值无副作用。写后重读最新行覆盖 userinfo 缓存，避免 GetByID 短期内回显旧实体
+// （缓存刷新失败不影响结果，TTL 到期自愈）。只改投影列，不动 status / agent_circle_id。
+func (s *userServiceImpl) SetAgentMentionable(ctx context.Context, userID uuid.UUID, mentionable bool) error {
+	var disabled int16
+	if !mentionable {
+		disabled = 1
+	}
+	if err := s.repo.UpdateFields(ctx, userID, map[string]interface{}{"agent_mention_disabled": disabled}); err != nil {
 		return err
 	}
 	if user, err := s.repo.GetByID(ctx, userID); err == nil && user != nil {

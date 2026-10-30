@@ -41,6 +41,9 @@ type CircleRepository interface {
 	// Update 更新圈子资料的可编辑字段（CircleUpdateFields 中 nil 字段跳过）。
 	// 圈子不存在返回 ErrCircleNotFound；唯一索引冲突返回 ErrCircleNameExists/ErrCircleSlugExists。
 	Update(ctx context.Context, circleID uuid.UUID, fields CircleUpdateFields) error
+	// ListPrivateIDs 列出全部私密圈（join_type=2）ID，含已删除圈子（其帖子仍可能留在 ES，
+	// 可见性过滤宁多勿漏）。私密圈数量很少，结果由 PrivateCircleCache 缓存。
+	ListPrivateIDs(ctx context.Context) ([]uuid.UUID, error)
 }
 
 // CircleUpdateFields 圈子资料的可编辑字段（值对象，nil = 不更新该字段）。
@@ -75,7 +78,8 @@ type MemberRepository interface {
 	ListJoinedByRole(ctx context.Context, userID uuid.UUID, role int16, after *JoinedKey, limit int) ([]CircleMember, error)
 	// CountJoinedByRole 用户以指定角色加入的圈子数（status IN (正常, 禁言)）。
 	CountJoinedByRole(ctx context.Context, userID uuid.UUID, role int16) (int64, error)
-	// JoinCircle 用户加入圈子（含状态机：pending/left/banned → normal 等）。
+	// JoinCircle 用户自助加入圈子：仅公开圈（joinType=0）可从无记录 / 已退出变为正常；
+	// 非公开圈对无记录 / 已退出拒绝且不写库；已在圈 / 拉黑拒绝。不产生待审核（0）记录。
 	// 返回错误信息与旧 model.JoinCircle 一致（"user is already a member..." 等）。
 	JoinCircle(ctx context.Context, circleID, userID uuid.UUID, joinType int16) (*CircleMember, error)
 	// LeaveCircle 用户退出圈子（圈主不能退）。
@@ -121,6 +125,18 @@ type CircleBaseCache interface {
 	SetBase(ctx context.Context, circleID uuid.UUID, info *CircleBaseInfo) error
 	// DeleteBase 删除圈子基础信息缓存（编辑圈子资料后失效）。
 	DeleteBase(ctx context.Context, circleID uuid.UUID) error
+}
+
+// PrivateCircleCache 私密圈 ID 集合缓存（私密圈内容可见性过滤用，集合很小）。
+//
+// 建圈、修改 join_type 后由 service 调 Delete 失效；短 TTL 兜底并发回填的旧值。
+type PrivateCircleCache interface {
+	// Get 读取集合。未命中返回 nil, false, nil；命中空集合返回空切片, true。
+	Get(ctx context.Context) ([]uuid.UUID, bool, error)
+	// Set 写入集合（含空集合）。
+	Set(ctx context.Context, ids []uuid.UUID) error
+	// Delete 失效集合。
+	Delete(ctx context.Context) error
 }
 
 // CircleStatsCache 圈子统计信息缓存（member_count/post_count/hot）。

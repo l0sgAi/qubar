@@ -156,14 +156,6 @@ func (r *postRepoPG) listActiveInteractions(ctx context.Context, table string, u
 	return entries, nil
 }
 
-// IncrCommentCount 同步递增帖子评论计数（comment_count + 1）。
-// 实时持久化到 DB，替代旧的 Redpanda 异步聚合；GREATEST 防御性兜底，与批量聚合语义一致。
-func (r *postRepoPG) IncrCommentCount(ctx context.Context, postID uuid.UUID) error {
-	return r.db.WithContext(ctx).Model(&domain.Post{}).
-		Where("id = ? AND deleted = ?", postID, 0).
-		UpdateColumn("comment_count", gorm.Expr("GREATEST(comment_count + 1, 0)")).Error
-}
-
 // CreateMentions 批量写入帖子提及名单（append-only，幂等：重复行忽略）。
 //
 // PostMention 未内嵌 BaseModel、无 BeforeCreate 钩子，须在此显式预生成 UUIDv7，
@@ -205,6 +197,31 @@ func (r *postRepoPG) GetMentionUserIDsByPostIDs(ctx context.Context, postIDs []u
 		result[m.PostID] = append(result[m.PostID], m.UserID)
 	}
 	return result, nil
+}
+
+// botUserRole 机器人系统账号的 users.role（aiagent 创建，防自动回复回环用）。
+const botUserRole = 2
+
+// ListHotForAutoReply 自动回复帖子候选。时间窗口条件走 idx_post_status (status, create_time DESC)，
+// 再按 hot 排序取 top-N；作者是否机器人账号用 NOT EXISTS 查 users 主键。
+func (r *postRepoPG) ListHotForAutoReply(ctx context.Context, f domain.AutoReplyPostFilter) ([]domain.Post, error) {
+	if f.Limit <= 0 {
+		return nil, nil
+	}
+	q := r.db.WithContext(ctx).Model(&domain.Post{}).
+		Select("id", "circle_id", "user_id", "hot").
+		Where("status = ? AND deleted = ? AND is_lock = ?", domain.PostStatusPublished, 0, 0).
+		Where("hot >= ? AND create_time >= ?", f.HotMin, f.Since).
+		Where("NOT EXISTS (SELECT 1 FROM domains.users u WHERE u.id = domains.post.user_id AND u.role = ?)", botUserRole)
+	if f.CircleID != uuid.Nil {
+		q = q.Where("circle_id = ?", f.CircleID)
+	}
+	if len(f.ExcludeIDs) > 0 {
+		q = q.Where("id NOT IN ?", f.ExcludeIDs)
+	}
+	var posts []domain.Post
+	err := q.Order("hot DESC, id DESC").Limit(f.Limit).Find(&posts).Error
+	return posts, err
 }
 
 // UpdateStatusFromReviewing 条件更新：UPDATE ... SET status = ? WHERE id = ? AND status = 2 AND deleted = 0。

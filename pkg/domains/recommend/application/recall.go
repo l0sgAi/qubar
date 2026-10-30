@@ -34,11 +34,19 @@ func (s *recommendServiceImpl) recallAll(ctx context.Context, userID uuid.UUID) 
 	behaviorCircles := s.cachedBehaviorCircles(ctx, userID, seedIDs)
 	c3Circles := dedupPreserveOrder(filterOut(behaviorCircles, toSet(joinedCircles)))
 
+	// 私密圈：全局路（C2/C4）must_not 查看者不可见的圈子，C3 去掉已不可见的行为圈子；
+	// C5 与旧池条目在 hydrate 时兜底过滤。失败降级为不排除（hydrate 仍会过滤）。
+	hidden, err := s.vis.HiddenCircleIDs(ctx, userID)
+	if err != nil {
+		logger.Log.Error("recall hidden circles: " + err.Error())
+	}
+	c3Circles = filterOut(c3Circles, toSet(hidden))
+
 	// 4. 五路召回（每路内部 try/log，返回有序 IDs）
 	c1 := s.channelC1(ctx, joinedCircles, channelSize(poolSize, feedCfg.QuotaC1, 35))
-	c2 := s.channelC2(ctx, channelSize(poolSize, feedCfg.QuotaC2, 25))
+	c2 := s.channelC2(ctx, hidden, channelSize(poolSize, feedCfg.QuotaC2, 25))
 	c3 := s.channelC3(ctx, c3Circles, channelSize(poolSize, feedCfg.QuotaC3, 15))
-	c4 := s.channelC4(ctx, channelSize(poolSize, feedCfg.QuotaC4, 10))
+	c4 := s.channelC4(ctx, hidden, channelSize(poolSize, feedCfg.QuotaC4, 10))
 	c5 := s.channelC5(ctx, seedIDs, channelSize(poolSize, feedCfg.QuotaC5, 15))
 
 	// 4. 交错 + dedup
@@ -54,7 +62,7 @@ func (s *recommendServiceImpl) recallAll(ctx context.Context, userID uuid.UUID) 
 
 	// 6. 兜底：合并后过少（如新用户/部分失败）→ 补 C2 全局热门
 	if len(merged) < poolSize {
-		fill := s.channelC2(ctx, poolSize)
+		fill := s.channelC2(ctx, hidden, poolSize)
 		merged = append(merged, filterOut(fill, toSet(merged))...)
 	}
 
@@ -70,7 +78,7 @@ func (s *recommendServiceImpl) channelC1(ctx context.Context, joinedCircles []uu
 	if size <= 0 || len(joinedCircles) == 0 {
 		return nil
 	}
-	ids, _, err := s.searcher.Search(ctx, "hot", joinedCircles, size, nil)
+	ids, _, err := s.searcher.Search(ctx, "hot", joinedCircles, nil, size, nil)
 	if err != nil {
 		logger.Log.Error("recall C1 (joined circles hot): " + err.Error())
 		return nil
@@ -79,11 +87,11 @@ func (s *recommendServiceImpl) channelC1(ctx context.Context, joinedCircles []uu
 }
 
 // channelC2 全局热门：rank_score desc（C2 是质量基线 + 兜底）。
-func (s *recommendServiceImpl) channelC2(ctx context.Context, size int) []uuid.UUID {
+func (s *recommendServiceImpl) channelC2(ctx context.Context, hidden []uuid.UUID, size int) []uuid.UUID {
 	if size <= 0 {
 		return nil
 	}
-	ids, _, err := s.searcher.Search(ctx, "hot", nil, size, nil)
+	ids, _, err := s.searcher.Search(ctx, "hot", nil, hidden, size, nil)
 	if err != nil {
 		logger.Log.Error("recall C2 (global hot): " + err.Error())
 		return nil
@@ -96,7 +104,7 @@ func (s *recommendServiceImpl) channelC3(ctx context.Context, circles []uuid.UUI
 	if size <= 0 || len(circles) == 0 {
 		return nil
 	}
-	ids, _, err := s.searcher.Search(ctx, "hot", circles, size, nil)
+	ids, _, err := s.searcher.Search(ctx, "hot", circles, nil, size, nil)
 	if err != nil {
 		logger.Log.Error("recall C3 (behavior circles hot): " + err.Error())
 		return nil
@@ -130,11 +138,11 @@ func (s *recommendServiceImpl) cachedBehaviorCircles(ctx context.Context, userID
 }
 
 // channelC4 最新：create_time desc（新鲜度补充，防信息茧房）。
-func (s *recommendServiceImpl) channelC4(ctx context.Context, size int) []uuid.UUID {
+func (s *recommendServiceImpl) channelC4(ctx context.Context, hidden []uuid.UUID, size int) []uuid.UUID {
 	if size <= 0 {
 		return nil
 	}
-	ids, _, err := s.searcher.Search(ctx, "latest", nil, size, nil)
+	ids, _, err := s.searcher.Search(ctx, "latest", nil, hidden, size, nil)
 	if err != nil {
 		logger.Log.Error("recall C4 (latest): " + err.Error())
 		return nil

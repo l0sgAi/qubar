@@ -84,8 +84,10 @@ type DiscoverPoolStore interface {
 // PostHydrator 把 postID 列表 hydrate 成展示项（作者/圈子/图片/统计；不含交互态）。
 //
 // 直接复用 recommend.domain.FeedPostItem 作为返回类型（纯 DTO，无 infra 依赖）。
+//
+// viewerID 不可见的私密圈帖子不返回（榜单 / 候选池是全局或缓存的，回填时按查看者过滤）。
 type PostHydrator interface {
-	Hydrate(ctx context.Context, postIDs []uuid.UUID) ([]recommenddomain.FeedPostItem, error)
+	Hydrate(ctx context.Context, viewerID uuid.UUID, postIDs []uuid.UUID) ([]recommenddomain.FeedPostItem, error)
 }
 
 // InteractionChecker 批量回填 is_liked/is_collected（基于 user:like/collect ZSET）。

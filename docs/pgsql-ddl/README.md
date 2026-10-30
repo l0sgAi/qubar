@@ -20,7 +20,7 @@
 | 文档 | 领域 | 表 |
 |---|---|---|
 | [user.md](user.md) | 用户 | `users` |
-| [circle.md](circle.md) | 圈子 | `category`、`circle`、`circle_member` |
+| [circle.md](circle.md) | 圈子 | `category`、`circle`、`circle_member`、`circle_invite_link`、`circle_invite_email` |
 | [post.md](post.md) | 帖子 | `post` |
 | [comment.md](comment.md) | 评论 | `comment`、`comment_like` |
 | [interaction.md](interaction.md) | 帖子互动/流水 | `post_like`、`post_collect`、`post_view_history`、`post_interaction` |

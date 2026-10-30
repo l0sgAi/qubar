@@ -212,7 +212,11 @@ func (s *discoverServiceImpl) readCirclesWithRebuild(ctx context.Context, userID
 // 保序关键：按 ids（LIST 写入序=随机序）遍历，而非 hydrate 返回的 map 序，否则 map 打乱随机性。
 // 已删除/过滤的帖子跳过（池可断层，同 trending）。
 func (s *discoverServiceImpl) fillPosts(ctx context.Context, ids []uuid.UUID, userID *uuid.UUID) []domain.DiscoverPostItem {
-	items, err := s.hydrator.Hydrate(ctx, ids)
+	viewerID := uuid.Nil // 匿名共享池：访客视为非成员
+	if userID != nil {
+		viewerID = *userID
+	}
+	items, err := s.hydrator.Hydrate(ctx, viewerID, ids)
 	if err != nil {
 		return nil
 	}
@@ -259,6 +263,9 @@ func (s *discoverServiceImpl) fillCircles(ctx context.Context, ids []uuid.UUID) 
 		c, ok := circles[id]
 		if !ok {
 			continue // GetByIDs 已跳过 deleted；status 异常也跳过
+		}
+		if c.JoinType == circledomain.CircleJoinTypePrivate {
+			continue // 采样后改为私密的圈子（采样已排除 join_type=2，池有 TTL）
 		}
 		out = append(out, toDiscoverCircleItem(c))
 	}

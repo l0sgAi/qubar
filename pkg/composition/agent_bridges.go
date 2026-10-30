@@ -56,17 +56,23 @@ const botUserRole = 2
 // 机器人账号不登录不发帖，仅作为 ai_agent 以该身份发评论的载体。
 // username 用机器人 name（允许重复）；email 由调用方保证唯一；avatarURL 为机器人头像。
 // circleID 非 nil 时写入 users.agent_circle_id（圈内机器人 @提及 作用域投影；
-// 全局链路传 nil）。
-func (b *agentBotUserCreator) CreateBotUser(ctx context.Context, username, email, avatarURL string, circleID *uuid.UUID) (uuid.UUID, error) {
+// 全局链路传 nil）；mentionable=false（创建即停用）时写入 agent_mention_disabled=1。
+// status 恒为正常：GetBriefs 跳过非正常用户，机器人可见性只由投影列控制。
+func (b *agentBotUserCreator) CreateBotUser(ctx context.Context, username, email, avatarURL string, circleID *uuid.UUID, mentionable bool) (uuid.UUID, error) {
+	var mentionDisabled int16
+	if !mentionable {
+		mentionDisabled = 1
+	}
 	u := userdomain.SysUser{
-		ID:            sharedomain.NewID(),
-		Username:      username,
-		Email:         email,
-		AvatarURL:     avatarURL,
-		AgentCircleID: circleID,
-		Role:          botUserRole,
-		Status:        userdomain.UserStatusActive,
-		Deleted:       0,
+		ID:                   sharedomain.NewID(),
+		Username:             username,
+		Email:                email,
+		AvatarURL:            avatarURL,
+		AgentCircleID:        circleID,
+		AgentMentionDisabled: mentionDisabled,
+		Role:                 botUserRole,
+		Status:               userdomain.UserStatusActive,
+		Deleted:              0,
 	}
 	if err := b.db.WithContext(ctx).Create(&u).Error; err != nil {
 		return uuid.Nil, err
@@ -90,16 +96,16 @@ func (b *agentBotUserUpdater) UpdateBotUserProfile(ctx context.Context, userID u
 	return err
 }
 
-// agentBotUserScopeCleaner 桥接 aiagent.BotUserScopeCleaner -> user.UserService.ClearAgentCircleScope。
+// agentBotUserMentionSyncer 桥接 aiagent.BotUserMentionSyncer -> user.UserService.SetAgentMentionable。
 //
-// 走 user Service 而非直写库：清列后自动刷新 userinfo 缓存（避免 @列表/详情回显旧绑定）。
-type agentBotUserScopeCleaner struct {
+// 走 user Service 而非直写库：写列后自动刷新 userinfo 缓存。
+type agentBotUserMentionSyncer struct {
 	delegate userapp.UserService
 }
 
-// ClearBotCircleScope 机器人软删后清 users.agent_circle_id（幂等）。
-func (b *agentBotUserScopeCleaner) ClearBotCircleScope(ctx context.Context, userID uuid.UUID) error {
-	return b.delegate.ClearAgentCircleScope(ctx, userID)
+// SetBotUserMentionable 机器人启用/停用/删除后写 users.agent_mention_disabled（幂等）。
+func (b *agentBotUserMentionSyncer) SetBotUserMentionable(ctx context.Context, userID uuid.UUID, mentionable bool) error {
+	return b.delegate.SetAgentMentionable(ctx, userID, mentionable)
 }
 
 // 编译期保证：桥接器满足 aiagent 领域端口。
@@ -107,7 +113,7 @@ var (
 	_ agentapp.RoleReader            = (*agentRoleReader)(nil)
 	_ agentapp.BotUserCreator        = (*agentBotUserCreator)(nil)
 	_ agentapp.BotUserProfileUpdater = (*agentBotUserUpdater)(nil)
-	_ agentapp.BotUserScopeCleaner   = (*agentBotUserScopeCleaner)(nil)
+	_ agentapp.BotUserMentionSyncer  = (*agentBotUserMentionSyncer)(nil)
 	_ agentapp.PostReader            = (*agentPostReader)(nil)
 	_ agentapp.CommentCreator        = (*agentCommentCreator)(nil)
 	_ agentapp.CircleRoleReader      = (*circleRoleReaderForAgent)(nil)
@@ -166,7 +172,8 @@ func (b *agentPostReader) GetPostBrief(ctx context.Context, postID uuid.UUID) (*
 //
 // 机器人以 linked_user_id 身份发评论；帖子校验/清洗/计数/热度事件全部复用
 // comment 域现有链路。机器人评论同样会回调 AgentReplyTrigger，由 aiagent 侧
-// ExistsByLinkedUserID 防回环。
+// ExistsByLinkedUserID 防回环。机器人是系统身份（SystemActor），不受私密圈可见性
+// 校验约束：机器人在私密圈的回复行为另行处理（#170 范围外，保持现状）。
 type agentCommentCreator struct {
 	delegate commentapp.CommentService
 }
@@ -178,6 +185,8 @@ func (b *agentCommentCreator) CreateComment(ctx context.Context, userID uuid.UUI
 		Content:   input.Content,
 		RootID:    input.RootID,
 		ReplyToID: input.ReplyToID,
+
+		SystemActor: true,
 	})
 }
 
@@ -226,3 +235,57 @@ func (b *postAgentTrigger) OnPostMentioned(postID, circleID, authorID uuid.UUID,
 
 // 编译期保证：触发桥接器满足 post 领域端口。
 var _ postapp.AgentPostTrigger = (*postAgentTrigger)(nil)
+
+// agentCandidateReader 桥接 aiagent.AutoReplyCandidateReader -> post / comment 域的自动回复候选 Facade。
+//
+// 候选过滤（已发布未锁定、门槛、时间窗口、作者非机器人账号、圈子范围、排除名单）全部在
+// 各自领域的仓储 SQL 内完成，桥接器只做 DTO 转换。
+type agentCandidateReader struct {
+	post    postapp.PostService
+	comment commentapp.CommentService
+}
+
+// ListHotPosts 自动回复帖子候选（按热度降序 top-N）。
+func (b *agentCandidateReader) ListHotPosts(ctx context.Context, q agentapp.AutoPostQuery) ([]agentapp.AutoPostCandidate, error) {
+	rows, err := b.post.ListAutoReplyCandidates(ctx, postapp.AutoReplyPostQuery{
+		CircleID:   q.CircleID,
+		HotMin:     q.HotMin,
+		Since:      q.Since,
+		ExcludeIDs: q.ExcludeIDs,
+		Limit:      q.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]agentapp.AutoPostCandidate, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, agentapp.AutoPostCandidate{ID: r.ID, CircleID: r.CircleID, AuthorID: r.AuthorID, Hot: r.Hot})
+	}
+	return out, nil
+}
+
+// ListHotComments 自动回复评论候选（按 like_count + reply_count 降序 top-N）。
+func (b *agentCandidateReader) ListHotComments(ctx context.Context, q agentapp.AutoCommentQuery) ([]agentapp.AutoCommentCandidate, error) {
+	rows, err := b.comment.ListAutoReplyCandidates(ctx, commentapp.AutoReplyCommentQuery{
+		CircleID:   q.CircleID,
+		LikeMin:    q.LikeMin,
+		ReplyMin:   q.ReplyMin,
+		Since:      q.Since,
+		ExcludeIDs: q.ExcludeIDs,
+		Limit:      q.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]agentapp.AutoCommentCandidate, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, agentapp.AutoCommentCandidate{
+			ID: r.ID, PostID: r.PostID, PostCircleID: r.PostCircleID,
+			UserID: r.UserID, RootID: r.RootID, Content: r.Content,
+		})
+	}
+	return out, nil
+}
+
+// 编译期保证：候选桥接器满足 aiagent 领域端口。
+var _ agentapp.AutoReplyCandidateReader = (*agentCandidateReader)(nil)

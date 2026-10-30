@@ -8,6 +8,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -43,9 +44,17 @@ type MentionVO struct {
 type UserFacade interface {
 	GetBriefs(ctx context.Context, userIDs []string) (map[string]UserBrief, error)
 	GetBrief(ctx context.Context, userID string) (*UserBrief, error)
-	// GetAgentCircleIDs 批量返回 userID → 机器人绑定圈子ID（仅含圈内机器人行，
-	// 普通用户/全局机器人不出现在 map）。mention 兜底剔除越圈机器人用。
-	GetAgentCircleIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
+	// GetAgentMentionScopes 批量返回 userID → 机器人 @提及 可见范围（仅含圈内机器人与不可 @ 的
+	// 机器人，普通用户/可 @ 的全局机器人不出现在 map）。mention 兜底剔除越圈、停用或已删除的机器人用。
+	GetAgentMentionScopes(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]AgentMentionScope, error)
+}
+
+// AgentMentionScope 机器人账号的 @提及 可见范围（user 域投影列的跨域视图）。
+type AgentMentionScope struct {
+	// CircleID 绑定圈子ID；uuid.Nil=全局机器人。
+	CircleID uuid.UUID
+	// Mentionable 能否被 @：机器人停用或已删除时为 false。
+	Mentionable bool
 }
 
 // CircleBrief 圈子精简视图。
@@ -159,19 +168,21 @@ type RawPostSearchResult struct {
 }
 
 // PostSearcher 帖子搜索抽象。
+//
+// excludeCircleIDs 为查看者不可见的私密圈（ES must_not terms circle_id，见 visibility.go）。
 type PostSearcher interface {
-	Search(ctx context.Context, keyword string, circleID uuid.UUID, size int, searchAfter []interface{}) (*RawPostSearchResult, error)
+	Search(ctx context.Context, keyword string, circleID uuid.UUID, excludeCircleIDs []uuid.UUID, size int, searchAfter []interface{}) (*RawPostSearchResult, error)
 	// SearchMy 搜索指定用户自己的帖子（"我的发帖"，keyword 为空时返回该用户全部帖子）。
 	SearchMy(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*RawPostSearchResult, error)
 	// SearchByUser 搜索指定用户已发布的帖子（查看「他人」发帖，强制 status=1）。
-	SearchByUser(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*RawPostSearchResult, error)
+	SearchByUser(ctx context.Context, userID uuid.UUID, keyword string, excludeCircleIDs []uuid.UUID, size int, searchAfter []interface{}) (*RawPostSearchResult, error)
 	// SearchByIDs 按 ID 列表批量查询帖子(ES terms 查询,仅未删除 + 已发布)。
 	// 顺序不保证,调用方自行按业务序重排;失效帖(被删/未发布)静默过滤。
 	// 供 history「最近浏览」列表用。
-	SearchByIDs(ctx context.Context, postIDs []uuid.UUID, size int) (*RawPostSearchResult, error)
+	SearchByIDs(ctx context.Context, postIDs, excludeCircleIDs []uuid.UUID, size int) (*RawPostSearchResult, error)
 	// SearchByIDsAndKeyword 在 ID 集合内按关键字搜索帖子(title^3/summary multi_match),
 	// 按 _score desc 排序,offset 分页。供 history「最近浏览」关键字搜索用。
-	SearchByIDsAndKeyword(ctx context.Context, postIDs []uuid.UUID, keyword string, size, offset int) (*RawPostSearchResult, error)
+	SearchByIDsAndKeyword(ctx context.Context, postIDs []uuid.UUID, keyword string, excludeCircleIDs []uuid.UUID, size, offset int) (*RawPostSearchResult, error)
 }
 
 // PostDetailVO 帖子详情 VO。
@@ -223,25 +234,29 @@ type CreatePostInput struct {
 type PostService interface {
 	CreatePost(ctx context.Context, userID uuid.UUID, input CreatePostInput) (uuid.UUID, error)
 	GetPostDetail(ctx context.Context, userID, postID uuid.UUID) (*PostDetailVO, error)
-	SearchPosts(ctx context.Context, keyword string, circleID uuid.UUID, size int, searchAfter []interface{}) (*PostSearchResult, error)
+	// SearchPosts 帖子搜索；viewerID 不可见的私密圈帖子不返回（访客 uuid.Nil）。
+	SearchPosts(ctx context.Context, viewerID uuid.UUID, keyword string, circleID uuid.UUID, size int, searchAfter []interface{}) (*PostSearchResult, error)
 	// GetMyPosts 查看自己发的帖（按 userID 过滤，支持 title/summary 模糊关键字）。
 	// 不过滤 status，作者可见自己全部状态（草稿/审核/已发布/锁定），仅排除已删除。
 	GetMyPosts(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostSearchResult, error)
 	// GetUserPosts 查看任意指定用户的发帖记录（按 targetUserID 过滤，支持 title/summary 模糊关键字）。
 	// 强制 status=1：他人不可见对方草稿/审核/拒绝/封禁帖，仅返回已发布。
-	GetUserPosts(ctx context.Context, targetUserID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostSearchResult, error)
+	// viewerID 不可见的私密圈帖子不返回。
+	GetUserPosts(ctx context.Context, viewerID, targetUserID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostSearchResult, error)
 	// GetMediaByPostIDs 批量获取帖子图片（供 circle 领域 GetCirclePosts 调用）。
 	GetMediaByPostIDs(ctx context.Context, postIDs []string) (map[string][]string, error)
 	// GetPostsByIDs 按 ID 列表批量获取已组装的帖子（仅未删除 + 已发布）。
 	// 供 collect 领域「我的收藏」列表调用。顺序不保证，调用方自行按收藏时间排序；失效帖静默过滤。
-	GetPostsByIDs(ctx context.Context, postIDs []uuid.UUID) ([]PostListItem, error)
+	// viewerID 不可见的私密圈帖子同样过滤（退出 / 被移出后收藏仍在，但列表不展示）。
+	GetPostsByIDs(ctx context.Context, viewerID uuid.UUID, postIDs []uuid.UUID) ([]PostListItem, error)
 	// SearchPostsByIDs 按 ID 列表从 ES 获取已组装帖子(供 history「最近浏览」列表调用)。
 	// ES terms 查询,仅未删除 + 已发布;顺序不保证,调用方自行按浏览时间排序,失效帖静默过滤。
-	SearchPostsByIDs(ctx context.Context, postIDs []uuid.UUID) ([]PostListItem, error)
+	// viewerID 不可见的私密圈帖子同样过滤（推荐 / 热榜 / 发现的回填也走这里）。
+	SearchPostsByIDs(ctx context.Context, viewerID uuid.UUID, postIDs []uuid.UUID) ([]PostListItem, error)
 	// SearchPostsByIDsAndKeyword 在 ID 集合内按关键字搜索并组装帖子(供 history「最近浏览」关键字搜索)。
 	// title^3/summary multi_match + 失效帖过滤,按 _score desc 排序,offset 分页;
 	// 返回匹配总数(供上层 next_offset 计算)。keyword/postIDs 为空返回空列表。
-	SearchPostsByIDsAndKeyword(ctx context.Context, postIDs []uuid.UUID, keyword string, size, offset int) ([]PostListItem, int64, error)
+	SearchPostsByIDsAndKeyword(ctx context.Context, viewerID uuid.UUID, postIDs []uuid.UUID, keyword string, size, offset int) ([]PostListItem, int64, error)
 	// ListCircleIDsByPostIDs 批量取帖子所属 circle_id（去重，仅未删除+已发布）。
 	// 供 recommend 域 C3 行为圈子召回用（seed 帖子 → 圈子）。
 	ListCircleIDsByPostIDs(ctx context.Context, postIDs []uuid.UUID) ([]uuid.UUID, error)
@@ -252,11 +267,17 @@ type PostService interface {
 	// GetPostMeta 获取帖子元信息（供 comment/like 领域校验用）。
 	// 未找到返回 nil, nil。
 	GetPostMeta(ctx context.Context, postID uuid.UUID) (*PostMeta, error)
+	// CanViewPost 查看者能否看到该帖（所属圈子非私密圈，或查看者是该圈正常 / 禁言成员；访客视为非成员）。
+	// 供 comment / like / collect 经桥接复用同一判断（见 visibility.go）；帖子不存在返回 false。
+	CanViewPost(ctx context.Context, viewerID, postID uuid.UUID) (bool, error)
 	// GetPostBrief 获取帖子内容摘要（供 aiagent 领域组装机器人回复 prompt 用）。
 	// 未找到返回 nil, nil。
 	GetPostBrief(ctx context.Context, postID uuid.UUID) (*PostBrief, error)
+	// ListAutoReplyCandidates 机器人自动回复的帖子候选（供 aiagent 扫描器经 Facade 调用）：
+	// 已发布未锁定、热度达标、时间窗口内、作者非机器人账号、在圈子范围内，按热度降序 top-N。
+	ListAutoReplyCandidates(ctx context.Context, q AutoReplyPostQuery) ([]AutoReplyPostCandidate, error)
 	// RestoreStatsAndIncrCommentCount 恢复帖子统计缓存（如果不存在），
-	// 然后递增帖子评论计数（Redis Hash + Redpanda 异步持久化）。
+	// 然后递增帖子评论计数（Redis Hash 实时 + 帖子统计事件批量落库）。
 	// 供 comment 领域发评论后调用。
 	RestoreStatsAndIncrCommentCount(ctx context.Context, postID uuid.UUID) error
 	// RestoreStats 恢复帖子统计缓存（如果不存在）。
@@ -286,6 +307,8 @@ type PostService interface {
 	SetHistoryRecorder(r domain.HistoryRecorder)
 	// SetAgentTrigger 注入 AI 机器人回复触发端口（未注入则发帖 @机器人 不触发回复）。
 	SetAgentTrigger(t AgentPostTrigger)
+	// SetCircleVisibility 注入私密圈可见性端口（详情 / 举报 / CanViewPost 用）。
+	SetCircleVisibility(v CircleVisibility)
 
 	// ModeratePost 审核 worker 处理一条帖子审核事件（#117），见 moderation.go。
 	// 返回错误表示需要重试（不提交 offset）；帖子不存在 / 已处理返回 nil。
@@ -337,6 +360,23 @@ type PostBrief struct {
 	CircleID uuid.UUID // 帖子所属圈子（机器人回复作用域匹配用）
 }
 
+// AutoReplyPostQuery 机器人自动回复的帖子候选查询条件。
+type AutoReplyPostQuery struct {
+	CircleID   uuid.UUID   // 圈子范围；uuid.Nil = 全站
+	HotMin     int         // 热度门槛（含）
+	Since      time.Time   // 只看该时间之后发布的帖子
+	ExcludeIDs []uuid.UUID // 排除的帖子（已触发 / 已达每目标上限）
+	Limit      int         // 候选上限
+}
+
+// AutoReplyPostCandidate 机器人自动回复的帖子候选。
+type AutoReplyPostCandidate struct {
+	ID       uuid.UUID
+	CircleID uuid.UUID
+	AuthorID uuid.UUID
+	Hot      int
+}
+
 type postServiceImpl struct {
 	repo          domain.PostRepository
 	statsCache    domain.PostStatsCache
@@ -351,6 +391,7 @@ type postServiceImpl struct {
 	postCountPort CirclePostCountPort
 	historyRec    domain.HistoryRecorder
 	agentTrigger  AgentPostTrigger
+	visibility    CircleVisibility // 私密圈可见性，见 visibility.go
 
 	// AI 审核（#117），见 moderation.go
 	moderator     domain.ContentModerator
@@ -544,10 +585,10 @@ func (s *postServiceImpl) onPostPublishedByStored(ctx context.Context, post *dom
 }
 
 // filterMentionUserIDs 校验 @提及 列表：去重 → 去掉自己/Nil → 校验用户存在 →
-// 剔除越圈机器人 → 按上限截断。
-// 圈子作用域兜底：圈内机器人（UserFacade.GetAgentCircleIDs 命中且绑定圈子 ≠ 本帖圈子）
-// 静默剔除——@选人列表已在 ES 侧过滤，此处只防手搓 ID 构造请求。查询失败时 fail-open
-// 跳过剔除（与列表过滤的兜底口径一致），不阻断主流程。
+// 剔除不可 @ 的机器人 → 按上限截断。
+// 机器人兜底：越圈的圈内机器人（绑定圈子 ≠ 本帖圈子）与停用/已删除的机器人
+// （UserFacade.GetAgentMentionScopes 命中）静默剔除——@选人列表已在 ES 侧过滤，此处防手搓 ID
+// 构造请求与 CDC 延迟窗口。查询失败时 fail-open 跳过剔除（与列表过滤的兜底口径一致），不阻断主流程。
 // 用户查询失败时降级为 nil（不发通知），不阻断主流程。
 func (s *postServiceImpl) filterMentionUserIDs(ctx context.Context, actorID uuid.UUID, raw []uuid.UUID, postCircleID uuid.UUID) []uuid.UUID {
 	seen := make(map[uuid.UUID]struct{}, len(raw))
@@ -581,7 +622,7 @@ func (s *postServiceImpl) filterMentionUserIDs(ctx context.Context, actorID uuid
 		}
 	}
 
-	valid = s.stripOutOfScopeAgents(ctx, valid, postCircleID)
+	valid = s.stripUnmentionableAgents(ctx, valid, postCircleID)
 
 	max := conf.Config.Notice.MentionMax
 	if max <= 0 {
@@ -593,21 +634,22 @@ func (s *postServiceImpl) filterMentionUserIDs(ctx context.Context, actorID uuid
 	return valid
 }
 
-// stripOutOfScopeAgents 从 mention 候选中剔除越圈的圈内机器人：绑定圈子 ≠ postCircleID
-// 的机器人静默移除；普通用户/全局机器人（map 无记录）保留。查询失败 fail-open 跳过剔除
-// （正常用户已被 @选人列表过滤，兜底只防构造请求）。
-func (s *postServiceImpl) stripOutOfScopeAgents(ctx context.Context, candidates []uuid.UUID, postCircleID uuid.UUID) []uuid.UUID {
+// stripUnmentionableAgents 从 mention 候选中剔除不可 @ 的机器人：停用/已删除的机器人，
+// 以及绑定圈子 ≠ postCircleID 的圈内机器人静默移除；普通用户/可 @ 的全局机器人（map 无记录）保留。
+// 查询失败 fail-open 跳过剔除（正常用户已被 @选人列表过滤，兜底只防构造请求）。
+func (s *postServiceImpl) stripUnmentionableAgents(ctx context.Context, candidates []uuid.UUID, postCircleID uuid.UUID) []uuid.UUID {
 	if len(candidates) == 0 {
 		return candidates
 	}
-	agentCircles, err := s.userFacade.GetAgentCircleIDs(ctx, candidates)
+	scopes, err := s.userFacade.GetAgentMentionScopes(ctx, candidates)
 	if err != nil {
-		logger.Log.Warn("Failed to load agent circle scope, skip out-of-scope filtering: " + err.Error())
+		logger.Log.Warn("Failed to load agent mention scope, skip agent filtering: " + err.Error())
 		return candidates
 	}
 	kept := make([]uuid.UUID, 0, len(candidates))
 	for _, id := range candidates {
-		if bound, ok := agentCircles[id]; ok && bound != postCircleID {
+		if scope, ok := scopes[id]; ok &&
+			(!scope.Mentionable || (scope.CircleID != uuid.Nil && scope.CircleID != postCircleID)) {
 			continue
 		}
 		kept = append(kept, id)
@@ -653,6 +695,14 @@ func (s *postServiceImpl) GetPostDetail(ctx context.Context, userID, postID uuid
 	// 权限：作者可看所有状态；其他人只能看已发布
 	// 匿名（userID==uuid.Nil）天然走"非作者"分支，只能看已发布帖——符合预期。
 	if userID != post.UserID && post.Status != domain.PostStatusPublished {
+		return nil, domain.ErrPostNotFound
+	}
+	// 私密圈：非成员（含访客、已不是成员的作者）与"不存在"一致返回 404，不暴露帖子存在。
+	visible, err := s.canViewCircle(ctx, userID, post.CircleID)
+	if err != nil {
+		return nil, err
+	}
+	if !visible {
 		return nil, domain.ErrPostNotFound
 	}
 
@@ -969,8 +1019,8 @@ func (s *postServiceImpl) asyncIncrementView(postID, userID uuid.UUID) {
 
 // restorePostStats 从 DB 恢复帖子统计缓存。
 //
-// 与旧 controller/comment.go 中的 restorePostStatsIfNeed 行为一致。
-// 这里直接读 Post 实体的计数字段写入 Redis。
+// 读 Post 实体的计数字段回种 Redis。用 SetIfAbsent（HSetNX）：调用方先查 Exists 再回种，
+// 并发请求（如同一帖子同时有多条评论）可能都看到「不存在」，普通 HSet 会冲掉先到者已经 HINCRBY 的增量。
 func (s *postServiceImpl) restorePostStats(postID uuid.UUID) {
 	post, err := s.repo.GetByID(context.Background(), postID)
 	if err != nil {
@@ -983,14 +1033,18 @@ func (s *postServiceImpl) restorePostStats(postID uuid.UUID) {
 		LikeCount:    post.LikeCount,
 		CollectCount: post.CollectCount,
 	}
-	if err := s.statsCache.Set(context.Background(), postID, stats); err != nil {
+	if err := s.statsCache.SetIfAbsent(context.Background(), postID, stats); err != nil {
 		logger.Log.Error("Failed to restore post stats cache: " + err.Error())
 	}
 }
 
 // SearchPosts 搜索帖子列表（组装作者/圈子/图片信息）。
-func (s *postServiceImpl) SearchPosts(ctx context.Context, keyword string, circleID uuid.UUID, size int, searchAfter []interface{}) (*PostSearchResult, error) {
-	raw, err := s.searcher.Search(ctx, keyword, circleID, size, searchAfter)
+func (s *postServiceImpl) SearchPosts(ctx context.Context, viewerID uuid.UUID, keyword string, circleID uuid.UUID, size int, searchAfter []interface{}) (*PostSearchResult, error) {
+	hidden, err := s.hiddenCircleIDs(ctx, viewerID)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := s.searcher.Search(ctx, keyword, circleID, hidden, size, searchAfter)
 	if err != nil {
 		return nil, err
 	}
@@ -1013,8 +1067,12 @@ func (s *postServiceImpl) GetMyPosts(ctx context.Context, userID uuid.UUID, keyw
 }
 
 // GetUserPosts 查看任意指定用户的发帖记录（按 targetUserID 过滤，仅已发布 status=1）。
-func (s *postServiceImpl) GetUserPosts(ctx context.Context, targetUserID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostSearchResult, error) {
-	raw, err := s.searcher.SearchByUser(ctx, targetUserID, keyword, size, searchAfter)
+func (s *postServiceImpl) GetUserPosts(ctx context.Context, viewerID, targetUserID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostSearchResult, error) {
+	hidden, err := s.hiddenCircleIDs(ctx, viewerID)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := s.searcher.SearchByUser(ctx, targetUserID, keyword, hidden, size, searchAfter)
 	if err != nil {
 		return nil, err
 	}
@@ -1171,12 +1229,15 @@ func (s *postServiceImpl) GetMediaByPostIDs(ctx context.Context, postIDs []strin
 //
 // 供 collect 领域「我的收藏」列表调用。与 assemblePostList（ES 来源）平行：
 // 批量查作者/圈子/图片后组装为 PostListItem。顺序不保证，失效帖静默过滤。
-func (s *postServiceImpl) GetPostsByIDs(ctx context.Context, postIDs []uuid.UUID) ([]PostListItem, error) {
+func (s *postServiceImpl) GetPostsByIDs(ctx context.Context, viewerID uuid.UUID, postIDs []uuid.UUID) ([]PostListItem, error) {
 	if len(postIDs) == 0 {
 		return []PostListItem{}, nil
 	}
 	posts, err := s.repo.ListByIDs(ctx, postIDs)
 	if err != nil {
+		return nil, err
+	}
+	if posts, err = s.filterVisiblePosts(ctx, viewerID, posts); err != nil {
 		return nil, err
 	}
 	return s.assembleFromPosts(ctx, posts), nil
@@ -1186,11 +1247,15 @@ func (s *postServiceImpl) GetPostsByIDs(ctx context.Context, postIDs []uuid.UUID
 //
 // 与 GetPostsByIDs(DB 来源)平行,但走 ES terms 查询,复用 assemblePostList 组装。
 // 顺序不保证,失效帖(被删/未发布)在 ES 查询时静默过滤。
-func (s *postServiceImpl) SearchPostsByIDs(ctx context.Context, postIDs []uuid.UUID) ([]PostListItem, error) {
+func (s *postServiceImpl) SearchPostsByIDs(ctx context.Context, viewerID uuid.UUID, postIDs []uuid.UUID) ([]PostListItem, error) {
 	if len(postIDs) == 0 {
 		return []PostListItem{}, nil
 	}
-	raw, err := s.searcher.SearchByIDs(ctx, postIDs, len(postIDs))
+	hidden, err := s.hiddenCircleIDs(ctx, viewerID)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := s.searcher.SearchByIDs(ctx, postIDs, hidden, len(postIDs))
 	if err != nil {
 		return nil, err
 	}
@@ -1202,11 +1267,15 @@ func (s *postServiceImpl) SearchPostsByIDs(ctx context.Context, postIDs []uuid.U
 // 与 SearchPostsByIDs 平行,但叠加 multi_match(title^3/summary) 关键字过滤,
 // 按 _score desc 排序,offset 分页;返回匹配总数(raw.Total)供上层计算 next_offset。
 // 失效帖(被删/未发布)在 ES 查询时静默过滤。
-func (s *postServiceImpl) SearchPostsByIDsAndKeyword(ctx context.Context, postIDs []uuid.UUID, keyword string, size, offset int) ([]PostListItem, int64, error) {
+func (s *postServiceImpl) SearchPostsByIDsAndKeyword(ctx context.Context, viewerID uuid.UUID, postIDs []uuid.UUID, keyword string, size, offset int) ([]PostListItem, int64, error) {
 	if len(postIDs) == 0 || keyword == "" {
 		return []PostListItem{}, 0, nil
 	}
-	raw, err := s.searcher.SearchByIDsAndKeyword(ctx, postIDs, keyword, size, offset)
+	hidden, err := s.hiddenCircleIDs(ctx, viewerID)
+	if err != nil {
+		return nil, 0, err
+	}
+	raw, err := s.searcher.SearchByIDsAndKeyword(ctx, postIDs, keyword, hidden, size, offset)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1348,6 +1417,31 @@ func (s *postServiceImpl) GetPostMeta(ctx context.Context, postID uuid.UUID) (*P
 	}, nil
 }
 
+// ListAutoReplyCandidates 机器人自动回复的帖子候选（纯 DB 查询，hot 列由热度链路异步落库，
+// 分钟级滞后对定时扫描无影响）。
+func (s *postServiceImpl) ListAutoReplyCandidates(ctx context.Context, q AutoReplyPostQuery) ([]AutoReplyPostCandidate, error) {
+	posts, err := s.repo.ListHotForAutoReply(ctx, domain.AutoReplyPostFilter{
+		CircleID:   q.CircleID,
+		HotMin:     q.HotMin,
+		Since:      q.Since,
+		ExcludeIDs: q.ExcludeIDs,
+		Limit:      q.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AutoReplyPostCandidate, 0, len(posts))
+	for i := range posts {
+		out = append(out, AutoReplyPostCandidate{
+			ID:       posts[i].ID,
+			CircleID: posts[i].CircleID,
+			AuthorID: posts[i].UserID,
+			Hot:      posts[i].Hot,
+		})
+	}
+	return out, nil
+}
+
 // GetPostBrief 获取帖子内容摘要（供 aiagent 领域组装机器人回复 prompt 用）。
 func (s *postServiceImpl) GetPostBrief(ctx context.Context, postID uuid.UUID) (*PostBrief, error) {
 	post, err := s.repo.GetByID(ctx, postID)
@@ -1369,13 +1463,25 @@ func (s *postServiceImpl) GetPostBrief(ctx context.Context, postID uuid.UUID) (*
 }
 
 // RestoreStatsAndIncrCommentCount 恢复帖子统计缓存（如果不存在），
-// 然后递增帖子评论计数（Redis Hash 实时 + DB 同步持久化）。
+// 然后递增帖子评论计数（Redis Hash 实时 + 帖子统计事件批量落库）。
 //
-// 评论计数不再走 Redpanda 异步聚合：评论是低频、本就带 DB 事务的写入，
-// 同步 UPDATE 比批量聚合更简单且消除 DB 滞后导致的缓存回源少算问题。
-// view/like/collect 仍走聚合器（高频，需批量）。
+// 评论计数不再同步 UPDATE post（#130）：每条评论一次单行 UPDATE 会让热帖成为热点行，
+// 且每次都经 CDC 触发 ES 整篇重建索引。改为与浏览量同一条批量 UPDATE，落库时按评论明细重算（幂等）。
+// 读路径以 Redis 为真值；缓存回源读到落库前旧值的问题由消费者落库后校准兜底（同点赞 #128）。
 func (s *postServiceImpl) RestoreStatsAndIncrCommentCount(ctx context.Context, postID uuid.UUID) error {
-	// 1. 缓存恢复（如果统计 Hash 不存在，先从 DB 恢复）
+	// 1. 缓存恢复（如果统计 Hash 不存在，先从 DB 恢复）+ 实时递增 Redis 评论计数
+	cacheErr := s.incrCachedCommentCount(ctx, postID)
+
+	// 2. 发布评论数变化事件（批量落库）。缓存失败也要发，否则 DB 计数要等该帖下一条评论才会更新。
+	var publishErr error
+	if s.publisher != nil {
+		publishErr = s.publisher.PublishCommentCount(ctx, postID)
+	}
+	return errors.Join(cacheErr, publishErr)
+}
+
+// incrCachedCommentCount 确保统计 Hash 存在后递增 comment_count。
+func (s *postServiceImpl) incrCachedCommentCount(ctx context.Context, postID uuid.UUID) error {
 	exists, err := s.statsCache.Exists(ctx, postID)
 	if err != nil {
 		return err
@@ -1383,14 +1489,7 @@ func (s *postServiceImpl) RestoreStatsAndIncrCommentCount(ctx context.Context, p
 	if !exists {
 		s.restorePostStats(postID)
 	}
-
-	// 2. 实时递增帖子评论计数（Redis Hash）
-	if err := s.statsCache.IncrCommentCount(ctx, postID); err != nil {
-		return err
-	}
-
-	// 3. 同步递增 DB 评论计数（实时持久化）
-	return s.repo.IncrCommentCount(ctx, postID)
+	return s.statsCache.IncrCommentCount(ctx, postID)
 }
 
 // RestoreStats 恢复帖子统计缓存（如果不存在）。

@@ -7,6 +7,8 @@ import (
 	circleapp "interestBar/pkg/domains/circle/application"
 	postapp "interestBar/pkg/domains/post/application"
 	userapp "interestBar/pkg/domains/user/application"
+
+	"github.com/google/uuid"
 )
 
 // ===== user → circle =====
@@ -40,6 +42,16 @@ func (f *circleUserFacade) SearchBriefs(ctx context.Context, keyword string, lim
 		result = append(result, circleapp.UserBrief{ID: b.ID, Username: b.Username, AvatarURL: b.AvatarURL})
 	}
 	return result, total, nil
+}
+
+// circleUserEmailReader 把 user.application.UserFacade.GetEmail 适配为 circle.application.UserEmailReader
+// （私密圈 email 邀请按当前用户 email 匹配，#169）。
+type circleUserEmailReader struct {
+	delegate userapp.UserFacade
+}
+
+func (r *circleUserEmailReader) GetEmail(ctx context.Context, userID uuid.UUID) (string, error) {
+	return r.delegate.GetEmail(ctx, userID)
 }
 
 // ===== post → circle =====
