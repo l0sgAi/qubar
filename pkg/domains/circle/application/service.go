@@ -352,6 +352,21 @@ type CircleService interface {
 	// UpdateCircleProfile 编辑圈子资料（name/slug/join_type/category_id 仅圈主，其余 admin+）。
 	UpdateCircleProfile(ctx context.Context, operatorID, circleID uuid.UUID, input UpdateCircleProfileInput) error
 
+	// ===== 私密圈邀请（#169，见 invite.go）=====
+
+	// CreateInviteLink 生成邀请链接（admin+，仅私密圈）；明文 token 只在返回值中出现一次。
+	CreateInviteLink(ctx context.Context, operatorID, circleID uuid.UUID, input CreateInviteLinkInput) (*InviteLinkCreated, error)
+	// ListInviteLinks 圈内邀请链接列表（admin+，不返回 token，offset 分页）。
+	ListInviteLinks(ctx context.Context, operatorID, circleID uuid.UUID, page, size int) (*InviteLinkListResult, error)
+	// RevokeInviteLink 撤销邀请链接（admin+，幂等）。
+	RevokeInviteLink(ctx context.Context, operatorID, linkID uuid.UUID) error
+	// PreviewInvite 邀请预览（访客可读；无效 / 过期 / 撤销统一 IsInviteInvalidErr）。
+	PreviewInvite(ctx context.Context, token string) (*InvitePreviewVO, error)
+	// AcceptInvite 凭邀请链接加入（已是成员幂等成功不消耗次数；拉黑拒绝）。
+	AcceptInvite(ctx context.Context, userID uuid.UUID, token string) (*InviteAcceptResult, error)
+	// SetInviteLinkRepository 注入邀请链接仓储。
+	SetInviteLinkRepository(repo domain.InviteLinkRepository)
+
 	// SetUserFacade 注入 user Facade（GetCirclePosts 组装作者信息用）。
 	SetUserFacade(f UserFacade)
 	// SetPostFetcher 注入 post 媒体查询器（GetCirclePosts 组装图片用）。
@@ -371,10 +386,11 @@ type circleServiceImpl struct {
 	joinedCache  domain.JoinedCirclesCache
 	searcher     CircleSearcher
 	publisher    domain.CircleEventPublisher
-	userFacade   UserFacade         // 可为 nil（GetCirclePosts 用）
-	postFetcher  PostMediaFetcher   // 可为 nil（GetCirclePosts 用）
-	agentCounter CircleAgentCounter // 可为 nil（ListManagedCircles agent_count 降级 0）
-	visibility   *circleVisibility  // 私密圈可见性（详情精简 / 圈内帖子 403 / 私密圈集合失效）
+	userFacade   UserFacade                  // 可为 nil（GetCirclePosts 用）
+	postFetcher  PostMediaFetcher            // 可为 nil（GetCirclePosts 用）
+	agentCounter CircleAgentCounter          // 可为 nil（ListManagedCircles agent_count 降级 0）
+	visibility   *circleVisibility           // 私密圈可见性（详情精简 / 圈内帖子 403 / 私密圈集合失效）
+	inviteLinks  domain.InviteLinkRepository // 可为 nil（未注入时邀请接口返回错误）
 }
 
 // NewCircleService 构造 CircleService。
@@ -585,7 +601,19 @@ func (s *circleServiceImpl) JoinCircle(ctx context.Context, userID, circleID uui
 		return errCircleNotAvailable
 	}
 
-	member, err := s.memberRepo.JoinCircle(ctx, circleID, userID, circle.JoinType)
+	return s.joinMember(ctx, userID, circleID, circle.JoinType)
+}
+
+// joinByInvite 邀请路径的内部加入：邀请凭证已由调用方校验，跳过 join_type 门槛，
+// 状态机（拉黑 / 已是成员拒绝）与副作用和自助加入完全一致。
+func (s *circleServiceImpl) joinByInvite(ctx context.Context, userID, circleID uuid.UUID) error {
+	return s.joinMember(ctx, userID, circleID, domain.CircleJoinTypeDirect)
+}
+
+// joinMember 入圈状态机（memberRepo.JoinCircle）+ 副作用。gateJoinType 是交给 repo 的 join_type 门槛：
+// 自助加入传圈子实际 join_type（非公开圈对无记录 / 已退出拒绝），邀请路径传 CircleJoinTypeDirect 放行。
+func (s *circleServiceImpl) joinMember(ctx context.Context, userID, circleID uuid.UUID, gateJoinType int16) error {
+	member, err := s.memberRepo.JoinCircle(ctx, circleID, userID, gateJoinType)
 	if err != nil {
 		return mapJoinLeaveError(err)
 	}

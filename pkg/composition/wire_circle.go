@@ -23,6 +23,7 @@ func newCircleService(deps *Deps) (circleapp.CircleService, circledomain.CircleR
 	svc := circleapp.NewCircleService(
 		circleRepo, memberRepo, baseCache, statsCache, joinedCache, searcher, publisher, privateCache,
 	)
+	svc.SetInviteLinkRepository(circleinfra.NewInviteLinkRepository(deps.DB.Get()))
 	return svc, circleRepo, memberRepo
 }
 
