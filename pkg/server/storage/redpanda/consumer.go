@@ -6,6 +6,7 @@ import (
 	"interestBar/pkg/conf"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/storage/db/pgsql"
+	redispkg "interestBar/pkg/server/storage/redis"
 	"strings"
 	"time"
 
@@ -142,19 +143,26 @@ func StartStatisticsConsumerWithRetry() {
 
 // ==================== 帖子统计消费者 ====================
 
-// postStatDelta 帖子统计增量（内部聚合使用）
+// postStatDelta 帖子统计增量（内部聚合使用）。
+//
+// 评论数不累加增量（#130）：CommentDirty 只标记「该帖评论有变化」，落库时按 domains.comment 明细重算。
+// 重算与消息条数、重投次数无关，flush 失败重试、提交 offset 前进程被杀导致的重投都不会重复计数。
 type postStatDelta struct {
 	ViewCount    int64
-	CommentCount int64
+	CommentDirty bool
 	LikeCount    int64
 	CollectCount int64
 }
 
 func (d *postStatDelta) addDelta(o *postStatDelta) {
 	d.ViewCount += o.ViewCount
-	d.CommentCount += o.CommentCount
+	d.CommentDirty = d.CommentDirty || o.CommentDirty
 	d.LikeCount += o.LikeCount
 	d.CollectCount += o.CollectCount
+}
+
+func (d *postStatDelta) empty() bool {
+	return d.ViewCount == 0 && !d.CommentDirty && d.LikeCount == 0 && d.CollectCount == 0
 }
 
 // postStatsBuf post_id -> 累计变化量
@@ -173,6 +181,8 @@ func (b postStatsBuf) add(msg PostStatisticsMessage) {
 	switch msg.Type {
 	case StatisticsTypePostView:
 		b.get(msg.PostID).ViewCount += msg.Value
+	case StatisticsTypePostComment:
+		b.get(msg.PostID).CommentDirty = true
 	case StatisticsTypePostLike:
 		b.get(msg.PostID).LikeCount += msg.Value
 	case StatisticsTypePostCollect:
@@ -194,7 +204,7 @@ var postStatsSpec = batchConsumerSpec[PostStatisticsMessage, postStatsBuf]{
 	add:     postStatsBuf.add,
 	size:    func(b postStatsBuf) int { return len(b) },
 	merge:   postStatsBuf.merge,
-	persist: batchUpdatePostStats,
+	persist: persistPostStats,
 }
 
 // StartPostStatisticsConsumer 启动帖子统计消费者
@@ -209,62 +219,122 @@ func StartPostStatisticsConsumer() error {
 type postStatsRow struct {
 	PostID       uuid.UUID `json:"post_id"`
 	ViewDelta    int64     `json:"view_delta"`
-	CommentDelta int64     `json:"comment_delta"`
+	CommentDirty bool      `json:"comment_dirty"`
 	LikeDelta    int64     `json:"like_delta"`
 	CollectDelta int64     `json:"collect_delta"`
 }
 
+// postStatsApplySQL 批量更新帖子统计：view / like / collect 累加增量，comment_count 对标记过的帖子按明细重算
+// （deleted=0 的评论 + 回复行数，与原同步 +1 的口径一致）。
+// 重算结果与当前值相同且没有其他增量的行不写：不产生新的行版本，也就不产生 WAL / CDC 事件（#130）。
+const postStatsApplySQL = `
+WITH v AS (
+	SELECT * FROM jsonb_to_recordset(?::jsonb)
+	AS v(post_id uuid, view_delta BIGINT, comment_dirty BOOLEAN, like_delta BIGINT, collect_delta BIGINT)
+),
+cc AS (
+	SELECT v.post_id,
+	       (SELECT count(*) FROM domains.comment c WHERE c.post_id = v.post_id AND c.deleted = 0) AS cnt
+	FROM v WHERE v.comment_dirty
+)
+UPDATE domains.post p
+SET view_count = LEAST(GREATEST(p.view_count + v.view_delta, 0), 1000000000),
+    comment_count = COALESCE(cc.cnt, p.comment_count),
+    like_count = GREATEST(p.like_count + v.like_delta, 0),
+    collect_count = GREATEST(p.collect_count + v.collect_delta, 0),
+    update_time = CURRENT_TIMESTAMP
+FROM v LEFT JOIN cc ON cc.post_id = v.post_id
+WHERE p.id = v.post_id AND p.deleted = 0
+  AND (v.view_delta <> 0 OR v.like_delta <> 0 OR v.collect_delta <> 0
+       OR p.comment_count <> COALESCE(cc.cnt, p.comment_count))`
+
+// persistPostStats 落库帖子统计，成功后校准 Redis 中的评论数缓存。
+func persistPostStats(deltas postStatsBuf) error {
+	commentIDs, err := batchUpdatePostStats(deltas)
+	if err != nil {
+		return err
+	}
+	reconcilePostCommentCounts(commentIDs)
+	return nil
+}
+
 // batchUpdatePostStats 批量更新帖子统计计数到数据库（按 id 升序取锁，见 batch_lock.go）。
-func batchUpdatePostStats(deltas postStatsBuf) error {
+// 返回本批重算了 comment_count 的帖子 ID（供落库后校准缓存）。
+func batchUpdatePostStats(deltas postStatsBuf) ([]uuid.UUID, error) {
 	rows := make([]postStatsRow, 0, len(deltas))
 	ids := make([]uuid.UUID, 0, len(deltas))
+	var commentIDs []uuid.UUID
 	for postID, delta := range deltas {
-		if delta.ViewCount != 0 || delta.CommentCount != 0 || delta.LikeCount != 0 || delta.CollectCount != 0 {
-			rows = append(rows, postStatsRow{
-				PostID:       postID,
-				ViewDelta:    delta.ViewCount,
-				CommentDelta: delta.CommentCount,
-				LikeDelta:    delta.LikeCount,
-				CollectDelta: delta.CollectCount,
-			})
-			ids = append(ids, postID)
+		if delta.empty() {
+			continue
+		}
+		rows = append(rows, postStatsRow{
+			PostID:       postID,
+			ViewDelta:    delta.ViewCount,
+			CommentDirty: delta.CommentDirty,
+			LikeDelta:    delta.LikeCount,
+			CollectDelta: delta.CollectCount,
+		})
+		ids = append(ids, postID)
+		if delta.CommentDirty {
+			commentIDs = append(commentIDs, postID)
 		}
 	}
 	if len(rows) == 0 {
-		return nil
+		return nil, nil
 	}
 	sortByID(rows, func(r postStatsRow) uuid.UUID { return r.PostID })
 
 	jsonBytes, err := json.Marshal(rows)
 	if err != nil {
-		return fmt.Errorf("failed to marshal post stats update rows: %w", err)
+		return nil, fmt.Errorf("failed to marshal post stats update rows: %w", err)
 	}
 
-	// 使用JSON批量更新所有统计字段
-	sql := `
-		UPDATE domains.post p
-		SET view_count = LEAST(GREATEST(p.view_count + v.view_delta, 0), 1000000000),
-		    comment_count = GREATEST(p.comment_count + v.comment_delta, 0),
-		    like_count = GREATEST(p.like_count + v.like_delta, 0),
-		    collect_count = GREATEST(p.collect_count + v.collect_delta, 0),
-		    update_time = CURRENT_TIMESTAMP
-		FROM (
-		    SELECT * FROM jsonb_to_recordset(?::jsonb)
-		    AS v(post_id uuid, view_delta BIGINT, comment_delta BIGINT, like_delta BIGINT, collect_delta BIGINT)
-		) v
-		WHERE p.id = v.post_id AND p.deleted = 0
-		`
-
-	return pgsql.DB.Transaction(func(tx *gorm.DB) error {
+	err = pgsql.DB.Transaction(func(tx *gorm.DB) error {
 		if err := lockRowsByID(tx, "domains.post", ids); err != nil {
 			return err
 		}
-		if err := tx.Exec(sql, string(jsonBytes)).Error; err != nil {
-			return fmt.Errorf("failed to execute post stats batch update: %w", err)
+		res := tx.Exec(postStatsApplySQL, string(jsonBytes))
+		if res.Error != nil {
+			return fmt.Errorf("failed to execute post stats batch update: %w", res.Error)
 		}
-		logger.Log.Info(fmt.Sprintf("Successfully updated %d post statistics", len(rows)))
+		logger.Log.Info(fmt.Sprintf("Successfully updated %d/%d post statistics", res.RowsAffected, len(rows)))
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return commentIDs, nil
+}
+
+// reconcilePostCommentCounts 落库提交后把 Redis post:stats 中低于 PG 的 comment_count 抬回 PG 值。
+// 与点赞 #128 同一口径：缓存过期后由 PG 回填时，窗口内的评论尚未落库，回填值偏低。
+// best-effort：失败只记日志，不影响落库与 offset 提交。
+func reconcilePostCommentCounts(postIDs []uuid.UUID) {
+	ids := sortedIDs(postIDs)
+	if len(ids) == 0 {
+		return
+	}
+	var rows []struct {
+		ID           uuid.UUID
+		CommentCount int64
+	}
+	if err := pgsql.DB.Table("domains.post").Select("id, comment_count").
+		Where("id IN ? AND deleted = 0", ids).Scan(&rows).Error; err != nil {
+		logger.Log.Warn("Failed to load post comment_count for cache reconcile: " + err.Error())
+		return
+	}
+	counts := make(map[uuid.UUID]int64, len(rows))
+	for _, r := range rows {
+		counts[r.ID] = r.CommentCount
+	}
+	fixed, err := redispkg.ReconcilePostCommentCounts(counts)
+	if err != nil {
+		logger.Log.Warn("Failed to reconcile post stats comment_count: " + err.Error())
+	}
+	if fixed > 0 {
+		logger.Log.Info(fmt.Sprintf("Reconciled comment_count of %d cached post stats", fixed))
+	}
 }
 
 // StartPostStatisticsConsumerWithRetry 启动帖子统计消费者，带重试机制
