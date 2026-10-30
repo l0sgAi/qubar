@@ -913,15 +913,33 @@ func (s *circleServiceImpl) searchJoinedByRank(ctx context.Context, userID uuid.
 		if err != nil {
 			return nil, err
 		}
-		collected = append(collected, res.Circles...)
+		// 按 rank 顺序（加入时间倒序）排列命中；批内超出 size 则截断，游标落在最后返回命中的下一位。
+		docByID := make(map[string]MyCircleDoc, len(res.Circles))
+		for _, d := range res.Circles {
+			docByID[d.ID] = d
+		}
+		need := size - len(collected)
+		truncated := false
+		for i, id := range ids {
+			d, ok := docByID[id.String()]
+			if !ok {
+				continue
+			}
+			collected = append(collected, d)
+			need--
+			if need == 0 {
+				cur += int64(i + 1)
+				truncated = true
+				break
+			}
+		}
+		if truncated {
+			break
+		}
 		cur += int64(len(ids))
 		if int64(len(ids)) < batch {
 			break // 到末尾
 		}
-	}
-
-	if len(collected) > size {
-		collected = collected[:size]
 	}
 
 	scannedAll := cur >= card
