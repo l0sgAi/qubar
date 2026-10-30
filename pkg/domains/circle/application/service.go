@@ -367,6 +367,21 @@ type CircleService interface {
 	// SetInviteLinkRepository 注入邀请链接仓储。
 	SetInviteLinkRepository(repo domain.InviteLinkRepository)
 
+	// AddInviteEmails 批量添加 email 邀请（admin+，仅私密圈，单次 ≤50；不合法 / 重复 / 已邀请的在结果中返回）。
+	AddInviteEmails(ctx context.Context, operatorID, circleID uuid.UUID, emails []string) (*InviteEmailAddResult, error)
+	// ListInviteEmails 圈内 email 邀请列表（admin+；status=-1 不过滤）。
+	ListInviteEmails(ctx context.Context, operatorID, circleID uuid.UUID, status int16, page, size int) (*InviteEmailListResult, error)
+	// RevokeInviteEmail 撤销待接受的 email 邀请（admin+，幂等）。
+	RevokeInviteEmail(ctx context.Context, operatorID, inviteID uuid.UUID) error
+	// ListMyInvites 当前用户 email 收到的待接受邀请。
+	ListMyInvites(ctx context.Context, userID uuid.UUID, page, size int) (*MyInviteListResult, error)
+	// RespondInviteEmail 接受 / 拒绝发给自己 email 的邀请（接受规则同邀请链接）。
+	RespondInviteEmail(ctx context.Context, userID, inviteID uuid.UUID, accept bool) (*InviteAcceptResult, error)
+	// SetInviteEmailRepository 注入 email 邀请仓储。
+	SetInviteEmailRepository(repo domain.InviteEmailRepository)
+	// SetUserEmailReader 注入用户 email 读取端口（composition 桥接 user 域）。
+	SetUserEmailReader(r UserEmailReader)
+
 	// SetUserFacade 注入 user Facade（GetCirclePosts 组装作者信息用）。
 	SetUserFacade(f UserFacade)
 	// SetPostFetcher 注入 post 媒体查询器（GetCirclePosts 组装图片用）。
@@ -386,11 +401,13 @@ type circleServiceImpl struct {
 	joinedCache  domain.JoinedCirclesCache
 	searcher     CircleSearcher
 	publisher    domain.CircleEventPublisher
-	userFacade   UserFacade                  // 可为 nil（GetCirclePosts 用）
-	postFetcher  PostMediaFetcher            // 可为 nil（GetCirclePosts 用）
-	agentCounter CircleAgentCounter          // 可为 nil（ListManagedCircles agent_count 降级 0）
-	visibility   *circleVisibility           // 私密圈可见性（详情精简 / 圈内帖子 403 / 私密圈集合失效）
-	inviteLinks  domain.InviteLinkRepository // 可为 nil（未注入时邀请接口返回错误）
+	userFacade   UserFacade                   // 可为 nil（GetCirclePosts 用）
+	postFetcher  PostMediaFetcher             // 可为 nil（GetCirclePosts 用）
+	agentCounter CircleAgentCounter           // 可为 nil（ListManagedCircles agent_count 降级 0）
+	visibility   *circleVisibility            // 私密圈可见性（详情精简 / 圈内帖子 403 / 私密圈集合失效）
+	inviteLinks  domain.InviteLinkRepository  // 可为 nil（未注入时邀请接口返回错误）
+	inviteEmails domain.InviteEmailRepository // 可为 nil（同上）
+	userEmails   UserEmailReader              // 可为 nil（email 邀请的被邀请人接口返回错误）
 }
 
 // NewCircleService 构造 CircleService。

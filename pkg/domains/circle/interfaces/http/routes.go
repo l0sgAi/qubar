@@ -34,6 +34,11 @@ import (
 //	POST /circle/invite/link/revoke  撤销邀请链接（需登录；admin+）
 //	GET  /circle/invite/preview      邀请预览（访客可读；无效统一 404）
 //	POST /circle/invite/accept       凭邀请链接加入（需登录）
+//	POST /circle/invite/email/add     添加 email 邀请（需登录；admin+，仅私密圈）
+//	GET  /circle/invite/email/list    email 邀请列表（需登录；admin+）
+//	POST /circle/invite/email/revoke  撤销 email 邀请（需登录；admin+）
+//	GET  /circle/invite/my            我收到的 email 邀请（需登录）
+//	POST /circle/invite/email/respond 接受 / 拒绝 email 邀请（需登录；仅发给自己 email 的）
 //
 // 访客可读端点（list/active/random/detail/user/posts/invite/preview）挂 optionalCheck；写操作与个人列表挂 authCheck。
 // 管理端点全部挂 authCheck，角色/层级权限矩阵在 service 层校验（见 application/manage.go）。
@@ -80,5 +85,10 @@ func RegisterRoutes(
 		priv.GET("/invite/link/list", h.ListInviteLinks)
 		priv.POST("/invite/link/revoke", h.RevokeInviteLink)
 		priv.POST("/invite/accept", h.AcceptInvite)
+		priv.POST("/invite/email/add", h.AddInviteEmails)
+		priv.GET("/invite/email/list", h.ListInviteEmails)
+		priv.POST("/invite/email/revoke", h.RevokeInviteEmail)
+		priv.GET("/invite/my", h.ListMyInvites)
+		priv.POST("/invite/email/respond", h.RespondInviteEmail)
 	}
 }

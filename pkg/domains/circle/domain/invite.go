@@ -72,3 +72,49 @@ type InviteLinkRepository interface {
 	// ReleaseUse 归还一次使用（消耗后入圈失败的补偿；used_count 不减到 0 以下）。
 	ReleaseUse(ctx context.Context, id uuid.UUID) error
 }
+
+// CircleInviteEmail 私密圈指定 email 邀请（#169）。Email 存储前 trim + 小写，与 users.email 等值匹配。
+type CircleInviteEmail struct {
+	ID         uuid.UUID  `json:"id" gorm:"type:uuid;primaryKey;column:id"`
+	CircleID   uuid.UUID  `json:"circle_id" gorm:"column:circle_id;type:uuid;not null"`
+	InviterID  uuid.UUID  `json:"inviter_id" gorm:"column:inviter_id;type:uuid;not null"`
+	Email      string     `json:"email" gorm:"column:email;type:varchar(100);not null"`
+	Status     int16      `json:"status" gorm:"column:status;type:smallint;default:0"`
+	CreateTime time.Time  `json:"create_time" gorm:"column:create_time;autoCreateTime"`
+	UpdateTime time.Time  `json:"update_time" gorm:"column:update_time;autoUpdateTime"`
+	UpdateBy   *uuid.UUID `json:"update_by,omitempty" gorm:"column:update_by;type:uuid"`
+}
+
+// TableName 指定表名。
+func (CircleInviteEmail) TableName() string {
+	return "domains.circle_invite_email"
+}
+
+// InviteEmailStatus email 邀请状态。
+const (
+	InviteEmailPending  = 0 // 待接受
+	InviteEmailAccepted = 1 // 已接受
+	InviteEmailRevoked  = 2 // 已撤销
+	InviteEmailRejected = 3 // 已拒绝
+)
+
+// ErrInviteEmailNotFound email 邀请不存在。
+var ErrInviteEmailNotFound = errors.New("email invite not found")
+
+// ErrInviteEmailStateConflict email 邀请状态 CAS 未命中（并发变更或状态不符）。
+var ErrInviteEmailStateConflict = errors.New("email invite state conflict")
+
+// InviteEmailRepository email 邀请持久化接口。
+type InviteEmailRepository interface {
+	// AddPending 批量添加邀请（emails 已规整去重）：不存在则新建待接受；已撤销 / 已拒绝重置为待接受
+	// （inviter_id 改为本次操作者）；待接受 / 已接受保持不变。返回本次新建或重置的 email。
+	AddPending(ctx context.Context, circleID, inviterID uuid.UUID, emails []string) ([]string, error)
+	// GetByID 按 ID 查询。未找到返回 ErrInviteEmailNotFound。
+	GetByID(ctx context.Context, id uuid.UUID) (*CircleInviteEmail, error)
+	// ListByCircle 圈内邀请列表，status=-1 不过滤；按创建时间倒序 offset 分页，返回总数。
+	ListByCircle(ctx context.Context, circleID uuid.UUID, status int16, offset, limit int) ([]CircleInviteEmail, int64, error)
+	// ListPendingByEmail 某邮箱的待接受邀请，按创建时间倒序 offset 分页，返回总数。
+	ListPendingByEmail(ctx context.Context, email string, offset, limit int) ([]CircleInviteEmail, int64, error)
+	// UpdateStatus 状态 CAS（WHERE status=from），写 update_by。0 行受影响返回 ErrInviteEmailStateConflict。
+	UpdateStatus(ctx context.Context, id uuid.UUID, from, to int16, operatorID uuid.UUID) error
+}
