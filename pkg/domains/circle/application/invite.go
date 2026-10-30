@@ -138,12 +138,7 @@ func (s *circleServiceImpl) ListInviteLinks(ctx context.Context, operatorID, cir
 	if err := s.requireInviteRepo(); err != nil {
 		return nil, err
 	}
-	if page <= 0 {
-		page = 1
-	}
-	if size <= 0 || size > 100 {
-		size = 20
-	}
+	page, size = normalizePage(page, size)
 	if _, err := s.repo.GetByID(ctx, circleID); err != nil {
 		return nil, err
 	}
@@ -155,7 +150,11 @@ func (s *circleServiceImpl) ListInviteLinks(ctx context.Context, operatorID, cir
 	if err != nil {
 		return nil, err
 	}
-	creators := s.inviteCreatorBriefs(ctx, links)
+	creatorIDs := make([]string, 0, len(links))
+	for i := range links {
+		creatorIDs = append(creatorIDs, links[i].CreatorID.String())
+	}
+	creators := s.userBriefs(ctx, creatorIDs)
 	now := time.Now()
 	items := make([]InviteLinkItem, 0, len(links))
 	for i := range links {
@@ -169,23 +168,6 @@ func (s *circleServiceImpl) ListInviteLinks(ctx context.Context, operatorID, cir
 		})
 	}
 	return &InviteLinkListResult{Total: total, Page: page, Size: size, Data: items}, nil
-}
-
-// inviteCreatorBriefs 回填创建人信息（user Facade 未注入或失败时降级为空，不阻断列表）。
-func (s *circleServiceImpl) inviteCreatorBriefs(ctx context.Context, links []domain.CircleInviteLink) map[string]UserBrief {
-	if s.userFacade == nil || len(links) == 0 {
-		return map[string]UserBrief{}
-	}
-	ids := make([]string, 0, len(links))
-	for i := range links {
-		ids = append(ids, links[i].CreatorID.String())
-	}
-	briefs, err := s.userFacade.GetBriefs(ctx, ids)
-	if err != nil {
-		logger.Log.Error("Failed to load invite link creators: " + err.Error())
-		return map[string]UserBrief{}
-	}
-	return briefs
 }
 
 // RevokeInviteLink 撤销邀请链接（admin+；已撤销幂等成功）。

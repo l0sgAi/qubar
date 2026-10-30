@@ -121,3 +121,55 @@ func inviteInvalidErr(t *testing.T) error {
 	}
 	return err
 }
+
+// fakeSvcForEmailInvite 仅实现 RespondInviteEmail / AddInviteEmails。
+type fakeSvcForEmailInvite struct {
+	application.CircleService
+
+	calls     int
+	gotAccept bool
+	gotEmails []string
+}
+
+func (f *fakeSvcForEmailInvite) RespondInviteEmail(_ context.Context, _, _ uuid.UUID, accept bool) (*application.InviteAcceptResult, error) {
+	f.calls++
+	f.gotAccept = accept
+	return &application.InviteAcceptResult{}, nil
+}
+
+func (f *fakeSvcForEmailInvite) AddInviteEmails(_ context.Context, _, _ uuid.UUID, emails []string) (*application.InviteEmailAddResult, error) {
+	f.calls++
+	f.gotEmails = emails
+	return &application.InviteEmailAddResult{}, nil
+}
+
+// TestRespondInviteEmail_RequiresAcceptField accept 必须显式给出（缺省不能当成拒绝）。
+func TestRespondInviteEmail_RequiresAcceptField(t *testing.T) {
+	for _, tc := range []struct {
+		body   string
+		want   int
+		calls  int
+		accept bool
+	}{
+		{`{"invite_id":"` + testTarget + `"}`, http.StatusBadRequest, 0, false},
+		{`{"accept":true}`, http.StatusBadRequest, 0, false},
+		{`{"invite_id":"` + testTarget + `","accept":false}`, http.StatusOK, 1, false},
+		{`{"invite_id":"` + testTarget + `","accept":true}`, http.StatusOK, 1, true},
+	} {
+		svc := &fakeSvcForEmailInvite{}
+		ac, rc := newJSONCtx(tc.body)
+		NewHandler(svc).RespondInviteEmail(ac)
+		if rc.Response.StatusCode() != tc.want || svc.calls != tc.calls || svc.gotAccept != tc.accept {
+			t.Errorf("body=%s: status=%d calls=%d accept=%v", tc.body, rc.Response.StatusCode(), svc.calls, svc.gotAccept)
+		}
+	}
+}
+
+func TestAddInviteEmails_PassThrough(t *testing.T) {
+	svc := &fakeSvcForEmailInvite{}
+	ac, rc := newJSONCtx(`{"circle_id":"` + testCircle + `","emails":["A@x.com","b@x.com"]}`)
+	NewHandler(svc).AddInviteEmails(ac)
+	if rc.Response.StatusCode() != http.StatusOK || len(svc.gotEmails) != 2 || svc.gotEmails[0] != "A@x.com" {
+		t.Errorf("status=%d emails=%v", rc.Response.StatusCode(), svc.gotEmails)
+	}
+}

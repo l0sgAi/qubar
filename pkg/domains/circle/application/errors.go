@@ -48,6 +48,9 @@ var (
 	errInvalidInviteExpire   = errors.New("expire_hours must be between 1 and 720")
 	errInvalidInviteMaxUses  = errors.New("max_uses must be between 1 and 10000")
 	errInviteUnavailable     = errors.New("invite repository not configured")
+
+	errInvalidInviteEmails      = errors.New("emails must contain 1 to 50 entries")
+	errInvalidInviteEmailStatus = errors.New("status filter must be -1 or 0-3")
 )
 
 // 邀请错误判断函数。
@@ -55,6 +58,10 @@ func IsInviteInvalidErr(err error) bool         { return errors.Is(err, errInvit
 func IsInviteRequiresPrivateErr(err error) bool { return errors.Is(err, errInviteRequiresPrivate) }
 func IsInvalidInviteExpireErr(err error) bool   { return errors.Is(err, errInvalidInviteExpire) }
 func IsInvalidInviteMaxUsesErr(err error) bool  { return errors.Is(err, errInvalidInviteMaxUses) }
+func IsInvalidInviteEmailsErr(err error) bool   { return errors.Is(err, errInvalidInviteEmails) }
+func IsInvalidInviteEmailStatusErr(err error) bool {
+	return errors.Is(err, errInvalidInviteEmailStatus)
+}
 
 // 错误判断函数（供 handler 层使用）。
 func IsInvalidJoinTypeErr(err error) bool    { return errors.Is(err, errInvalidJoinType) }

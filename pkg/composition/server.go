@@ -47,6 +47,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	// 互注跨领域 Facade
 	// circle 需要 user Facade + post 媒体查询器
 	circleSvc.SetUserFacade(&circleUserFacade{delegate: userFacade})
+	circleSvc.SetUserEmailReader(&circleUserEmailReader{delegate: userFacade})
 	circleSvc.SetPostFetcher(&postMediaFetcherForCircle{delegate: postSvc})
 
 	// post 需要 user Facade + circle Facade + 成员/状态校验器 + 帖子计数端口
