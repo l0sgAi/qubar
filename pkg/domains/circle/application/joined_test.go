@@ -413,6 +413,32 @@ func TestGetMyCircles_RoleFilterKeywordPaging(t *testing.T) {
 	}
 }
 
+// TestGetMyCircles_KeywordRankPaging 仅关键字（rank 游标）：同一批内命中数 > size 时截断，
+// 游标落在最后返回命中的下一位，未返回的命中下一页继续返回，不丢不重、按加入时间倒序。
+func TestGetMyCircles_KeywordRankPaging(t *testing.T) {
+	f := newJoinedFixture()
+	var want []string
+	for i := 0; i < 50; i++ {
+		name := fmt.Sprintf("other%d", i)
+		if i%5 != 0 {
+			name = fmt.Sprintf("hit%d", i)
+		}
+		id := f.add(name, domain.MemberRoleMember, domain.MemberStatusNormal, nil, true)
+		if i%5 != 0 {
+			want = append(want, id.String())
+		}
+	}
+	slices.Reverse(want)
+
+	got, pages := collectPages(t, f, "hit", 0, 7)
+	if !slices.Equal(got, want) {
+		t.Fatalf("keyword rank paging ids =\n%v\nwant\n%v", got, want)
+	}
+	if len(pages) != 6 {
+		t.Fatalf("pages = %d, want 6 (40 hits / 7 per page)", len(pages))
+	}
+}
+
 // TestGetMyCircles_NoRoleUnchanged 不带 role 时仍走 ZSET rank 游标，total = ZSET 基数。
 func TestGetMyCircles_NoRoleUnchanged(t *testing.T) {
 	f := newJoinedFixture()
