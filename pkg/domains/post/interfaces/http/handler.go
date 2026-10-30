@@ -119,6 +119,8 @@ type GetPostsRequest struct {
 
 // GetPosts GET /post/list
 func (h *Handler) GetPosts(c appctx.AppContext) {
+	viewerID, _ := requireUserIDAllowAnon(c)
+
 	var req GetPostsRequest
 	if err := c.BindQuery(&req); err != nil {
 		logger.Log.Error("Invalid request parameters: " + err.Error())
@@ -142,7 +144,7 @@ func (h *Handler) GetPosts(c appctx.AppContext) {
 		return
 	}
 
-	result, err := h.svc.SearchPosts(c, req.Keyword, circleID, size, searchAfter)
+	result, err := h.svc.SearchPosts(c, viewerID, req.Keyword, circleID, size, searchAfter)
 	if err != nil {
 		logger.Log.Error("Failed to search posts: " + err.Error())
 		httputil.SearchError(c, err, "Failed to search posts")
@@ -202,6 +204,8 @@ type GetUserPostsRequest struct {
 // 查看任意用户的发帖记录（按路径 :user_id 过滤，支持 title/summary 模糊关键字）。
 // 强制 status=1：他人不可见对方草稿/审核/拒绝/封禁帖，仅返回已发布，排除已删除。
 func (h *Handler) GetUserPosts(c appctx.AppContext) {
+	viewerID, _ := requireUserIDAllowAnon(c)
+
 	targetUserID, err := uuid.Parse(c.Param("user_id"))
 	if err != nil {
 		httputil.BadRequest(c, "Invalid user_id")
@@ -221,7 +225,7 @@ func (h *Handler) GetUserPosts(c appctx.AppContext) {
 		return
 	}
 
-	result, err := h.svc.GetUserPosts(c, targetUserID, req.Keyword, size, searchAfter)
+	result, err := h.svc.GetUserPosts(c, viewerID, targetUserID, req.Keyword, size, searchAfter)
 	if err != nil {
 		logger.Log.Error("Failed to search user posts: " + err.Error())
 		httputil.SearchError(c, err, "Failed to search user posts")

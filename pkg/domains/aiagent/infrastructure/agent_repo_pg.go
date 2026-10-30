@@ -3,6 +3,7 @@ package infrastructure
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"interestBar/pkg/domains/aiagent/domain"
@@ -177,7 +178,21 @@ func (r *agentRepoPG) CreateInCircle(ctx context.Context, agent *domain.AiAgent,
 	})
 }
 
+// UpdateFields 部分更新。auto_config 补丁（domain.AutoConfigPatch）翻译为 jsonb 顶层合并
+// `auto_config || ?::jsonb`：单条 UPDATE 原子执行，只覆盖补丁里的 key（不同子对象并发写互不覆盖）。
 func (r *agentRepoPG) UpdateFields(ctx context.Context, agentID uuid.UUID, fields map[string]interface{}) error {
+	if patch, ok := fields["auto_config"].(domain.AutoConfigPatch); ok {
+		raw, err := json.Marshal(patch)
+		if err != nil {
+			return err
+		}
+		cp := make(map[string]interface{}, len(fields))
+		for k, v := range fields {
+			cp[k] = v
+		}
+		cp["auto_config"] = gorm.Expr("auto_config || ?::jsonb", string(raw))
+		fields = cp
+	}
 	return r.db.WithContext(ctx).Model(&domain.AiAgent{}).
 		Where("id = ? AND deleted = ?", agentID, 0).
 		Updates(fields).Error
@@ -206,6 +221,18 @@ func (r *agentRepoPG) ListEnabledForCircle(ctx context.Context, circleID uuid.UU
 		query = query.Where("circle_id IS NULL OR circle_id = ?", circleID)
 	}
 	err := query.Order("create_time ASC").Find(&agents).Error
+	return agents, err
+}
+
+// ListAutoReplyEnabled 自动回复扫描候选机器人。表小（全局 + 每圈 ≤5），
+// idx_ai_agent_active 部分索引过滤启用行后在 jsonb 上判 enabled 即可。
+func (r *agentRepoPG) ListAutoReplyEnabled(ctx context.Context) ([]domain.AiAgent, error) {
+	var agents []domain.AiAgent
+	err := r.db.WithContext(ctx).
+		Where("deleted = ? AND status = ?", 0, domain.AgentStatusEnabled).
+		Where("auto_config -> ? -> 'enabled' = 'true'::jsonb", domain.AutoConfigKeyAutoReply).
+		Order("create_time ASC").
+		Find(&agents).Error
 	return agents, err
 }
 

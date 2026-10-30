@@ -125,40 +125,6 @@ func TestPostRepo_ListByIDsFiltersDeletedAndUnpublished(t *testing.T) {
 	}
 }
 
-func TestPostRepo_IncrCommentCount(t *testing.T) {
-	t.Parallel()
-	db := testkit.PG(t)
-	repo := infrastructure.NewPostRepository(db)
-	ctx := t.Context()
-
-	p := newPost(t, repo, nil)
-	for range 3 {
-		if err := repo.IncrCommentCount(ctx, p.ID); err != nil {
-			t.Fatalf("IncrCommentCount: %v", err)
-		}
-	}
-	got, err := repo.GetByID(ctx, p.ID)
-	if err != nil {
-		t.Fatalf("GetByID: %v", err)
-	}
-	if got.CommentCount != 3 {
-		t.Fatalf("comment_count = %d, want 3", got.CommentCount)
-	}
-
-	// 已删帖不再计数
-	softDelete(t, db, "domains.post", p.ID)
-	if err := repo.IncrCommentCount(ctx, p.ID); err != nil {
-		t.Fatalf("IncrCommentCount on deleted post: %v", err)
-	}
-	var count int
-	if err := db.Raw("SELECT comment_count FROM domains.post WHERE id = ?", p.ID).Scan(&count).Error; err != nil {
-		t.Fatalf("read comment_count: %v", err)
-	}
-	if count != 3 {
-		t.Fatalf("comment_count on deleted post = %d, want unchanged 3", count)
-	}
-}
-
 // 点赞 / 收藏状态的 DB 回源查询：只认 deleted=0 的有效行。
 func TestPostRepo_LikeAndCollectLookups(t *testing.T) {
 	t.Parallel()

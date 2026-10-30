@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"interestBar/pkg/conf"
@@ -122,6 +123,10 @@ type ReplyService interface {
 	// 启用圈内机器人，且帖子必须属于机器人所在圈，跨圈 404）。
 	// 返回生成的评论 ID；失败返回错误（同时已写失败日志行）。
 	CircleManualReply(ctx context.Context, operatorID, agentID, postID uuid.UUID) (uuid.UUID, error)
+	// RunAutoReplyScan 执行一轮自动回复扫描（定时扫描器调用，同步执行完本轮才返回）：
+	// 平台总开关关闭直接返回；逐个加载开启 auto_reply 的启用机器人，按门槛取候选并回复。
+	// 任何失败静默（日志表 + zap），ctx 取消时尽快返回。设计见 docs/agent-auto-reply-design.md。
+	RunAutoReplyScan(ctx context.Context)
 
 	// SetRoleReader 注入 user Facade（管理员校验用）。
 	SetRoleReader(r RoleReader)
@@ -132,6 +137,8 @@ type ReplyService interface {
 	SetPostReader(r PostReader)
 	// SetCommentCreator 注入评论创建端口。
 	SetCommentCreator(c CommentCreator)
+	// SetCandidateReader 注入自动回复候选读取端口（未注入则扫描不执行）。
+	SetCandidateReader(r AutoReplyCandidateReader)
 }
 
 // replyService 配置兜底默认值（conf <=0 时使用）。
@@ -170,7 +177,9 @@ type replyServiceImpl struct {
 	circleRoles    CircleRoleReader // 注入前 nil，圈内手动触发鉴权 fail-closed
 	postReader     PostReader
 	commentCreator CommentCreator
-	sem            chan struct{} // 关键词触发异步执行并发上限
+	candidates     AutoReplyCandidateReader // 注入前 nil，自动回复扫描不执行
+	sem            chan struct{}            // 回复执行并发上限（关键词/@提及/自动回复共享）
+	autoRound      atomic.Uint64            // 自动回复扫描轮次（奇偶轮交替帖子/评论优先，防一方饿死）
 }
 
 // NewReplyService 构造 ReplyService。
@@ -198,6 +207,9 @@ func (s *replyServiceImpl) SetRoleReader(r RoleReader)             { s.roleReade
 func (s *replyServiceImpl) SetCircleRoleReader(r CircleRoleReader) { s.circleRoles = r }
 func (s *replyServiceImpl) SetPostReader(r PostReader)             { s.postReader = r }
 func (s *replyServiceImpl) SetCommentCreator(c CommentCreator)     { s.commentCreator = c }
+func (s *replyServiceImpl) SetCandidateReader(r AutoReplyCandidateReader) {
+	s.candidates = r
+}
 
 // agentInScope 机器人回复的作用域匹配（三条入口共用，唯一核心规则）：
 //   - 全局机器人（CircleID=nil）全站回复（现状语义，含圈内帖）；
@@ -296,7 +308,7 @@ func (s *replyServiceImpl) OnCommentCreated(evt CommentEvent) {
 				}()
 				ctx, cancel := context.WithTimeout(context.Background(), 2*replyTimeout())
 				defer cancel()
-				_, err := s.executeReply(ctx, agent, evt.PostID, &evt)
+				_, err := s.executeReply(ctx, agent, evt.PostID, &replyRun{source: domain.TriggerSourceKeyword, trigger: &evt})
 				if err != nil {
 					// 前置跳过（帖子不可回/限频）已在 executeReply 内打 Info，不重复；
 					// 调用链路失败已写日志行，这里补一条 Error 便于告警。
@@ -374,7 +386,7 @@ func (s *replyServiceImpl) OnPostMentioned(evt PostMentionEvent) {
 				}()
 				ctx, cancel := context.WithTimeout(context.Background(), 2*replyTimeout())
 				defer cancel()
-				_, err := s.executeReply(ctx, agent, evt.PostID, nil)
+				_, err := s.executeReply(ctx, agent, evt.PostID, &replyRun{source: domain.TriggerSourceMention})
 				if err != nil {
 					// 前置跳过（帖子不可回/限频）已在 executeReply 内打 Info，不重复；
 					// 调用链路失败已写日志行，这里补一条 Error 便于告警。
@@ -409,7 +421,7 @@ func (s *replyServiceImpl) ManualReply(ctx context.Context, adminID, agentID, po
 	if domain.TriggerMode(agent.TriggerMode) != domain.TriggerModeManual {
 		return uuid.Nil, errNotManualMode
 	}
-	commentID, err := s.executeReply(ctx, agent, postID, nil)
+	commentID, err := s.executeReply(ctx, agent, postID, &replyRun{source: domain.TriggerSourceManual})
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -458,7 +470,7 @@ func (s *replyServiceImpl) CircleManualReply(ctx context.Context, operatorID, ag
 	if !agentInScope(agent, post.CircleID) {
 		return uuid.Nil, errPostNotInAgentCircle
 	}
-	commentID, err := s.executeReply(ctx, agent, postID, nil)
+	commentID, err := s.executeReply(ctx, agent, postID, &replyRun{source: domain.TriggerSourceManual})
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -491,16 +503,44 @@ func (s *replyServiceImpl) ensureReplyAdmin(ctx context.Context, adminID uuid.UU
 	return nil
 }
 
-// executeReply 单个机器人对单个帖子的回复执行核心（关键词/手动共用）。
+// replyRun 一次回复执行的触发上下文（executeReply 入参）。
+type replyRun struct {
+	source domain.TriggerSource
+	// trigger 非 nil 时回复挂在该评论楼层内（关键词触发 / 自动回复评论），并把评论原文拼进 prompt；
+	// nil 为顶层评论（@提及 / 手动 / 自动回复帖子）。
+	trigger *CommentEvent
+	// placeholderID 自动回复占位行 ID（executeReply 内占位成功后回填）：非 Nil 时终态日志
+	// 原地更新这一行，而不是追加新行（部分唯一索引下同一目标只能有一行）。
+	placeholderID uuid.UUID
+}
+
+// targetCommentID 日志行的目标评论（回复挂在该评论楼层内时非 nil）。
+func (r *replyRun) targetCommentID() *uuid.UUID {
+	if r.trigger == nil {
+		return nil
+	}
+	id := r.trigger.CommentID
+	return &id
+}
+
+// useClassifier 是否走分类器（阶段1）：关键词触发与自动回复在配置了 filter_prompt 时判定；
+// @提及 / 手动是显式点名，天然绕过。
+func (r *replyRun) useClassifier(agent *domain.AiAgent) bool {
+	return agent.FilterPrompt != "" &&
+		(r.source == domain.TriggerSourceKeyword || r.source == domain.TriggerSourceAuto)
+}
+
+// executeReply 单个机器人对单个帖子的回复执行核心（关键词/@提及/手动/自动回复共用）。
 //
-// 返回 (成功时非nil的评论ID, error)。前置条件不满足（帖子不可回/限频）
+// 返回 (成功时非nil的评论ID, error)。前置条件不满足（帖子不可回/限频/自动回复目标已占用）
 // 返回对应哨兵错误且不写日志；调用链路失败（解密/LLM/空回复/评论落库）写失败
-// 日志行后返回包装错误。同一帖子可被同一机器人多次回复（关键词触发不设防重），
-// 仅靠限频控制用量。
-func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAgent, postID uuid.UUID, trigger *CommentEvent) (*uuid.UUID, error) {
+// 日志行后返回包装错误。被动触发同一帖子可被同一机器人多次回复（不设防重），
+// 仅靠限频控制用量；自动回复由占位行 + 部分唯一索引保证每机器人每目标最多一次。
+func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAgent, postID uuid.UUID, run *replyRun) (*uuid.UUID, error) {
 	if s.postReader == nil || s.commentCreator == nil || s.llm == nil {
 		return nil, errors.New("agent reply dependencies not configured")
 	}
+	trigger := run.trigger
 
 	// 1. 帖子门槛：已发布且未锁定。
 	post, err := s.postReader.GetPostBrief(ctx, postID)
@@ -509,6 +549,11 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 	}
 	if post == nil || post.Status != 1 || post.IsLock == 1 {
 		logger.Log.Info(fmt.Sprintf("agent reply skip: agent=%s post=%s reason=post_not_replyable", agent.ID, postID))
+		return nil, errPostNotReplyable
+	}
+	// 自动回复没有事件载荷的圈子可比，按帖子实际所在圈再做一次作用域校验（候选查询已收口，第二道防线）。
+	if run.source == domain.TriggerSourceAuto && !agentInScope(agent, post.CircleID) {
+		logger.Log.Info(fmt.Sprintf("agent reply skip: agent=%s post=%s reason=out_of_scope", agent.ID, postID))
 		return nil, errPostNotReplyable
 	}
 
@@ -536,13 +581,20 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 			return nil, errRateLimited
 		}
 	}
+	// 2.1 自动回复：每小时上限 + 每目标机器人数上限 + 占位（撞唯一索引即跳过）。
+	// 占位必须在限频检查之后：占位行本身计入限频统计，先占位会把自己挡掉。
+	if run.source == domain.TriggerSourceAuto {
+		if err := s.claimAutoTarget(ctx, agent, post, run); err != nil {
+			return nil, err
+		}
+	}
 
 	// 3. 调用链路（失败写日志行）。
 	start := time.Now()
 	var promptTokens, completionTokens int
 
 	fail := func(errMsg string) (*uuid.UUID, error) {
-		s.writeReplyLog(&domain.ReplyLog{
+		s.writeReplyLog(run, &domain.ReplyLog{
 			AgentID: agent.ID, PostID: postID, UserID: post.AuthorID,
 			Status:       domain.ReplyStatusFailed,
 			ErrorMsg:     truncateErr(errMsg),
@@ -561,11 +613,11 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 		}
 	}
 
-	// 3.2 分类器判定（阶段1）：仅关键词触发（trigger!=nil）且配置了判定条件时执行。
-	// 手动触发是管理员显式操作，天然绕过；filter_prompt 为空时跳过，行为与旧版一致。
-	if trigger != nil && agent.FilterPrompt != "" {
+	// 3.2 分类器判定（阶段1）：关键词触发 / 自动回复且配置了判定条件时执行。
+	// @提及 / 手动是显式点名，天然绕过；filter_prompt 为空时跳过，行为与旧版一致。
+	if run.useClassifier(agent) {
 		failErr := func(msg string) error { _, e := fail(msg); return e }
-		if err := s.runClassifier(ctx, agent, post, trigger, apiKey, start, failErr, &promptTokens, &completionTokens); err != nil {
+		if err := s.runClassifier(ctx, agent, post, run, apiKey, start, failErr, &promptTokens, &completionTokens); err != nil {
 			return nil, err
 		}
 	}
@@ -601,7 +653,7 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 		return fail("llm returned empty content")
 	}
 
-	// 3.5 评论落库：关键词触发挂进触发评论楼层，手动触发为顶层评论。
+	// 3.5 评论落库：关键词触发 / 自动回复评论挂进目标评论楼层，其余为顶层评论。
 	var rootID, replyToID *uuid.UUID
 	if trigger != nil {
 		replyToID = &trigger.CommentID
@@ -620,7 +672,7 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 	}
 
 	// 3.6 成功日志行。
-	s.writeReplyLog(&domain.ReplyLog{
+	s.writeReplyLog(run, &domain.ReplyLog{
 		AgentID: agent.ID, PostID: postID, UserID: post.AuthorID,
 		CommentID:        &commentID,
 		Status:           domain.ReplyStatusOK,
@@ -647,7 +699,7 @@ func (s *replyServiceImpl) runClassifier(
 	ctx context.Context,
 	agent *domain.AiAgent,
 	post *PostBrief,
-	trigger *CommentEvent,
+	run *replyRun,
 	apiKey string,
 	start time.Time,
 	failErr func(string) error,
@@ -665,14 +717,14 @@ func (s *replyServiceImpl) runClassifier(
 		Model:        agent.Model,
 		Params:       judgeParams,
 		SystemPrompt: judgeSystemPrompt,
-		UserPrompt:   buildJudgeUserPrompt(agent, post, trigger),
+		UserPrompt:   buildJudgeUserPrompt(agent, post, run.trigger),
 	})
 	judgeCancel()
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			// token 未知，不计入。status=3 运维事件（非分类器拒绝），不参与限频统计。
 			logger.Log.Info(fmt.Sprintf("agent reply: classifier timeout, fallback to direct reply: agent=%s post=%s", agent.ID, post.ID))
-			s.writeReplyLog(&domain.ReplyLog{
+			s.writeReplyLog(run, &domain.ReplyLog{
 				AgentID: agent.ID, PostID: post.ID, UserID: post.AuthorID,
 				Status:    domain.ReplyStatusClassifierTimeout,
 				ErrorMsg:  truncateErr("classifier_timeout_fallback: " + err.Error()),
@@ -692,7 +744,7 @@ func (s *replyServiceImpl) runClassifier(
 	if !judge.Reply {
 		logger.Log.Info(fmt.Sprintf("agent reply skip: agent=%s post=%s reason=classifier_rejected detail=%s",
 			agent.ID, post.ID, judge.Reason))
-		s.writeReplyLog(&domain.ReplyLog{
+		s.writeReplyLog(run, &domain.ReplyLog{
 			AgentID: agent.ID, PostID: post.ID, UserID: post.AuthorID,
 			Status:           domain.ReplyStatusSkipped,
 			ErrorMsg:         truncateErr(judge.Reason),
@@ -705,8 +757,24 @@ func (s *replyServiceImpl) runClassifier(
 	return nil
 }
 
-// writeReplyLog 落终态日志行（append-only）。写库失败仅告警（调用链路已尽力）。
-func (s *replyServiceImpl) writeReplyLog(log *domain.ReplyLog) {
+// writeReplyLog 落日志行，补齐触发来源与目标评论。写库失败仅告警（调用链路已尽力）。
+//
+// 被动触发 append-only 追加新行；自动回复（占位成功后）把终态原地写回占位行——
+// 部分唯一索引下同一目标只能有一行，status=3（分类器超时降级）这类中间事件不单独落行，只记 zap。
+// 用 Background ctx：调用链路 ctx 可能已超时 / 取消，终态仍要落库。
+func (s *replyServiceImpl) writeReplyLog(run *replyRun, log *domain.ReplyLog) {
+	log.TriggerSource = run.source
+	log.TargetCommentID = run.targetCommentID()
+	if run.placeholderID != uuid.Nil {
+		if log.Status == domain.ReplyStatusClassifierTimeout {
+			return
+		}
+		log.ID = run.placeholderID
+		if err := s.replyLogRepo.FinishAutoPlaceholder(context.Background(), log); err != nil {
+			logger.Log.Error("agent reply: finish auto reply placeholder failed: " + err.Error())
+		}
+		return
+	}
 	log.ID = sharedomain.NewID()
 	if err := s.replyLogRepo.Create(context.Background(), log); err != nil {
 		logger.Log.Error("agent reply: write reply log failed: " + err.Error())
@@ -739,7 +807,7 @@ func copyLLMParams(src domain.LLMParamsJSON) map[string]interface{} {
 	return dst
 }
 
-// buildJudgeUserPrompt 组装分类器用户提示词：帖子 + 触发评论 + 判定条件，各段截断。
+// buildJudgeUserPrompt 组装分类器用户提示词：帖子 +（有则）触发评论 + 判定条件，各段截断。
 func buildJudgeUserPrompt(agent *domain.AiAgent, post *PostBrief, trigger *CommentEvent) string {
 	limit := maxContentChars()
 	var b strings.Builder
@@ -747,8 +815,10 @@ func buildJudgeUserPrompt(agent *domain.AiAgent, post *PostBrief, trigger *Comme
 	b.WriteString("\n")
 	b.WriteString(truncateRunes("帖子摘要："+post.Summary, limit))
 	b.WriteString("\n")
-	b.WriteString(truncateRunes("用户评论："+trigger.Content, limit))
-	b.WriteString("\n")
+	if trigger != nil {
+		b.WriteString(truncateRunes("用户评论："+trigger.Content, limit))
+		b.WriteString("\n")
+	}
 	b.WriteString(truncateRunes("判定条件："+agent.FilterPrompt, limit))
 	return b.String()
 }

@@ -36,13 +36,98 @@ var (
 
 // ---- fakes ----
 
-// fakeReplyLogRepo 最小 ReplyLogRepository fake：限流计数/最新日志可预设。
+// fakeReplyLogRepo 最小 ReplyLogRepository fake：限流计数/最新日志可预设；
+// 自动回复占位行在内存里模拟部分唯一索引 (agent, post, target_comment) 语义。
 type fakeReplyLogRepo struct {
 	count    int64
 	last     *domain.ReplyLog
 	created  []domain.ReplyLog
 	mu       sync.Mutex
 	createOK bool // 记录是否至少落过一行 status=1
+
+	auto          map[string]*domain.ReplyLog // 自动回复行（key = agent|post|target_comment）
+	autoHourCount int64                       // CountAutoSinceByAgent 预设
+}
+
+func autoKey(agentID, postID uuid.UUID, target *uuid.UUID) string {
+	t := uuid.Nil
+	if target != nil {
+		t = *target
+	}
+	return agentID.String() + "|" + postID.String() + "|" + t.String()
+}
+
+func (f *fakeReplyLogRepo) CreateAutoPlaceholder(ctx context.Context, log *domain.ReplyLog) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.auto == nil {
+		f.auto = map[string]*domain.ReplyLog{}
+	}
+	k := autoKey(log.AgentID, log.PostID, log.TargetCommentID)
+	if _, ok := f.auto[k]; ok {
+		return false, nil
+	}
+	cp := *log
+	f.auto[k] = &cp
+	return true, nil
+}
+
+func (f *fakeReplyLogRepo) FinishAutoPlaceholder(ctx context.Context, log *domain.ReplyLog) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, r := range f.auto {
+		if r.ID == log.ID {
+			r.Status, r.CommentID, r.ErrorMsg = log.Status, log.CommentID, log.ErrorMsg
+			return nil
+		}
+	}
+	return errors.New("placeholder not found")
+}
+
+func (f *fakeReplyLogRepo) CountAutoSinceByAgent(ctx context.Context, agentID uuid.UUID, since time.Time) (int64, error) {
+	return f.autoHourCount, nil
+}
+
+func (f *fakeReplyLogRepo) CountAutoByTarget(ctx context.Context, postID uuid.UUID, target *uuid.UUID) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var n int64
+	for _, r := range f.allAutoLocked() {
+		same := r.PostID == postID && ((r.TargetCommentID == nil && target == nil) ||
+			(r.TargetCommentID != nil && target != nil && *r.TargetCommentID == *target))
+		if same && r.Status != domain.ReplyStatusSkipped {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (f *fakeReplyLogRepo) ListAutoTargetsSince(ctx context.Context, since time.Time) ([]domain.AutoTargetRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.allAutoLocked(), nil
+}
+
+// allAutoLocked 已占位的自动回复行（调用方持锁）。
+func (f *fakeReplyLogRepo) allAutoLocked() []domain.AutoTargetRecord {
+	out := make([]domain.AutoTargetRecord, 0, len(f.auto))
+	for _, r := range f.auto {
+		out = append(out, domain.AutoTargetRecord{
+			AgentID: r.AgentID, PostID: r.PostID, TargetCommentID: r.TargetCommentID, Status: r.Status,
+		})
+	}
+	return out
+}
+
+// autoRow 取某目标的自动回复行（测试断言用）。
+func (f *fakeReplyLogRepo) autoRow(agentID, postID uuid.UUID, target *uuid.UUID) *domain.ReplyLog {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if r, ok := f.auto[autoKey(agentID, postID, target)]; ok {
+		cp := *r
+		return &cp
+	}
+	return nil
 }
 
 func (f *fakeReplyLogRepo) CountSinceByAgent(ctx context.Context, agentID uuid.UUID, since time.Time) (int64, error) {

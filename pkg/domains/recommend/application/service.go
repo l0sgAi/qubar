@@ -39,12 +39,13 @@ type recommendServiceImpl struct {
 	checker  domain.InteractionChecker
 	feed     domain.FeedCache
 	intCache domain.InterestCircleCache
+	vis      domain.CircleVisibility
 }
 
 // NewRecommendService 构造 RecommendService。
 //
 // searcher/seed/checker/feed/intCache 为 recommend 同域 infra（直构）；
-// circle/postMeta/hydrator 为跨域桥接器（composition 注入）。
+// circle/postMeta/hydrator/vis 为跨域桥接器（composition 注入）。
 func NewRecommendService(
 	searcher domain.HomeFeedSearcher,
 	circle domain.CircleLookup,
@@ -54,6 +55,7 @@ func NewRecommendService(
 	checker domain.InteractionChecker,
 	feed domain.FeedCache,
 	intCache domain.InterestCircleCache,
+	vis domain.CircleVisibility,
 ) RecommendService {
 	return &recommendServiceImpl{
 		searcher: searcher,
@@ -64,6 +66,7 @@ func NewRecommendService(
 		checker:  checker,
 		feed:     feed,
 		intCache: intCache,
+		vis:      vis,
 	}
 }
 
@@ -141,7 +144,7 @@ func (s *recommendServiceImpl) getRecommend(ctx context.Context, userID uuid.UUI
 	if err != nil {
 		return nil, err
 	}
-	posts := s.hydrateOrdered(ctx, ids)
+	posts := s.hydrateOrdered(ctx, userID, ids)
 
 	// 4. 补交互态 is_liked/is_collected
 	if len(posts) > 0 {
@@ -174,11 +177,12 @@ func (s *recommendServiceImpl) rebuildPool(ctx context.Context, userID uuid.UUID
 }
 
 // hydrateOrdered 按 ids 顺序 hydrate（Hydrate 内部 ES terms 不保序，需按入参序重排）。
-func (s *recommendServiceImpl) hydrateOrdered(ctx context.Context, ids []uuid.UUID) []domain.FeedPostItem {
+// 查看者不可见的私密圈帖子在 Hydrate 内被过滤（候选池可能含旧条目）。
+func (s *recommendServiceImpl) hydrateOrdered(ctx context.Context, userID uuid.UUID, ids []uuid.UUID) []domain.FeedPostItem {
 	if len(ids) == 0 {
 		return []domain.FeedPostItem{}
 	}
-	items, err := s.hydrator.Hydrate(ctx, ids)
+	items, err := s.hydrator.Hydrate(ctx, userID, ids)
 	if err != nil {
 		logger.Log.Error("hydrate feed posts: " + err.Error())
 		return []domain.FeedPostItem{}
@@ -209,11 +213,15 @@ func (s *recommendServiceImpl) getSimpleFeed(ctx context.Context, userID uuid.UU
 	if size <= 0 || size > 100 {
 		size = 20
 	}
-	ids, next, err := s.searcher.Search(ctx, sort, circleIDs, size, searchAfter)
+	hidden, err := s.vis.HiddenCircleIDs(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	posts := s.hydrateOrdered(ctx, ids)
+	ids, next, err := s.searcher.Search(ctx, sort, circleIDs, hidden, size, searchAfter)
+	if err != nil {
+		return nil, err
+	}
+	posts := s.hydrateOrdered(ctx, userID, ids)
 	if len(posts) > 0 {
 		liked, collected, _ := s.checker.BatchCheck(ctx, userID, ids)
 		for i := range posts {

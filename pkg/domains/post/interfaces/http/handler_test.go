@@ -83,8 +83,8 @@ func (fakeUsers) GetBrief(_ context.Context, id string) (*application.UserBrief,
 	return &application.UserBrief{ID: id, Username: "u"}, nil
 }
 
-func (fakeUsers) GetAgentCircleIDs(context.Context, []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
-	return map[uuid.UUID]uuid.UUID{}, nil
+func (fakeUsers) GetAgentMentionScopes(context.Context, []uuid.UUID) (map[uuid.UUID]application.AgentMentionScope, error) {
+	return map[uuid.UUID]application.AgentMentionScope{}, nil
 }
 
 type fakeMember struct{}

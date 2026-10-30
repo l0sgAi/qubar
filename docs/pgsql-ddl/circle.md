@@ -119,7 +119,7 @@ CREATE TABLE domains.circle (
     post_count INT NOT NULL DEFAULT 0, -- 帖子数量
 
     -- 5. 状态与权限
-    join_type SMALLINT NOT NULL DEFAULT 0, -- 加入方式：0=直接加入，1=需审核，2=私密(邀请制)
+    join_type SMALLINT NOT NULL DEFAULT 0, -- 加入方式：0=公开(直接加入)，2=私密(邀请制)；1=需审核已下线(#168，存量迁移为 2，不再写入)
     status SMALLINT NOT NULL DEFAULT 1, -- 状态：0=审核中，1=正常，2=被封禁/冻结
 
     deleted SMALLINT DEFAULT 0, -- 0=正常，1=已删除
@@ -144,7 +144,7 @@ COMMENT ON COLUMN domains.circle.category_id IS '所属分类ID(UUID)，NULL=未
 COMMENT ON COLUMN domains.circle.hot IS '综合热度值';
 COMMENT ON COLUMN domains.circle.member_count IS '成员总数(缓存字段)';
 COMMENT ON COLUMN domains.circle.post_count IS '帖子总数(缓存字段)';
-COMMENT ON COLUMN domains.circle.join_type IS '加入限制：0=公开，1=审核，2=私密';
+COMMENT ON COLUMN domains.circle.join_type IS '加入限制：0=公开，2=私密(邀请制)；1=审核已下线';
 COMMENT ON COLUMN domains.circle.status IS '圈子状态：0=待审，1=正常，2=封禁';
 COMMENT ON COLUMN domains.circle.deleted IS '逻辑删除：0=未删，1=已删';
 COMMENT ON COLUMN domains.circle.create_time IS '创建时间';
@@ -177,7 +177,8 @@ CREATE TABLE domains.circle_member (
     role SMALLINT NOT NULL DEFAULT 10,
 
     -- 成员状态 (控制访问权)
-    -- 0=待审核(申请中), 1=正常, 2=禁言(Muted), 3=拉黑/踢出(Banned) 4=暂时退出
+    -- 1=正常, 2=禁言(Muted), 3=拉黑(Banned), 4=已退出(主动退圈 / 被移出 / 解除拉黑)
+    -- 0=待审核(申请中)已下线(#168，存量迁移为 4，不再写入)
     status SMALLINT NOT NULL DEFAULT 1,
     -- 成员声望 帖子/评论被点赞+1 帖子被收藏+5 帖子/评论被别人回复+10
     reputation INT NOT NULL DEFAULT 0,
@@ -199,7 +200,7 @@ COMMENT ON TABLE domains.circle_member IS '圈子成员关系与权限表';
 COMMENT ON COLUMN domains.circle_member.circle_id IS '圈子ID(UUID)';
 COMMENT ON COLUMN domains.circle_member.user_id IS '用户ID(UUID)';
 COMMENT ON COLUMN domains.circle_member.role IS '角色: 10=成员, 20=管理员, 30=圈主';
-COMMENT ON COLUMN domains.circle_member.status IS '状态: 0=申请中, 1=正常, 2=禁言, 3=拉黑';
+COMMENT ON COLUMN domains.circle_member.status IS '状态: 1=正常, 2=禁言, 3=拉黑, 4=已退出/被移出；0=申请中已下线';
 COMMENT ON COLUMN domains.circle_member.mute_end_time IS '禁言截止时间';
 
 -- --- 索引优化---
@@ -217,3 +218,38 @@ CREATE INDEX idx_member_user ON domains.circle_member(user_id, role, status);
 -- 场景：圈主管理成员，或者展示成员列表
 CREATE INDEX idx_member_circle_role ON domains.circle_member(circle_id, role DESC, create_time DESC);
 ```
+
+## 邀请表（#169）
+
+> 权威 DDL 见 `migrations/20261030113603_add_circle_invite.up.sql`，这里只说明字段语义。两张表都只在 PG 内读写，不进 CDC / ES。
+
+### `domains.circle_invite_link` 邀请链接
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | uuid | UUIDv7，应用层 `sharedomain.NewID()` 生成 |
+| `circle_id` | uuid | 圈子 ID（仅私密圈可创建） |
+| `creator_id` | uuid | 创建人（创建时须为圈主 / 管理员） |
+| `token_hash` | varchar(64) | token 的 SHA-256 小写 hex；token = 32 字节随机数的 base64url（无填充），明文只在创建响应中出现一次 |
+| `expire_time` | timestamptz | 过期时间，默认创建后 7 天，最长 30 天 |
+| `max_uses` | integer | 最大使用次数，NULL = 不限 |
+| `used_count` | integer | 已用次数；接受时 `UPDATE ... WHERE max_uses IS NULL OR used_count < max_uses` 原子递增，已是成员不消耗 |
+| `revoked` | smallint | 0 = 有效，1 = 已撤销（手动撤销，或私密圈改公开时批量撤销） |
+| `create_time` / `update_time` / `update_by` | | 审计字段；`update_by` 为撤销人，`creator_id` 即创建人 |
+
+索引：`uk_circle_invite_link_token_hash (token_hash)`（token 等值校验）、`idx_circle_invite_link_circle (circle_id, create_time DESC)`（管理端列表）。
+
+### `domains.circle_invite_email` 指定 email 邀请
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | uuid | UUIDv7，应用层生成 |
+| `circle_id` | uuid | 圈子 ID（仅私密圈可添加） |
+| `inviter_id` | uuid | 最近一次添加 / 重新邀请的圈主或管理员 |
+| `email` | varchar(100) | 被邀请邮箱，存储前 trim + 小写，与 `users.email` 等值匹配；可以还没有对应注册用户 |
+| `status` | smallint | 0 = 待接受，1 = 已接受，2 = 已撤销，3 = 已拒绝；已撤销 / 已拒绝再次添加时重置为 0 |
+| `create_time` / `update_time` / `update_by` | | 审计字段；`update_by` 为最后操作人（管理者或被邀请人） |
+
+索引：`uk_circle_invite_email_circle_email (circle_id, email)`（唯一 + 管理端列表）、`idx_circle_invite_email_pending (email, create_time DESC) WHERE status = 0`（`GET /circle/invite/my`）。
+
+两张表都没有 `deleted` 列：生命周期由 `revoked` / `status` 表达，行不做删除。

@@ -96,6 +96,10 @@ func (h *Handler) GetComments(c appctx.AppContext) {
 			httputil.BadRequest(c, "Invalid cursor")
 			return
 		}
+		if errors.Is(err, domain.ErrPostNotFound) {
+			httputil.NotFound(c, "Post not found")
+			return
+		}
 		logger.Log.Error("Failed to get comments: " + err.Error())
 		httputil.InternalError(c, "Failed to get comments")
 		return
@@ -161,6 +165,8 @@ type LocateCommentRequest struct {
 // 前端拉回复用哪个 sort，这里就须传哪个，否则回复游标无效。
 // 回复页大小固定取服务端默认值（同 GetReplies 缺省 limit=10），前端不传 limit。
 func (h *Handler) LocateComment(c appctx.AppContext) {
+	viewerID, _ := requireUserIDAllowAnon(c)
+
 	var req LocateCommentRequest
 	if err := c.BindQuery(&req); err != nil {
 		httputil.BadRequest(c, "Invalid request parameters")
@@ -184,7 +190,7 @@ func (h *Handler) LocateComment(c appctx.AppContext) {
 		return
 	}
 
-	result, err := h.svc.LocateComment(c, commentID, req.Sort, replySort)
+	result, err := h.svc.LocateComment(c, viewerID, commentID, req.Sort, replySort)
 	if err != nil {
 		if errors.Is(err, domain.ErrCommentNotFound) {
 			httputil.NotFound(c, "评论不存在或已删除")

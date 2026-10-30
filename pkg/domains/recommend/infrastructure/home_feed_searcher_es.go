@@ -18,9 +18,8 @@ func NewHomeFeedSearcher() domain.HomeFeedSearcher {
 }
 
 // Search 调 ES SearchHomeFeed，边界提取 PostDoc.ID → 有序 postID（纯 ID 合并）。
-func (s *homeFeedSearcherES) Search(ctx context.Context, sort string, circleIDs []uuid.UUID, size int, searchAfter []interface{}) ([]uuid.UUID, []interface{}, error) {
-	_ = ctx
-	res, err := elasticsearch.SearchHomeFeed(ctx, sort, circleIDs, size, searchAfter)
+func (s *homeFeedSearcherES) Search(ctx context.Context, sort string, circleIDs, excludeCircleIDs []uuid.UUID, size int, searchAfter []interface{}) ([]uuid.UUID, []interface{}, error) {
+	res, err := elasticsearch.SearchHomeFeed(ctx, sort, circleIDs, excludeCircleIDs, size, searchAfter)
 	if err != nil {
 		return nil, nil, err
 	}

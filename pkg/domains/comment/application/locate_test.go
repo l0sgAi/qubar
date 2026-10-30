@@ -56,6 +56,10 @@ func (f *fakeLocateRepo) LocateReplyCursor(ctx context.Context, rootID uuid.UUID
 	return f.replyCursor, f.replyPage, nil
 }
 
+func (f *fakeLocateRepo) ListHotForAutoReply(ctx context.Context, filter domain.AutoReplyCommentFilter) ([]domain.AutoReplyCommentRow, error) {
+	return nil, nil
+}
+
 func (f *fakeLocateRepo) IsLiked(ctx context.Context, userID, commentID uuid.UUID) (bool, error) {
 	return false, nil
 }
@@ -105,7 +109,7 @@ func TestLocateComment_RootFirstPage(t *testing.T) {
 	repo := newLocateRepo() // rootCursor 默认 "" = 首页
 	svc := &commentServiceImpl{repo: repo}
 
-	res, err := svc.LocateComment(context.Background(), locTopID, 0, 1)
+	res, err := svc.LocateComment(context.Background(), uuid.Nil, locTopID, 0, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -129,7 +133,7 @@ func TestLocateComment_RootLaterPage(t *testing.T) {
 	repo.rootCursor = "eyJmb28iOiJiYXIifQ=="
 	svc := &commentServiceImpl{repo: repo}
 
-	res, err := svc.LocateComment(context.Background(), locTopID, 1, 1)
+	res, err := svc.LocateComment(context.Background(), uuid.Nil, locTopID, 1, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -146,7 +150,7 @@ func TestLocateComment_Reply(t *testing.T) {
 	repo.replyPage = 3
 	svc := &commentServiceImpl{repo: repo}
 
-	res, err := svc.LocateComment(context.Background(), locReplyID, 1, 1)
+	res, err := svc.LocateComment(context.Background(), uuid.Nil, locReplyID, 1, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -167,7 +171,7 @@ func TestLocateComment_ReplyFirstPage(t *testing.T) {
 	repo.replyPage = 1 // replyCursor 默认 ""
 	svc := &commentServiceImpl{repo: repo}
 
-	res, err := svc.LocateComment(context.Background(), locReplyID, 0, 1)
+	res, err := svc.LocateComment(context.Background(), uuid.Nil, locReplyID, 0, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -179,7 +183,7 @@ func TestLocateComment_ReplyFirstPage(t *testing.T) {
 // TestLocateComment_NotFound 目标不存在/已删除 → ErrCommentNotFound。
 func TestLocateComment_NotFound(t *testing.T) {
 	svc := &commentServiceImpl{repo: newLocateRepo()}
-	_, err := svc.LocateComment(context.Background(), locGhostID, 0, 1)
+	_, err := svc.LocateComment(context.Background(), uuid.Nil, locGhostID, 0, 1)
 	if !errors.Is(err, domain.ErrCommentNotFound) {
 		t.Fatalf("want ErrCommentNotFound, got %v", err)
 	}
@@ -189,7 +193,7 @@ func TestLocateComment_NotFound(t *testing.T) {
 // （根删则其下回复在列表中不可达）。
 func TestLocateComment_RootDeleted(t *testing.T) {
 	svc := &commentServiceImpl{repo: newLocateRepo()}
-	_, err := svc.LocateComment(context.Background(), locOrphanID, 0, 1)
+	_, err := svc.LocateComment(context.Background(), uuid.Nil, locOrphanID, 0, 1)
 	if !errors.Is(err, domain.ErrCommentNotFound) {
 		t.Fatalf("want ErrCommentNotFound, got %v", err)
 	}

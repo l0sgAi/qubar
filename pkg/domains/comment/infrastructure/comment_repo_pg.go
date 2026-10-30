@@ -413,3 +413,44 @@ func applyOrderBy(query *gorm.DB, sort int) *gorm.DB {
 	}
 	return query.Order("id DESC")
 }
+
+// 自动回复候选查询的跨表裸值（不 import 兄弟域包）：users.role=2 机器人系统账号
+// （aiagent 创建，防自动回复回环）、post.status=1 已发布（post.PostStatusPublished）。
+const (
+	botUserRole         = 2
+	postStatusPublished = 1
+)
+
+// ListHotForAutoReply 自动回复评论候选。
+//
+// 评论表没有 create_time 索引：主键是 UUIDv7（时间序），用 id 下界把时间窗口转成主键范围扫描，
+// create_time 条件保证语义精确。JOIN domains.post 取圈子并校验帖子可回复（同 collect 仓储先例）。
+func (r *commentRepoPG) ListHotForAutoReply(ctx context.Context, f domain.AutoReplyCommentFilter) ([]domain.AutoReplyCommentRow, error) {
+	if f.Limit <= 0 || (f.LikeMin <= 0 && f.ReplyMin <= 0) {
+		return nil, nil
+	}
+	q := r.db.WithContext(ctx).Table("domains.comment AS c").
+		Select("c.id, c.post_id, c.user_id, c.root_id, c.content, c.like_count, c.reply_count, p.circle_id AS post_circle_id").
+		Joins("JOIN domains.post AS p ON p.id = c.post_id").
+		Where("c.id >= ? AND c.create_time >= ?", sharedomain.UUIDv7LowerBound(f.Since), f.Since).
+		Where("c.deleted = ? AND c.status = ?", 0, domain.CommentStatusNormal).
+		Where("p.deleted = ? AND p.status = ? AND p.is_lock = ?", 0, postStatusPublished, 0).
+		Where("NOT EXISTS (SELECT 1 FROM domains.users u WHERE u.id = c.user_id AND u.role = ?)", botUserRole)
+	switch {
+	case f.LikeMin > 0 && f.ReplyMin > 0:
+		q = q.Where("(c.like_count >= ? OR c.reply_count >= ?)", f.LikeMin, f.ReplyMin)
+	case f.LikeMin > 0:
+		q = q.Where("c.like_count >= ?", f.LikeMin)
+	default:
+		q = q.Where("c.reply_count >= ?", f.ReplyMin)
+	}
+	if f.CircleID != uuid.Nil {
+		q = q.Where("p.circle_id = ?", f.CircleID)
+	}
+	if len(f.ExcludeIDs) > 0 {
+		q = q.Where("c.id NOT IN ?", f.ExcludeIDs)
+	}
+	var rows []domain.AutoReplyCommentRow
+	err := q.Order("c.like_count + c.reply_count DESC, c.id DESC").Limit(f.Limit).Scan(&rows).Error
+	return rows, err
+}

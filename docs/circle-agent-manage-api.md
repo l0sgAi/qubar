@@ -5,8 +5,9 @@
 > 前置接口是 Phase 1 的 [GET /circle/manage/list](circle-manage-list-api.md)（圈子选择器，
 > 其 `agent_count` 字段本期起返回真实值）。
 >
-> ⚠️ **本期圈内机器人不参与任何回复触发**（关键词/手动/@提及均不生效），
-> 创建后仅作为配置资产存在；触发链路属后续版本。UI 请勿展示「立即回复」类入口。
+> 圈内机器人只回复**本圈**帖子：评论关键词 / @提及 / 圈主手动触发见 §3.6；
+> 2026-10-23 起支持**自动回复本圈高热度帖子 / 评论**（`auto_config.auto_reply`，#99），字段与规则同全局机器人，
+> 见 [api/ai-agent-admin-api.md §2.5](api/ai-agent-admin-api.md)。
 
 ---
 
@@ -37,7 +38,7 @@
 |---|---|---|
 | 列表 / 详情 | ✅ | ✅ |
 | 创建 | ✅ | ✅ |
-| 更新运营字段（name / avatar_url / model / llm_params / system_prompt / filter_prompt / trigger_mode / trigger_keywords / max_replies_per_hour / min_interval_sec / status） | ✅ | ✅ |
+| 更新运营字段（name / avatar_url / model / llm_params / system_prompt / filter_prompt / trigger_mode / trigger_keywords / max_replies_per_hour / min_interval_sec / auto_config / status） | ✅ | ✅ |
 | 更新**凭据字段**（api_protocol / base_url / api_key） | ✅ | ❌ 403 |
 | 删除 | ✅ | ❌ 403 |
 
@@ -71,6 +72,7 @@
 | `trigger_keywords` | string[] | 关键词列表；mode=2 时必须非空 |
 | `max_replies_per_hour` | number | 每小时回复上限，0=不限 |
 | `min_interval_sec` | number | 最小回复间隔秒，0=不限 |
+| `auto_config` | object | 自主行为配置：`auto_reply` 自动回复本圈高热度帖子 / 评论（字段、校验与全局机器人一致，见 [api/ai-agent-admin-api.md §2.5](api/ai-agent-admin-api.md)）；更新时传了 `auto_reply` 即整体替换该子对象 |
 | `status` | number | 0=停用 / 1=启用（创建时不传默认启用） |
 | `create_time` / `update_time` | string | RFC3339 带时区 |
 
@@ -192,6 +194,9 @@ curl -X POST -H "satoken: <token>" -H "Content-Type: application/json" \
 
 自动触发行为（本版本起生效）：本圈帖的**评论关键词触发**（`trigger_mode=2`）与**发帖 @机器人**（机器人被 @ 即触发，不校验 mode）对圈内机器人按圈生效——机器人只回本圈帖子；全局机器人行为不变（全站触发）。限流配置 `max_replies_per_hour` / `min_interval_sec` 按机器人维度照常生效；**创建时未传这两字段会兜底为 30 次/时 + 60 秒间隔**（防圈主 key 裸奔），需要不限速请创建后经更新接口显式设 0。
 
+自动回复（`auto_config.auto_reply.enabled=true`，与 `trigger_mode` 无关）：后台定时扫描**本圈**达到门槛的帖子 / 评论自动回复，
+每个机器人对同一目标最多一次；机器人账号发的内容不会被选中；同样计入上面的限流配置。admin+ 即可修改（运营字段）。
+
 ---
 
 ## 四、错误处理
@@ -241,6 +246,7 @@ export interface CircleAgent {
   trigger_keywords: string[];
   max_replies_per_hour: number;
   min_interval_sec: number;
+  auto_config: { auto_reply: AgentAutoReply };
   status: 0 | 1;
   create_time: string;
   update_time: string;
@@ -272,7 +278,20 @@ export interface CreateCircleAgentInput {
   trigger_keywords?: string[];
   max_replies_per_hour?: number;
   min_interval_sec?: number;
+  /** 传了 auto_reply 即整体替换该子对象；不传保持不变 */
+  auto_config?: { auto_reply?: AgentAutoReply };
   status?: 0 | 1;
+}
+
+/** 自动回复配置（规则见 api/ai-agent-admin-api.md §2.5） */
+export interface AgentAutoReply {
+  enabled: boolean;
+  targets: Array<'post' | 'comment'>;
+  post_hot_min: number;
+  comment_like_min: number;
+  comment_reply_min: number;
+  window_hours: number;
+  max_per_hour: number;
 }
 
 /** 更新入参：全部可选（部分更新；至少传一个字段） */

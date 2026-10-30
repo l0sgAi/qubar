@@ -36,6 +36,11 @@ func (t *likePostTarget) IsLiked(ctx context.Context, userID, postID uuid.UUID) 
 	return t.delegate.IsLikedByUser(ctx, userID, postID)
 }
 
+// CanView 私密圈可见性：复用 post 域统一判断（PostService.CanViewPost）。
+func (t *likePostTarget) CanView(ctx context.Context, userID, postID uuid.UUID) (bool, error) {
+	return t.delegate.CanViewPost(ctx, userID, postID)
+}
+
 // ===== comment → like（评论存在性 + 所属帖子ID + 统计缓存恢复 + 真实点赞状态）=====
 
 // likeCommentTarget 把 comment.application.CommentService 适配为 like.application.CommentTarget。

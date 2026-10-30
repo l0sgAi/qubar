@@ -126,7 +126,7 @@ curl -H "satoken: <your-token>" \
 | `description` | string | 圈子简介，恒存在（可能空串） |
 | `member_count` | number | 成员数（DB 快照，可能与详情页的实时计数有秒级~分钟级偏差，控制台展示够用） |
 | `post_count` | number | 帖子数（同上，快照值） |
-| `join_type` | number | 加入方式：`0` 直接加入 / `1` 需审核 / `2` 私密邀请制 |
+| `join_type` | number | 加入方式：`0` 公开（直接加入）/ `2` 私密邀请制（`1` 需审核已下线，#168） |
 | `status` | number | **圈子状态**：`0` 审核中 / `1` 正常 / `2` 被封禁。见 §4.2 |
 | `my_role` | number | **调用者在此圈的角色**：`20` 管理员 / `30` 圈主。见 §4.1 |
 | `agent_count` | number | 该圈已绑定 AI 代理数（实时统计，上限 5，用于「3/5」这类配额 UI；统计失败降级为 0）。圈内代理管理接口见 [circle-agent-manage-api.md](circle-agent-manage-api.md) |

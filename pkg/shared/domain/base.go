@@ -48,6 +48,20 @@ func NewID() uuid.UUID {
 	return uuid.Must(uuid.NewV7())
 }
 
+// UUIDv7LowerBound 返回时间戳为 t（毫秒）、其余位全 0 的 UUID：任何在 t 及之后由 NewID
+// 生成的 UUIDv7 按字节序（PG uuid 比较即字节序）都不小于它。
+//
+// 用于把"create_time >= t"转成主键范围条件（id >= bound），让没有时间索引的大表走主键扫描；
+// 调用方仍应同时带上 create_time 条件保证语义精确。
+func UUIDv7LowerBound(t time.Time) uuid.UUID {
+	var u uuid.UUID
+	ms := uint64(t.UnixMilli())
+	for i := 0; i < 6; i++ {
+		u[i] = byte(ms >> (40 - 8*i))
+	}
+	return u
+}
+
 // BeforeCreate 在插入前为未设置主键的记录生成 UUIDv7。
 // 仅当 ID 为零值（uuid.Nil）时生成，允许外部显式指定（如种子数据）。
 func (b *BaseModel) BeforeCreate(tx *gorm.DB) error {

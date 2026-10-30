@@ -182,7 +182,8 @@ func newJoinedFixture() *joinedFixture {
 		cache:    newFakeJoinedCache(),
 		base:     time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC),
 	}
-	f.svc = NewCircleService(nil, f.repo, nil, nil, f.cache, f.searcher, nil).(*circleServiceImpl)
+	f.svc = NewCircleService(nil, f.repo, nil, nil, f.cache, f.searcher, nil, nil).(*circleServiceImpl)
+	f.svc.visibility = newCircleVisibility(&visRepo{}, f.repo, nil) // 无私密圈
 	return f
 }
 
@@ -250,7 +251,7 @@ func TestGetUserCircles_NoMemberStatus(t *testing.T) {
 	f := newJoinedFixture()
 	f.add("muted", domain.MemberRoleAdmin, domain.MemberStatusMuted, ptrTime(time.Now().Add(time.Hour)), true)
 
-	res, err := f.svc.GetUserCircles(context.Background(), f.user, "", 0, 20, "")
+	res, err := f.svc.GetUserCircles(context.Background(), f.user, f.user, "", 0, 20, "")
 	if err != nil {
 		t.Fatalf("GetUserCircles: %v", err)
 	}
@@ -316,7 +317,7 @@ func TestJoinedCircles_InvalidRole(t *testing.T) {
 		if _, err := f.svc.GetMyCircles(context.Background(), f.user, "", role, 20, ""); !IsInvalidJoinedRoleFilterErr(err) {
 			t.Errorf("GetMyCircles role=%d err = %v, want invalid role filter", role, err)
 		}
-		if _, err := f.svc.GetUserCircles(context.Background(), f.user, "", role, 20, ""); !IsInvalidJoinedRoleFilterErr(err) {
+		if _, err := f.svc.GetUserCircles(context.Background(), f.user, f.user, "", role, 20, ""); !IsInvalidJoinedRoleFilterErr(err) {
 			t.Errorf("GetUserCircles role=%d err = %v, want invalid role filter", role, err)
 		}
 	}
@@ -409,6 +410,32 @@ func TestGetMyCircles_RoleFilterKeywordPaging(t *testing.T) {
 		if p.Total != 0 || p.Truncated {
 			t.Fatalf("keyword page total=%d truncated=%v, want 0/false", p.Total, p.Truncated)
 		}
+	}
+}
+
+// TestGetMyCircles_KeywordRankPaging 仅关键字（rank 游标）：同一批内命中数 > size 时截断，
+// 游标落在最后返回命中的下一位，未返回的命中下一页继续返回，不丢不重、按加入时间倒序。
+func TestGetMyCircles_KeywordRankPaging(t *testing.T) {
+	f := newJoinedFixture()
+	var want []string
+	for i := 0; i < 50; i++ {
+		name := fmt.Sprintf("other%d", i)
+		if i%5 != 0 {
+			name = fmt.Sprintf("hit%d", i)
+		}
+		id := f.add(name, domain.MemberRoleMember, domain.MemberStatusNormal, nil, true)
+		if i%5 != 0 {
+			want = append(want, id.String())
+		}
+	}
+	slices.Reverse(want)
+
+	got, pages := collectPages(t, f, "hit", 0, 7)
+	if !slices.Equal(got, want) {
+		t.Fatalf("keyword rank paging ids =\n%v\nwant\n%v", got, want)
+	}
+	if len(pages) != 6 {
+		t.Fatalf("pages = %d, want 6 (40 hits / 7 per page)", len(pages))
 	}
 }
 

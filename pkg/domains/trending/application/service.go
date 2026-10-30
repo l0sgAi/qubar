@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"interestBar/pkg/conf"
+	circledomain "interestBar/pkg/domains/circle/domain"
 	recommenddomain "interestBar/pkg/domains/recommend/domain"
 	"interestBar/pkg/domains/trending/domain"
 )
@@ -124,7 +125,7 @@ func (s *trendingServiceImpl) fillPosts(ctx context.Context, userID uuid.UUID, w
 		ids = append(ids, sc.ID)
 	}
 
-	items, err := s.hydrator.Hydrate(ctx, ids)
+	items, err := s.hydrator.Hydrate(ctx, userID, ids)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -183,6 +184,9 @@ func (s *trendingServiceImpl) fillCircles(ctx context.Context, window string, of
 		c, ok := circles[sc.ID]
 		if !ok {
 			continue // GetByIDs 已跳过 deleted；status 异常也跳过，保持桶顺序不断层
+		}
+		if c.JoinType == circledomain.CircleJoinTypePrivate {
+			continue // 私密圈不上公开榜单（同 /circle/active）
 		}
 		categoryID := ""
 		if c.CategoryID != nil {

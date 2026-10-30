@@ -52,6 +52,11 @@ CREATE TABLE domains.ai_agent (
     max_replies_per_hour INT NOT NULL DEFAULT 30, -- 每小时最大回复数(0=不限)
     min_interval_sec INT NOT NULL DEFAULT 60,     -- 两次回复最小间隔秒数(0=不限)
 
+    -- 5.1 自主行为配置(与 trigger_mode 互不影响;按顶层 key 独立写入)
+    -- 结构示例: {"auto_reply":{"enabled":true,"targets":["post","comment"],"post_hot_min":200,
+    --            "comment_like_min":20,"comment_reply_min":10,"window_hours":24,"max_per_hour":5}}
+    auto_config JSONB NOT NULL DEFAULT '{}'::JSONB,
+
     -- 6. 状态与生命周期
     status SMALLINT NOT NULL DEFAULT 1,      -- 状态: 0=停用, 1=启用
     deleted SMALLINT DEFAULT 0,              -- 逻辑删除: 0=正常, 1=已删除
@@ -78,6 +83,7 @@ COMMENT ON COLUMN domains.ai_agent.trigger_mode IS '触发模式: 1=全部新帖
 COMMENT ON COLUMN domains.ai_agent.trigger_keywords IS 'trigger_mode=2时的关键词列表(JSON数组,应用层匹配)';
 COMMENT ON COLUMN domains.ai_agent.max_replies_per_hour IS '每小时最大回复数(0=不限,按ai_agent_reply_log统计)';
 COMMENT ON COLUMN domains.ai_agent.min_interval_sec IS '两次回复最小间隔秒数(0=不限)';
+COMMENT ON COLUMN domains.ai_agent.auto_config IS '自主行为配置(JSON对象,与trigger_mode互不影响): auto_reply={enabled,targets,post_hot_min,comment_like_min,comment_reply_min,window_hours,max_per_hour}; 各子对象按顶层key独立写入';
 COMMENT ON COLUMN domains.ai_agent.status IS '状态: 0=停用, 1=启用';
 
 -- --- 索引优化 ---
@@ -100,8 +106,9 @@ CREATE INDEX idx_ai_agent_circle ON domains.ai_agent (circle_id) WHERE deleted =
 
 ## AI 回复日志表
 
-> agent 每次回复的审计与频率限制统计事实表。**append-only**：无 `deleted`/`update_time`
-> （失败/成功终态写入后不变，纠错靠新行）。
+> agent 每次回复的审计与频率限制统计事实表。无 `deleted`/`update_time`：被动触发（关键词 / @提及 / 手动）
+> **append-only**（终态写入后不变，纠错靠新行）；自动回复（`trigger_source=4`）先插 `status=4` 占位行再调 LLM，
+> 终态时**原地更新这一行**（部分唯一索引保证每机器人每目标只有一行，见 docs/agent-auto-reply-design.md）。
 >
 > - 频率限制执行：按 `(agent_id, create_time)` 统计最近 1 小时行数 + 取最新一行 `create_time` 算间隔；
 >   统计口径**排除 status=2（分类器跳过）**——skipped 未产出回复，不占配额（应用层查询条件保证）。
@@ -119,9 +126,11 @@ CREATE TABLE domains.ai_agent_reply_log (
     post_id UUID NOT NULL,                   -- 被回复帖子ID(post.id)
     comment_id UUID,                       -- 生成的评论ID(comment.id,调用失败时为NULL)
     user_id UUID NOT NULL,                   -- 帖子作者ID(冗余,便于风控分析)
+    trigger_source SMALLINT NOT NULL DEFAULT 0, -- 触发来源: 1=评论关键词, 2=@提及, 3=手动, 4=自动回复; 0=未知(迁移窗口期旧版本写入)
+    target_comment_id UUID,                  -- 被回复的目标评论ID(回复挂在该评论楼层内时非NULL,回复帖子本身为NULL)
 
     -- 2. 调用结果
-    status SMALLINT NOT NULL DEFAULT 1,      -- 结果: 0=失败, 1=成功, 2=分类器跳过
+    status SMALLINT NOT NULL DEFAULT 1,      -- 结果: 0=失败, 1=成功, 2=分类器跳过, 3=分类器超时降级, 4=自动回复占位(执行中)
     error_msg VARCHAR(2048),                 -- 失败原因(截断后的错误信息;status=2时为分类器跳过原因)
     latency_ms INT NOT NULL DEFAULT 0,       -- LLM调用耗时(毫秒,两阶段总耗时)
     prompt_tokens INT NOT NULL DEFAULT 0,    -- 输入token数(供应商返回,两阶段求和,失败为0)
@@ -137,7 +146,9 @@ COMMENT ON COLUMN domains.ai_agent_reply_log.agent_id IS '机器人ID(ai_agent.i
 COMMENT ON COLUMN domains.ai_agent_reply_log.post_id IS '被回复帖子ID(post.id,无FK,应用层保证)';
 COMMENT ON COLUMN domains.ai_agent_reply_log.comment_id IS '生成的评论ID(comment.id,调用失败时为NULL)';
 COMMENT ON COLUMN domains.ai_agent_reply_log.user_id IS '帖子作者ID(冗余,风控分析用)';
-COMMENT ON COLUMN domains.ai_agent_reply_log.status IS '结果: 0=失败, 1=成功, 2=分类器跳过, 3=分类器超时降级直回(运维事件,不参与限频统计)';
+COMMENT ON COLUMN domains.ai_agent_reply_log.trigger_source IS '触发来源: 1=评论关键词, 2=@提及, 3=手动, 4=自动回复(定时扫描); 0=未知(迁移窗口期旧版本写入)';
+COMMENT ON COLUMN domains.ai_agent_reply_log.target_comment_id IS '被回复的目标评论ID(comment.id;回复挂在该评论楼层内时非NULL,回复帖子本身为NULL)';
+COMMENT ON COLUMN domains.ai_agent_reply_log.status IS '结果: 0=失败, 1=成功, 2=分类器跳过, 3=分类器超时降级直回(运维事件,不参与限频统计), 4=自动回复占位(执行中;进程中断则保持4,视为已触发不重试)';
 COMMENT ON COLUMN domains.ai_agent_reply_log.latency_ms IS 'LLM调用耗时(毫秒,分类器+生成两阶段总耗时)';
 COMMENT ON COLUMN domains.ai_agent_reply_log.prompt_tokens IS '输入token数(供应商返回,失败为0)';
 COMMENT ON COLUMN domains.ai_agent_reply_log.completion_tokens IS '输出token数(供应商返回,失败为0)';
@@ -146,6 +157,12 @@ COMMENT ON COLUMN domains.ai_agent_reply_log.completion_tokens IS '输出token�
 
 -- 1. 频率限制统计: 最近1小时计数 + 最新回复时间
 CREATE INDEX idx_ai_reply_agent_time ON domains.ai_agent_reply_log(agent_id, create_time DESC);
+
+-- 2. 自动回复每机器人每目标最多一行(trigger_source=4;回复帖子本身时 target_comment_id 为 NULL,全零UUID归桶)。
+--    post_id 在前:同一索引服务"每目标已有自动回复机器人数"统计(max_agents_per_target)
+CREATE UNIQUE INDEX idx_ai_reply_auto_target ON domains.ai_agent_reply_log
+    (post_id, (COALESCE(target_comment_id, '00000000-0000-0000-0000-000000000000'::uuid)), agent_id)
+    WHERE trigger_source = 4;
 ```
 
 ## 存量表迁移（comment_id 可空）
@@ -202,3 +219,14 @@ CREATE UNIQUE INDEX idx_ai_agent_name ON domains.ai_agent
 
 CREATE INDEX idx_ai_agent_circle ON domains.ai_agent (circle_id) WHERE deleted = 0;
 ```
+
+## 存量表迁移（自动回复：auto_config / trigger_source / target_comment_id + 部分唯一索引）
+
+> 2026-10-23 变更（#99）：机器人自动回复高热度帖子 / 评论，设计见 [agent-auto-reply-design.md](../agent-auto-reply-design.md)。
+> 权威 DDL 在 `migrations/20261026222115_ai_agent_auto_reply.up.sql`（加列 + 存量回填）与
+> `migrations/20261026222116_ai_reply_log_auto_target_unique.up.sql`（`CREATE UNIQUE INDEX CONCURRENTLY`），
+> 发布流水线以 DB-owner 自动执行，无需手工操作。
+>
+> 存量行 `trigger_source` 回填规则（存量日志未记录来源，按回复形态 + 机器人触发模式推断）：
+> status=2/3 → 1；回复挂在评论楼层内 → 1（同时回填 `target_comment_id`）；顶层回复：手动模式机器人 → 3，其余 → 2；
+> 无评论的失败行按机器人当前触发模式推断（2 → 1，3 → 3，其余 → 2）。

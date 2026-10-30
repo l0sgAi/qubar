@@ -14,6 +14,9 @@
 //		testkit.CleanupRows(t, "domains.post", "id", id)
 //	}
 //
+// ES(t) 单独处理：CI integration job 只起 PG / Redis / Redpanda，ES 不可达时默认 Skip
+// （QUBAR_TEST_REQUIRE_ES=1 时改为失败，本机验证用）；索引用 <index_prefix>.<名称>_it_<runID> 临时索引并在结束时删除。
+//
 // 隔离约定（同一个开发栈上可并行、可反复执行）：
 //   - PG：每条测试数据用 sharedomain.NewID() 生成随机 UUIDv7，并用 CleanupRows 在 t.Cleanup 删除；
 //     断言只针对自己插入的 ID，不做全表计数。
@@ -28,6 +31,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -42,6 +47,7 @@ import (
 	"interestBar/pkg/server/storage/redpanda"
 	sharedomain "interestBar/pkg/shared/domain"
 
+	"github.com/elastic/go-elasticsearch/v8"
 	"github.com/segmentio/kafka-go"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -58,6 +64,8 @@ const (
 	EnvRequireStack = "QUBAR_TEST_REQUIRE_STACK"
 	// EnvRedisDB 测试使用的 Redis 库号，默认 DefaultRedisDB。
 	EnvRedisDB = "QUBAR_TEST_REDIS_DB"
+	// EnvRequireES =1 时 ES 不可达直接失败而不是 Skip。与 EnvRequireStack 分开：CI integration job 不起 ES。
+	EnvRequireES = "QUBAR_TEST_REQUIRE_ES"
 )
 
 // DefaultRedisDB 测试默认 Redis 库号（开发应用用 0 号库）。
@@ -74,6 +82,10 @@ var (
 
 	redisOnce sync.Once
 	redisErr  error
+
+	esOnce   sync.Once
+	esErr    error
+	esClient *elasticsearch.Client
 
 	rpOnce   sync.Once
 	rpErr    error
@@ -125,6 +137,21 @@ func Redpanda(t testing.TB) []string {
 		unavailable(t, "redpanda", rpErr)
 	}
 	return conf.Config.Redpanda.Brokers
+}
+
+// ES 返回连接开发栈 Elasticsearch 的客户端（不设置 elasticsearch 包的全局 Client，避免 import 环；
+// 调用方按需赋值）。ES 不可达时 Skip（EnvRequireES=1 时失败），见包注释。
+func ES(t testing.TB) *elasticsearch.Client {
+	t.Helper()
+	requireConfig(t)
+	esOnce.Do(func() { esClient, esErr = openES() })
+	if esErr != nil {
+		if os.Getenv(EnvRequireES) == "1" {
+			t.Fatalf("集成测试依赖 elasticsearch 不可用：%v", esErr)
+		}
+		t.Skipf("跳过：集成测试依赖 elasticsearch 不可用（先 make dev-up；%s=1 时改为失败）：%v", EnvRequireES, esErr)
+	}
+	return esClient
 }
 
 // CleanupRows 在测试结束时删除 table 中 column IN values 的行。
@@ -294,6 +321,35 @@ func openPG() error {
 	}
 	pgsql.DB = db
 	return nil
+}
+
+func openES() (*elasticsearch.Client, error) {
+	raw := conf.Config.Elasticsearch.URL
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid elasticsearch.url %q: %w", raw, err)
+	}
+	if !isLoopback(u.Hostname()) {
+		return nil, fmt.Errorf("集成测试只连接本机开发栈，拒绝非本机地址 %q", u.Hostname())
+	}
+	client, err := elasticsearch.NewClient(elasticsearch.Config{
+		Addresses: []string{raw},
+		Transport: &http.Transport{DialContext: (&net.Dialer{Timeout: dialTimeout}).DialContext},
+	})
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*dialTimeout)
+	defer cancel()
+	res, err := client.Info(client.Info.WithContext(ctx))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.IsError() {
+		return nil, fmt.Errorf("elasticsearch info: %s", res.Status())
+	}
+	return client, nil
 }
 
 func openRedis() error {
