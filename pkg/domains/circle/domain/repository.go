@@ -143,14 +143,14 @@ type PrivateCircleCache interface {
 type CircleStatsCache interface {
 	// GetStats 读取统计信息。未命中返回 nil, nil（触发 DB 恢复）。
 	GetStats(ctx context.Context, circleID uuid.UUID) (*CircleStatistics, error)
-	// StatsExists 检查统计 Hash 是否存在。
+	// StatsExists 检查统计 Hash 是否已回种。
 	StatsExists(ctx context.Context, circleID uuid.UUID) (bool, error)
-	// SetStats 设置统计信息（用于从 DB 恢复）。
-	SetStats(ctx context.Context, circleID uuid.UUID, stats *CircleStatistics) error
-	// IncrMemberCount / DecrMemberCount 原子增减成员计数。
+	// SeedStatsIfAbsent 从 DB 回种统计信息，只写尚不存在的字段（HSETNX），不覆盖并发的增减。
+	SeedStatsIfAbsent(ctx context.Context, circleID uuid.UUID, stats *CircleStatistics) error
+	// IncrMemberCount / DecrMemberCount 原子增减成员计数；Hash 未回种时不写（先 SeedStatsIfAbsent）。
 	IncrMemberCount(ctx context.Context, circleID uuid.UUID) error
 	DecrMemberCount(ctx context.Context, circleID uuid.UUID) error
-	// IncrPostCount 原子增加帖子计数。
+	// IncrPostCount 原子增加帖子计数；Hash 未回种时不写。
 	IncrPostCount(ctx context.Context, circleID uuid.UUID) error
 }
 
