@@ -1,0 +1,222 @@
+# 每日巡检（l0sgAi/qubar#114）：扫描 develop 的测试缺口 / TODO / 文档与代码不一致 / 依赖漏洞，开 agent:found issue 等人筛选。
+#
+#   budget ：先过 agent-budget（workflow=patrol），超出月度预算不跑。
+#   patrol ：当天（UTC）还能开几个 issue = N - 今天巡检已开的数量，N 取 workflow_dispatch 输入 > 仓库变量
+#            AGENT_PATROL_MAX_ISSUES > 默认 3；为 0 时不跑 Claude。
+#            工作流先收集材料（TODO 列表、单测覆盖率、govulncheck、现有 issue）到 tmp/patrol/，Claude 只有 Read / Glob / Grep，
+#            把发现写进结构化输出；issue 由下面的 github-script 步骤按 .github/ISSUE_TEMPLATE/ 的模板渲染并创建，
+#            标签 = 模板里非 agent:* 的标签 + agent:found。Claude 不调 gh、不推分支、不开 PR、不改标签。
+#   去重   ：标题（忽略空白与标点）与任一 open issue 相同，或去重键（body 里的 <!-- agent-patrol-key: ... -->）与任一 open issue /
+#            已关闭的巡检 issue 相同，就不开。关闭一个巡检 issue = 以后不再报同一个 key。
+# schedule 只在默认分支（main）上生效；claude-code-action 要求本文件与 main 上的版本一致，所以要发版后才能跑。
+name: agent-patrol
+
+on:
+  schedule:
+    - cron: "23 1 * * *" # 每天 01:23 UTC（北京时间 09:23）
+  workflow_dispatch:
+    inputs:
+      max_issues:
+        description: 今天最多开几个 issue（留空用仓库变量 AGENT_PATROL_MAX_ISSUES，默认 3；当天已开的会扣掉）
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-patrol
+  cancel-in-progress: false
+
+jobs:
+  budget:
+    uses: ./.github/workflows/agent-budget.yml
+    permissions:
+      actions: read
+      issues: write
+    with:
+      workflow: patrol
+
+  patrol:
+    needs: budget
+    if: needs.budget.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    steps:
+      - name: Daily quota
+        id: quota
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          MAX_INPUT: ${{ inputs.max_issues }}
+          MAX_VAR: ${{ vars.AGENT_PATROL_MAX_ISSUES }}
+        run: |
+          set -euo pipefail
+          max=${MAX_INPUT:-${MAX_VAR:-3}}
+          if ! [[ "$max" =~ ^[0-9]+$ ]]; then echo "::error::max_issues must be a non-negative integer: $max"; exit 1; fi
+          today=$(date -u +%F)
+          opened=$(gh issue list -R "$REPO" --state all --search "author:app/github-actions created:>=$today" --limit 100 --json body \
+            | jq '[.[] | select(.body // "" | contains("<!-- agent-patrol -->"))] | length')
+          remaining=$(( max - opened ))
+          if [ "$remaining" -lt 0 ]; then remaining=0; fi
+          echo "max=$max opened_today=$opened remaining=$remaining"
+          # ask 多要两条备用，去重后仍尽量用满名额
+          {
+            echo "remaining=$remaining"
+            echo "ask=$(( remaining + 2 ))"
+            echo "run=$([ "$remaining" -gt 0 ] && echo true || echo false)"
+          } >> "$GITHUB_OUTPUT"
+
+      - if: steps.quota.outputs.run == 'true'
+        uses: actions/checkout@v5
+        with:
+          ref: develop
+      - if: steps.quota.outputs.run == 'true'
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Collect context
+        if: steps.quota.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          mkdir -p tmp/patrol
+          gh issue list -R "$REPO" --state open --limit 500 --json number,title,labels \
+            --jq '.[] | "#\(.number) \(.title) [\([.labels[].name] | join(","))]"' > tmp/patrol/open-issues.txt
+          gh issue list -R "$REPO" --state closed --search "author:app/github-actions" --limit 300 --json number,title,body \
+            --jq '.[] | select(.body // "" | contains("<!-- agent-patrol -->")) | "#\(.number) \(.title)"' > tmp/patrol/closed-patrol.txt
+          grep -rnE '\b(TODO|FIXME|XXX|HACK)\b' --include='*.go' cmd pkg > tmp/patrol/todo.txt || true
+          go test -short -cover ./pkg/... > tmp/patrol/coverage.txt 2>&1 || true
+          go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./... > tmp/patrol/govulncheck.txt 2>&1 || true
+          wc -l tmp/patrol/*
+          # 模板转成 JSON，供创建 issue 的步骤渲染（ubuntu runner 自带 mikefarah/yq）
+          for t in task bug; do yq -o=json '.' ".github/ISSUE_TEMPLATE/$t.yml" > "$RUNNER_TEMP/tpl-$t.json" || exit 1; done
+
+      - id: claude
+        if: steps.quota.outputs.run == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            最多报告：${{ steps.quota.outputs.ask }} 条
+
+            你是 qubar 的每日巡检 agent，当前目录是 develop 分支。你只读代码、不改任何文件，也没有 Bash / gh 权限。
+            先读 CLAUDE.md 和 .agents/skills/qubar-skill/SKILL.md 了解项目规则。工作流已把材料放在 tmp/patrol/：
+            - todo.txt：Go 代码里的 TODO / FIXME / XXX / HACK
+            - coverage.txt：`go test -short -cover ./pkg/...` 的输出（`[no test files]`、覆盖率低的包）
+            - govulncheck.txt：依赖漏洞扫描结果
+            - open-issues.txt：所有 open issue（编号 标题 [标签]）
+            - closed-patrol.txt：以前巡检开过、已被关闭的 issue（关闭 = 人已处理或认为不需要）
+
+            找出下面四类里最值得做的问题：
+            1. test-gap：核心业务逻辑（service / domain / repository / infrastructure）缺测试或关键分支没覆盖；不报 DTO、生成代码、main。
+            2. todo：TODO / FIXME 指出的未完成功能或已知缺陷，且能写成一个独立的小 issue。
+            3. doc-drift：docs/、CLAUDE.md、README、.agents/skills 与代码不一致（接口路径、参数、配置项、表结构、流程描述）。
+            4. dependency：govulncheck 报告的、代码实际调用到的漏洞（只看 "Your code is affected" 部分）。
+
+            规则：
+            - 每一条都要自己读代码确认，写清文件路径和行号；不确定的不报。宁缺毋滥，没有值得报的就返回空数组。
+            - open-issues.txt 或 closed-patrol.txt 已经覆盖的问题不要报。
+            - 每条是一个 PR 能做完的小任务（业务代码不超过 ~500 行）。
+            把结果放进结构化输出的 `findings`（按价值从高到低，不超过上面的条数），每条：
+            - key：稳定的去重键，格式 `<kind>:<主要文件路径>:<符号或主题>`，例如 `todo:pkg/domains/post/service/post.go:ListHot`；
+              同一个问题哪天巡检都要生成同样的 key。
+            - kind：test-gap / todo / doc-drift / dependency。template：缺陷用 bug，其余用 task。
+            - title：Conventional Commits 风格、中文描述，例如 `test(post): 补充 ListHot 分页边界的单元测试`。
+            - fields：按 .github/ISSUE_TEMPLATE/<template>.yml 的 body 填写，键是各字段的 id（markdown 块除外），值是 Markdown；
+              dropdown 字段的值必须与模板 options 里的某一项完全相同；涉及 CLAUDE.md「需要人工审核的改动」路径的选「高」。
+            issue 由工作流根据你的输出创建。
+          claude_args: >-
+            --max-turns 80
+            --allowedTools "Read,Glob,Grep"
+            --json-schema '{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"key":{"type":"string"},"kind":{"type":"string","enum":["test-gap","todo","doc-drift","dependency"]},"template":{"type":"string","enum":["task","bug"]},"title":{"type":"string"},"fields":{"type":"object","additionalProperties":{"type":"string"}}},"required":["key","kind","template","title","fields"]}}},"required":["findings"]}'
+
+      # 月度预算用量记录（格式见 agent-budget.yml）。没有执行文件说明 Claude 没跑起来，不计
+      - name: Record agent usage
+        id: usage
+        if: always() && steps.claude.outcome != 'skipped'
+        env:
+          EXEC: ${{ steps.claude.outputs.execution_file }}
+          NAME: agent-usage.patrol.r${{ github.run_id }}.${{ github.run_attempt }}
+        run: |
+          f="${EXEC:-$RUNNER_TEMP/claude-execution-output.json}"
+          if [ ! -s "$f" ]; then echo "no execution file, nothing to record"; exit 0; fi
+          jq '[.[] | select(.type == "result")] | last // {} | {usage, total_cost_usd, num_turns, duration_ms}' "$f" > "$RUNNER_TEMP/agent-usage.json"
+          tokens=$(jq '[.usage // {} | .input_tokens, .output_tokens, .cache_creation_input_tokens | numbers] | add // 0' "$RUNNER_TEMP/agent-usage.json")
+          echo "name=$NAME.t$tokens" >> "$GITHUB_OUTPUT"
+      - if: always() && steps.usage.outputs.name != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.usage.outputs.name }}
+          path: ${{ runner.temp }}/agent-usage.json
+          retention-days: 90
+
+      - name: Open issues
+        if: steps.claude.outcome == 'success'
+        uses: actions/github-script@v8
+        env:
+          OUTPUT: ${{ steps.claude.outputs.structured_output }}
+          REMAINING: ${{ steps.quota.outputs.remaining }}
+        with:
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            let out = {};
+            try { out = JSON.parse(process.env.OUTPUT || '{}'); } catch {}
+            const findings = Array.isArray(out.findings) ? out.findings : [];
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const norm = s => String(s || '').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+            const keyOf = body => /<!-- agent-patrol-key: (.+?) -->/.exec(body || '')?.[1];
+
+            // 去重依据：open issue 的标题和 key；已关闭巡检 issue 的 key（listForRepo 也会返回 PR，过滤掉）
+            const all = (await github.paginate(github.rest.issues.listForRepo, { owner, repo, state: 'all', per_page: 100 }))
+              .filter(i => !i.pull_request);
+            const titles = new Set(all.filter(i => i.state === 'open').map(i => norm(i.title)));
+            const keys = new Set(all.filter(i => i.state === 'open' || (i.body || '').includes('<!-- agent-patrol -->'))
+              .map(i => keyOf(i.body)).filter(Boolean));
+
+            let quota = Number(process.env.REMAINING);
+            const rows = [];
+            for (const f of findings) {
+              const key = String(f.key || '').replace(/-->|[\r\n]/g, ' ').trim().slice(0, 200);
+              const title = String(f.title || '').trim().slice(0, 200);
+              const tplPath = `${process.env.RUNNER_TEMP}/tpl-${f.template}.json`;
+              let skip = '';
+              if (!key || !title || !fs.existsSync(tplPath)) skip = 'invalid';
+              else if (keys.has(key)) skip = 'duplicate key';
+              else if (titles.has(norm(title))) skip = 'duplicate title';
+              else if (quota <= 0) skip = 'daily quota reached';
+              if (skip) { rows.push([skip, f.kind || '', title, key]); continue; }
+
+              // 与 GitHub 渲染 issue 表单的格式一致：### 字段名 + 内容
+              const tpl = JSON.parse(fs.readFileSync(tplPath, 'utf8'));
+              const sections = (tpl.body || []).filter(b => b.type !== 'markdown' && b.id).map(b => {
+                let v = String(f.fields?.[b.id] ?? '').trim();
+                const opts = b.attributes?.options;
+                if (b.type === 'dropdown' && Array.isArray(opts) && !opts.includes(v)) v = opts[opts.length - 1];
+                return `### ${b.attributes.label}\n\n${v || '_No response_'}`;
+              });
+              const labels = [...(tpl.labels || []).filter(l => !l.startsWith('agent:')), 'agent:found'];
+              const body = [
+                `<!-- agent-patrol -->\n<!-- agent-patrol-key: ${key} -->`,
+                `> 由 agent-patrol 每日巡检生成（类别 \`${f.kind}\`，[run](${runUrl})），待人筛选：有价值就改成 \`agent:triage\` / ` +
+                  '`agent:ready` / `agent:local`，不需要就关闭（关闭后不会再报同一个 key）。',
+                ...sections,
+              ].join('\n\n').slice(0, 65000);
+              const { data: issue } = await github.rest.issues.create({ owner, repo, title, body, labels });
+              keys.add(key);
+              titles.add(norm(title));
+              quota--;
+              rows.push([`opened #${issue.number}`, f.kind || '', title, key]);
+            }
+            await core.summary.addHeading('agent-patrol', 3)
+              .addRaw(`Claude 报告 ${findings.length} 条，今天剩余名额 ${process.env.REMAINING}。`, true)
+              .addTable([[{ data: '结果', header: true }, { data: '类别', header: true }, { data: '标题', header: true }, { data: 'key', header: true }], ...rows])
+              .write();

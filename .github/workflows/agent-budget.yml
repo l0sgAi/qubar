@@ -1,0 +1,112 @@
+# agent 月度预算闸口（l0sgAi/qubar#114）。agent-dispatch / agent-fix / agent-patrol 调用 Claude 之前先调用本工作流。
+#
+# 用量记录：调用方每次 Claude 运行结束后上传一个 artifact，名字是
+#     agent-usage.<workflow>.<key>.<run_attempt>.t<tokens>
+#   tokens = input + output + cache_creation（不含 cache_read），文件内容是完整的 usage / total_cost_usd / num_turns。
+#   token 数写在名字里，统计时只列 artifact、不用下载。保留 90 天，足够覆盖一个自然月。
+# 统计窗口：本月 1 日 00:00 UTC 与仓库变量 AGENT_BUDGET_RESET_AT 两者中较晚的那个时间之后创建的记录。
+# 预算：仓库变量 AGENT_BUDGET（JSON，没写的字段用默认值）：
+#     {"dispatch": 60, "fix": 90, "patrol": 40, "tokens": 0}
+#   dispatch / fix / patrol：各自每月 Claude 运行次数上限；tokens：三者合计的 token 上限。0 表示不限。
+# 超出时 ok=false，调用方跳过 Claude，并开一个「agent 月度预算已用完」issue 提醒（每个工作流每月一个）。
+# claude-review 不计入：它是每个 PR（包括人写的 PR）的必需检查，停掉会卡住所有合并。
+# 手动 workflow_dispatch：只在 job summary 里输出本月用量，不做判断。查看 / 重置方法见 docs/ops/agent-workflow-runbook.md。
+name: agent-budget
+
+on:
+  workflow_call:
+    inputs:
+      workflow:
+        description: dispatch / fix / patrol
+        type: string
+        required: true
+    outputs:
+      ok:
+        description: 还在预算内（'true' / 'false'）
+        value: ${{ jobs.check.outputs.ok }}
+      remaining:
+        description: 该工作流本月还能运行的次数（不限时为 999）
+        value: ${{ jobs.check.outputs.remaining }}
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      ok: ${{ steps.check.outputs.ok }}
+      remaining: ${{ steps.check.outputs.remaining }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WORKFLOW: ${{ inputs.workflow }}
+          BUDGET: ${{ vars.AGENT_BUDGET }}
+          RESET_AT: ${{ vars.AGENT_BUDGET_RESET_AT }}
+          RUNBOOK: ${{ github.server_url }}/${{ github.repository }}/blob/develop/docs/ops/agent-workflow-runbook.md
+        run: |
+          set -euo pipefail
+          # AGENT_BUDGET 不是合法 JSON 时 jq 报错、job 失败，调用方随之跳过（fail closed）
+          limits=$(jq -c '{dispatch: 60, fix: 90, patrol: 40, tokens: 0} + (. // {})' <<< "${BUDGET:-null}")
+          month=$(date -u +%Y-%m)
+          since="${month}-01T00:00:00Z"
+          if [ -n "${RESET_AT:-}" ]; then
+            reset=$(date -u -d "$RESET_AT" +%Y-%m-%dT%H:%M:%SZ)
+            if [[ "$reset" > "$since" ]]; then since=$reset; fi
+          fi
+
+          # artifact 列表按创建时间倒序：某页最旧的一条早于 since，或不满一页，就不用再往后翻
+          records='[]'
+          for page in $(seq 1 50); do
+            batch=$(gh api "repos/$REPO/actions/artifacts?per_page=100&page=$page" --jq '[.artifacts[] | {name, created_at}]')
+            records=$(jq -c --arg since "$since" --argjson b "$batch" \
+              '. + [$b[] | select(.created_at >= $since and (.name | startswith("agent-usage.")))]' <<< "$records")
+            if [ "$(jq -r --arg since "$since" 'length < 100 or .[-1].created_at < $since' <<< "$batch")" = true ]; then break; fi
+          done
+          stats=$(jq -c 'map(.name | split(".") | {wf: .[1], tokens: (.[-1] | ltrimstr("t") | tonumber? // 0)})
+            | {runs: (group_by(.wf) | map({key: .[0].wf, value: length}) | from_entries), tokens: (map(.tokens) | add // 0)}' <<< "$records")
+          tokens=$(jq -r .tokens <<< "$stats")
+          token_limit=$(jq -r .tokens <<< "$limits")
+
+          ok=true
+          remaining=999
+          if [ -n "${WORKFLOW:-}" ]; then
+            limit=$(jq -r --arg w "$WORKFLOW" '.[$w] // 0' <<< "$limits")
+            used=$(jq -r --arg w "$WORKFLOW" '.runs[$w] // 0' <<< "$stats")
+            if [ "$limit" -gt 0 ]; then
+              remaining=$(( limit - used ))
+              if [ "$remaining" -le 0 ]; then ok=false; remaining=0; fi
+            fi
+            if [ "$token_limit" -gt 0 ] && [ "$tokens" -ge "$token_limit" ]; then ok=false; remaining=0; fi
+          fi
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+          echo "remaining=$remaining" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### agent 月度预算 ${month}"
+            echo
+            echo "统计起点 \`${since}\`；调用方 \`${WORKFLOW:-手动查看}\`；结论 ok=\`${ok}\`（0 表示不限）"
+            echo
+            echo "| 项目 | 本月用量 | 上限 |"
+            echo "|---|---|---|"
+            for w in dispatch fix patrol; do
+              echo "| $w 运行次数 | $(jq -r --arg w "$w" '.runs[$w] // 0' <<< "$stats") | $(jq -r --arg w "$w" '.[$w] // 0' <<< "$limits") |"
+            done
+            echo "| token 合计（三者） | $tokens | $token_limit |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$ok" = true ]; then exit 0; fi
+          echo "::warning::agent budget exhausted: $WORKFLOW $month"
+          title="agent 月度预算已用完：${WORKFLOW} ${month}"
+          exists=$(gh issue list -R "$REPO" --state open --search "author:app/github-actions" --limit 300 --json title \
+            | jq --arg t "$title" 'map(select(.title == $t)) | length')
+          if [ "$exists" -eq 0 ]; then
+            body="\`${WORKFLOW}\` 本月（${month}，统计起点 \`${since}\`）已达到预算，停止自动运行，直到下个月或预算被重置。"
+            body+=$'\n\n'"本月运行次数：$(jq -c .runs <<< "$stats")；token 合计：${tokens}；预算：\`${limits}\`。"
+            body+=$'\n\n'"查看与重置方法见 [runbook]($RUNBOOK)「月度预算」一节。处理完后手动关闭本 issue。"
+            gh issue create -R "$REPO" --title "$title" --body "$body"
+          fi
