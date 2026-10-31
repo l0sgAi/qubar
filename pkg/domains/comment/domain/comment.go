@@ -77,9 +77,13 @@ var (
 	ErrRootCommentNotFound = errors.New("root comment not found")
 	// ErrRootCommentMismatch 根评论不属于该帖子。
 	ErrRootCommentMismatch = errors.New("root comment does not belong to this post")
+	// ErrRootCommentNotTopLevel root_id 指向的不是顶层评论（是一条回复）。
+	ErrRootCommentNotTopLevel = errors.New("root comment is not a top-level comment")
+	// ErrReplyTargetWithoutRoot 传了 reply_to_id 却没有 root_id（顶层评论不允许带 reply_to_id）。
+	ErrReplyTargetWithoutRoot = errors.New("reply_to_id requires root_id")
 	// ErrReplyTargetNotFound 被回复评论未找到。
 	ErrReplyTargetNotFound = errors.New("reply target comment not found")
-	// ErrReplyTargetNotInThread 被回复评论不在同一楼层。
+	// ErrReplyTargetNotInThread 被回复评论不在同一楼层（或不属于该帖子）。
 	ErrReplyTargetNotInThread = errors.New("reply target does not belong to the same thread")
 	// ErrEmptyContent 评论内容为空（清洗后）。
 	ErrEmptyContent = errors.New("comment content is empty")
