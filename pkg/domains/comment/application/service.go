@@ -277,8 +277,9 @@ func (s *commentServiceImpl) SetAgentTrigger(t AgentReplyTrigger) { s.agentTrigg
 //
 // 与旧 controller.CreateComment 行为一致：
 //  1. 校验帖子存在 + 状态(已发布) + 未锁定；
-//  2. 如果是回复，校验 root_id 属于同一帖子，校验 reply_to_id 在同一楼层，获取被回复用户ID；
-//  3. 清洗 content（SanitizeForPg，剔除 NULL 字节等非法 UTF8）；
+//  2. 清洗 content（SanitizeForPg，剔除 NULL 字节等非法 UTF8）；
+//  3. 取根评论 / 被回复评论，经 domain.NewRootComment / NewReply 校验盖楼不变量
+//     （root_id 须为同帖顶层评论、reply_to_id 须伴随 root_id 且在该楼内）并推导被回复用户ID；
 //  4. 创建评论（事务内：插入评论 + 如为回复则递增根评论 reply_count）；
 //  5. 实时递增帖子评论计数（Redis Hash 实时 + 帖子统计事件批量落库）。
 func (s *commentServiceImpl) CreateComment(ctx context.Context, userID uuid.UUID, input CreateCommentInput) (uuid.UUID, error) {
@@ -307,69 +308,21 @@ func (s *commentServiceImpl) CreateComment(ctx context.Context, userID uuid.UUID
 		return uuid.Nil, domain.ErrPostLocked
 	}
 
-	// 2. 如果是回复，校验 root_id 和 reply_to_id，并获取被回复用户ID
-	var replyToUserID *uuid.UUID
-	if input.RootID != nil {
-		rootID := *input.RootID
-		// 校验根评论存在且属于同一帖子
-		rootComment, err := s.repo.GetByID(ctx, rootID)
-		if err != nil {
-			if errors.Is(err, domain.ErrCommentNotFound) {
-				return uuid.Nil, domain.ErrRootCommentNotFound
-			}
-			return uuid.Nil, err
-		}
-		if rootComment.PostID != input.PostID {
-			return uuid.Nil, domain.ErrRootCommentMismatch
-		}
-
-		// 如果指定了 reply_to_id，校验被回复的评论存在并获取被回复用户ID
-		if input.ReplyToID != nil {
-			replyToComment, err := s.repo.GetByID(ctx, *input.ReplyToID)
-			if err != nil {
-				if errors.Is(err, domain.ErrCommentNotFound) {
-					return uuid.Nil, domain.ErrReplyTargetNotFound
-				}
-				return uuid.Nil, err
-			}
-			// 被回复的评论必须属于同一个根评论下
-			// (要么是被回复评论本身就是根评论，要么其 root_id 等于当前根评论ID)
-			valid := replyToComment.ID == rootID ||
-				(replyToComment.RootID != nil && *replyToComment.RootID == rootID)
-			if !valid {
-				return uuid.Nil, domain.ErrReplyTargetNotInThread
-			}
-			// 获取被回复用户ID
-			uid := replyToComment.UserID
-			replyToUserID = &uid
-		} else {
-			// 未指定 reply_to_id = 直接回复根评论：被回复人即根评论作者。
-			// 不置 nil 而解析出作者，回复通知（reply_comment）才有接收人，
-			// 否则该评论既不是顶层也不是回复，通知被静默丢弃（docs/notice-design.md）。
-			uid := rootComment.UserID
-			replyToUserID = &uid
-		}
-	}
-
-	// 3. 清洗 PostgreSQL text 字段不接受的字符（NULL 字节 U+0000 及其它无效
+	// 2. 清洗 PostgreSQL text 字段不接受的字符（NULL 字节 U+0000 及其它无效
 	// UTF-8 字节序列），避免写入时报 "invalid byte sequence for encoding UTF8"。
 	content := utils.SanitizeForPg(input.Content)
 	if content == "" {
 		return uuid.Nil, domain.ErrEmptyContent
 	}
 
-	// 4. 构建评论数据并创建
-	comment := &domain.Comment{
-		PostID:        input.PostID,
-		UserID:        userID,
-		RootID:        input.RootID,
-		ReplyToID:     input.ReplyToID,
-		ReplyToUserID: replyToUserID,
-		Content:       content,
-		ExtraData:     input.ExtraData,
-		Status:        domain.CommentStatusNormal,
-		Deleted:       0,
+	// 3. 取楼层数据并经领域工厂构造评论（盖楼不变量见 domain.NewReply）
+	comment, err := s.buildComment(ctx, userID, input, content)
+	if err != nil {
+		return uuid.Nil, err
 	}
+	replyToUserID := comment.ReplyToUserID
+
+	// 4. 创建评论（事务内：插入评论 + 如为回复则递增根评论 reply_count）
 	if err := s.repo.Create(ctx, comment); err != nil {
 		return uuid.Nil, err
 	}
@@ -408,6 +361,45 @@ func (s *commentServiceImpl) CreateComment(ctx context.Context, userID uuid.UUID
 	}
 
 	return comment.ID, nil
+}
+
+// buildComment 按入参取楼层数据，交给领域工厂构造评论（不变量校验在 domain，这里只取数）。
+//
+// 只传 reply_to_id 不传 root_id 直接拒绝（不推导所属楼，避免顶层评论带任意 reply_to_id）。
+// 根评论 / 被回复评论不存在或已删除分别映射为 ErrRootCommentNotFound / ErrReplyTargetNotFound。
+func (s *commentServiceImpl) buildComment(ctx context.Context, userID uuid.UUID, input CreateCommentInput, content string) (*domain.Comment, error) {
+	params := domain.NewCommentParams{
+		PostID:    input.PostID,
+		UserID:    userID,
+		Content:   content,
+		ExtraData: input.ExtraData,
+	}
+	if input.RootID == nil {
+		if input.ReplyToID != nil {
+			return nil, domain.ErrReplyTargetWithoutRoot
+		}
+		return domain.NewRootComment(params), nil
+	}
+
+	root, err := s.repo.GetByID(ctx, *input.RootID)
+	if err != nil {
+		if errors.Is(err, domain.ErrCommentNotFound) {
+			return nil, domain.ErrRootCommentNotFound
+		}
+		return nil, err
+	}
+	var replyTo *domain.Comment
+	if input.ReplyToID != nil {
+		if *input.ReplyToID == root.ID {
+			replyTo = root
+		} else if replyTo, err = s.repo.GetByID(ctx, *input.ReplyToID); err != nil {
+			if errors.Is(err, domain.ErrCommentNotFound) {
+				return nil, domain.ErrReplyTargetNotFound
+			}
+			return nil, err
+		}
+	}
+	return domain.NewReply(params, root, replyTo)
 }
 
 // GetRootComments 获取帖子的顶层评论列表（游标分页）。
