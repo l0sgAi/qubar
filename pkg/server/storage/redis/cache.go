@@ -280,67 +280,24 @@ func GetCircleStatistics(circleID uuid.UUID) (*CircleStatistics, error) {
 	return stats, nil
 }
 
-// CircleStatisticsExists 检查圈子统计信息Hash是否存在（所有字段都存在才返回true）
+// CircleStatisticsExists 检查圈子统计 Hash 是否已回种（以 member_count 字段为准，见 circleStatsSeededField）。
 func CircleStatisticsExists(circleID uuid.UUID) (bool, error) {
-	key := GetCircleStatsKey(circleID)
-	exists, err := Client.Exists(ctx, key).Result()
-	if err != nil {
-		return false, err
-	}
-	return exists > 0, nil
+	return Client.HExists(ctx, GetCircleStatsKey(circleID), circleStatsSeededField).Result()
 }
 
-// IncrementCircleMemberCount 增加圈子成员数量（原子操作）
+// IncrementCircleMemberCount 增加圈子成员数量（原子操作；Hash 未回种时不写，见 incrCircleStatIfSeededScript）
 func IncrementCircleMemberCount(circleID uuid.UUID) error {
-	key := GetCircleStatsKey(circleID)
-	pipe := Client.Pipeline()
-	pipe.HIncrBy(ctx, key, "member_count", 1)
-	pipe.Expire(ctx, key, 24*time.Hour)
-
-	_, err := pipe.Exec(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to increment member count: %w", err)
-	}
-	return nil
+	return incrCircleStat(circleID, "member_count", 1)
 }
 
-// DecrementCircleMemberCount 减少圈子成员数量（原子操作）
+// DecrementCircleMemberCount 减少圈子成员数量（原子操作，结果不小于 0；Hash 未回种时不写）
 func DecrementCircleMemberCount(circleID uuid.UUID) error {
-	key := GetCircleStatsKey(circleID)
-	pipe := Client.Pipeline()
-	decrCmd := pipe.HIncrBy(ctx, key, "member_count", -1)
-	pipe.Expire(ctx, key, 24*time.Hour)
-
-	_, err := pipe.Exec(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to decrement member count: %w", err)
-	}
-
-	// 检查结果，确保不会小于0
-	newCount := decrCmd.Val()
-	if newCount < 0 {
-		// 如果小于0，重置为0
-		err = Client.HSet(ctx, key, "member_count", 0).Err()
-		if err != nil {
-			return fmt.Errorf("failed to reset negative member count: %w", err)
-		}
-	}
-
-	return nil
+	return incrCircleStat(circleID, "member_count", -1)
 }
 
-// IncrementCirclePostCount 增加圈子帖子数量（原子操作）
+// IncrementCirclePostCount 增加圈子帖子数量（原子操作；Hash 未回种时不写）
 func IncrementCirclePostCount(circleID uuid.UUID) error {
-	key := GetCircleStatsKey(circleID)
-	pipe := Client.Pipeline()
-	pipe.HIncrBy(ctx, key, "post_count", 1)
-	pipe.Expire(ctx, key, 24*time.Hour)
-
-	_, err := pipe.Exec(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to increment post count: %w", err)
-	}
-	return nil
+	return incrCircleStat(circleID, "post_count", 1)
 }
 
 // DecrementCirclePostCount 减少圈子帖子数量（原子操作）
