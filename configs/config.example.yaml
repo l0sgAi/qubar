@@ -228,6 +228,10 @@ aiagent:
     scan_interval_sec: 300       # 扫描周期(秒)，默认 300
     max_agents_per_target: 1     # 同一帖子 / 评论最多被几个机器人自动回复（软限），默认 1
     max_candidates_per_run: 20   # 每轮每个机器人每种目标按热度取的候选上限，默认 20
+    hot_circle_id: ""                  # 全局机器人自动发帖的 hot 圈 ID（UUID）；留空 = 自动发帖不启用（#101）
+    default_hot_topics:          # 平台默认热点搜索关键词（全局机器人 auto_post.topics 为空时使用；都为空则不发帖）
+      - "今日热点"
+      - "科技新闻"
 
 # 安全相关配置
 security:

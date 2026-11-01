@@ -1,5 +1,5 @@
 // conf_aiagent_autonomy.go：配置段 aiagent.autonomy（机器人自主行为的平台总开关与上限），
-// 作为 AiAgent 的子段聚合进 AppConfig。设计见 docs/agent-auto-reply-design.md。
+// 作为 AiAgent 的子段聚合进 AppConfig。设计见 docs/agent-auto-reply-design.md（自动回复）、#101（自动发帖）。
 
 package conf
 
@@ -20,6 +20,10 @@ type AiAgentAutonomy struct {
 	MaxAgentsPerTarget int `mapstructure:"max_agents_per_target" json:"max_agents_per_target" yaml:"max_agents_per_target"`
 	// MaxCandidatesPerRun 每轮每个机器人每种目标（帖子 / 评论）的候选上限（按热度取 top-N），<=0 兜底 20
 	MaxCandidatesPerRun int `mapstructure:"max_candidates_per_run" json:"max_candidates_per_run" yaml:"max_candidates_per_run"`
+	// HotCircleID 全局机器人自动发帖的目标 hot 圈 ID（UUID 字符串，#101）；为空或非法则自动发帖整体不启用
+	HotCircleID string `mapstructure:"hot_circle_id" json:"hot_circle_id" yaml:"hot_circle_id"`
+	// DefaultHotTopics 平台默认热点搜索关键词：全局机器人 auto_post.topics 为空时使用，两者都空则不发帖
+	DefaultHotTopics []string `mapstructure:"default_hot_topics" json:"default_hot_topics" yaml:"default_hot_topics"`
 }
 
 // WithDefaults 返回填好默认值的副本（<=0 字段替换为默认值）。

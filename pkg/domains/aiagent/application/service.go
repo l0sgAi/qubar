@@ -98,11 +98,13 @@ type CreateAgentInput struct {
 // 传了 auto_reply 即整体替换该子对象，未传的子对象（含其他自主行为）保持不变。
 type AutoConfigInput struct {
 	AutoReply *domain.AutoReplyConfig `json:"auto_reply"`
+	AutoPost  *domain.AutoPostConfig  `json:"auto_post"` // 仅全局机器人（圈内机器人接口不接收）
 }
 
 // AutoConfigVO 自主行为配置视图（未配置的子对象回显零值，即 enabled=false）。
 type AutoConfigVO struct {
 	AutoReply domain.AutoReplyConfig `json:"auto_reply"`
+	AutoPost  domain.AutoPostConfig  `json:"auto_post"`
 }
 
 // UpdateAgentInput 更新机器人入参（指针字段，部分更新语义，同 user.UpdateProfileInput）。
@@ -527,6 +529,17 @@ func toVO(a *domain.AiAgent) AgentVO {
 	if vo.AutoConfig.AutoReply.Targets == nil {
 		vo.AutoConfig.AutoReply.Targets = []string{}
 	}
+	if ap, err := a.AutoConfig.AutoPost(); err == nil {
+		vo.AutoConfig.AutoPost = ap
+	} else {
+		logger.Log.Warn(fmt.Sprintf("agent %s: invalid auto_config.auto_post ignored: %s", a.ID, err.Error()))
+	}
+	if vo.AutoConfig.AutoPost.ActiveHours == nil {
+		vo.AutoConfig.AutoPost.ActiveHours = []int{}
+	}
+	if vo.AutoConfig.AutoPost.Topics == nil {
+		vo.AutoConfig.AutoPost.Topics = []string{}
+	}
 	return vo
 }
 
@@ -589,13 +602,9 @@ func validateAndBuildAgent(ctx context.Context, input CreateAgentInput) (*domain
 			return nil, err
 		}
 	}
-	autoConfig := domain.AutoConfigJSON{}
-	if input.AutoConfig != nil && input.AutoConfig.AutoReply != nil {
-		raw, err := buildAutoReply(*input.AutoConfig.AutoReply)
-		if err != nil {
-			return nil, err
-		}
-		autoConfig[domain.AutoConfigKeyAutoReply] = raw
+	autoConfig, err := buildAutoConfigPatch(input.AutoConfig)
+	if err != nil {
+		return nil, err
 	}
 
 	// api_key 加密（自部署免鉴权网关可免 key）
@@ -625,7 +634,7 @@ func validateAndBuildAgent(ctx context.Context, input CreateAgentInput) (*domain
 		TriggerKeywords:   toKeywords(input.TriggerKeywords),
 		MaxRepliesPerHour: input.MaxRepliesPerHour,
 		MinIntervalSec:    input.MinIntervalSec,
-		AutoConfig:        autoConfig,
+		AutoConfig:        domain.AutoConfigJSON(autoConfig),
 	}
 	// 触发模式关键词默认值补齐
 	if input.TriggerKeywords == nil {
@@ -748,13 +757,16 @@ func buildAgentUpdateFields(ctx context.Context, repo domain.AgentRepository, ag
 		}
 		fields["status"] = *input.Status
 	}
-	if input.AutoConfig != nil && input.AutoConfig.AutoReply != nil {
-		raw, err := buildAutoReply(*input.AutoConfig.AutoReply)
-		if err != nil {
-			return nil, err
-		}
-		// 顶层 key 合并补丁：只替换 auto_reply，其他自主行为子对象保持不变。
-		fields["auto_config"] = domain.AutoConfigPatch{domain.AutoConfigKeyAutoReply: raw}
+	if scope != uuid.Nil && input.AutoConfig != nil && input.AutoConfig.AutoPost != nil {
+		return nil, errAutoPostGlobalOnly // 圈内机器人自动发帖见 #102
+	}
+	patch, err := buildAutoConfigPatch(input.AutoConfig)
+	if err != nil {
+		return nil, err
+	}
+	if len(patch) > 0 {
+		// 顶层 key 合并补丁：只替换传入的子对象，其他自主行为子对象保持不变。
+		fields["auto_config"] = patch
 	}
 	return fields, nil
 }
@@ -916,6 +928,74 @@ func buildAutoReply(cfg domain.AutoReplyConfig) (json.RawMessage, error) {
 		if seen[domain.AutoReplyTargetComment] && cfg.CommentLikeMin < 1 && cfg.CommentReplyMin < 1 {
 			return nil, errInvalidAutoConfig
 		}
+	}
+	return json.Marshal(cfg)
+}
+
+// buildAutoConfigPatch 校验并序列化传入的自主行为子对象（未传的子对象不出现在补丁里）。
+func buildAutoConfigPatch(in *AutoConfigInput) (domain.AutoConfigPatch, error) {
+	patch := domain.AutoConfigPatch{}
+	if in == nil {
+		return patch, nil
+	}
+	if in.AutoReply != nil {
+		raw, err := buildAutoReply(*in.AutoReply)
+		if err != nil {
+			return nil, err
+		}
+		patch[domain.AutoConfigKeyAutoReply] = raw
+	}
+	if in.AutoPost != nil {
+		raw, err := buildAutoPost(*in.AutoPost)
+		if err != nil {
+			return nil, err
+		}
+		patch[domain.AutoConfigKeyAutoPost] = raw
+	}
+	return patch, nil
+}
+
+// 自动发帖配置取值范围。
+const (
+	autoPostMinInterval   = 10    // 最小发帖间隔下限(分钟)，防误配烧 token
+	autoPostMaxInterval   = 10080 // 最小发帖间隔上限(分钟)，7 天
+	autoPostMaxDaily      = 48    // 每日上限的合法范围上界
+	autoPostMaxTopics     = 10    // 关键词个数上限
+	autoPostMaxTopicChars = 50    // 单个关键词字符上限
+)
+
+// buildAutoPost 校验自动发帖配置并序列化为 auto_config.auto_post 子对象。
+//
+// 规则：topics 去空白、去重，最多 10 个、每个 1-50 字符；active_hours 为空或 [start, end]
+// （0 <= start <= 23，1 <= end <= 24，start != end，start > end 表示跨零点）；
+// require_review 本期只能为 false（审核流程见 #104）；启用时 interval_min 10-10080、daily_max 1-48，
+// 未启用时两者只要求在 [0, 上界] 内。
+func buildAutoPost(cfg domain.AutoPostConfig) (json.RawMessage, error) {
+	seen := make(map[string]bool, len(cfg.Topics))
+	topics := make([]string, 0, len(cfg.Topics))
+	for _, t := range cfg.Topics {
+		t = utils.SanitizeForPg(strings.TrimSpace(t))
+		if n := len([]rune(t)); n == 0 || n > autoPostMaxTopicChars {
+			return nil, errInvalidAutoPostConfig
+		}
+		if !seen[t] {
+			seen[t] = true
+			topics = append(topics, t)
+		}
+	}
+	if len(topics) > autoPostMaxTopics || cfg.RequireReview {
+		return nil, errInvalidAutoPostConfig
+	}
+	cfg.Topics = topics
+	if h := cfg.ActiveHours; len(h) != 0 &&
+		(len(h) != 2 || h[0] < 0 || h[0] > 23 || h[1] < 1 || h[1] > 24 || h[0] == h[1]) {
+		return nil, errInvalidAutoPostConfig
+	}
+	if cfg.IntervalMin < 0 || cfg.IntervalMin > autoPostMaxInterval || cfg.DailyMax < 0 || cfg.DailyMax > autoPostMaxDaily {
+		return nil, errInvalidAutoPostConfig
+	}
+	if cfg.Enabled && (cfg.IntervalMin < autoPostMinInterval || cfg.DailyMax < 1) {
+		return nil, errInvalidAutoPostConfig
 	}
 	return json.Marshal(cfg)
 }
