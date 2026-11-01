@@ -32,6 +32,21 @@
 - 两种模式的 PR 闸口完全相同；区别只在谁写代码、出错谁修（Actions：`agent-fix`；本地：app 的 PR Auto-fix）。
 - **开发栈 `qubar-dev` 是共享的**：多个 session 并行时，任何 session 都不能 `make dev-reset` / `make dev-down`。
 
+### `claude-review` 怎么审（#189）
+
+按三个维度审查，每个维度给出 `pass` / `fail` / `unverified`，PR 评论开头是三个维度的结论表：
+
+| 维度 | 看什么 |
+|---|---|
+| 需求正确性（`req`） | 对照关联 issue（PR 描述里的 `Closes #N`，工作流预先收集到 `tmp/review/issues.md`）逐条核对验收标准；行为语义、范围外改动、~500 行 |
+| 实现一致性（`impl`） | 测试是否覆盖每条验收标准和关键分支、断言是否检查预期输出；可对改动的包跑已有单测（`go test`，不跑集成测试）；接口契约与 API 文档 |
+| 系统层面正确性（`sys`） | Grep 改动的函数 / Redis key / Lua / 事件格式 / 表的其他使用方，判断对老功能的影响；一致性、分布式（幂等、多实例）、性能、分层与 qubar 规则、设计文档、安全 |
+
+- 任一维度 `fail` 就记 `claude-review` failure（即使模型给的 `verdict` 是 pass）。
+- `unverified` 不阻塞：表示这里核实不了（没有关联 issue、依赖开发栈没有的 CDC / ES / 外部服务等），合并前由人看评论里「未验证」一节。
+- PR 描述没写 `Closes #N` 时需求维度必然是 `unverified`，所以 PR 一定要关联 issue。
+- 审查能执行 PR 里的测试代码；只审同仓库 PR（fork PR 不审），与 `agent-fix` 跑 `make` 的信任边界相同。
+
 ## 排障
 
 ### `claude-review` 是红的
@@ -44,7 +59,7 @@
 | `skipped: claude-review.yml is not on main yet` / `differs from main` | 本 PR 改了 `claude-review.yml`，或 develop 上的版本还没发版到 main。claude-code-action 只运行与 main 完全一致的工作流文件，属预期；规则要求它为必需检查时需要 admin 越过规则合并 |
 | `Claude run failed, see run log` | 打开 run 看 `review` job。动作默认隐藏完整输出，看不到原因时用下文的诊断方法 |
 | `Claude run failed, see run log`，日志里有 `Workflow initiated by non-human actor` | 触发者是 bot、且不在 `allowed_bots` 里（#122）。`claude-review` / `agent-fix` 已放行 `claude`、`github-actions`；出现别的 bot 名字时按需加入，不要用 `'*'`。临时绕过：维护者手动 `gh workflow run claude-review.yml -R l0sgAi/qubar --ref develop -f pr=<N>`（触发者是人） |
-| `N blocking issue(s)` | 真实审查结论。`agent/` 分支会自动交给 `agent-fix`（最多 3 次） |
+| `N blocking issue(s) · req=… impl=… sys=…` | 真实审查结论，`fail` 的维度就是问题所在，详情看 PR 里的审查评论。`agent/` 分支会自动交给 `agent-fix`（最多 3 次） |
 
 ### 看不到 Claude 的报错原因
 
