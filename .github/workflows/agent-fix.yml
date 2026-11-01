@@ -6,6 +6,8 @@
 #
 # 每个 PR 最多自动修 3 次（按 PR 上的 <!-- agent-fix --> 标记计数），超过后打 hold（关掉 auto-merge）并请人处理。
 # 安全：会 checkout 并执行 PR 分支代码（make verify），只对有写权限的人 / claude[bot] 才能推的同仓库分支生效。
+# 月度预算（#114）：prepare 之前先过 agent-budget；超出预算时不修复、不计入 3 次，在 PR 上留言请人处理（同一 head 只留一次）。
+#   fix 结束后上传 agent-usage.* artifact 记录用量。
 name: agent-fix
 
 on:
@@ -33,8 +35,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  prepare:
+  budget:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure'
+    uses: ./.github/workflows/agent-budget.yml
+    permissions:
+      actions: read
+      issues: write
+    with:
+      workflow: fix
+
+  prepare:
+    needs: budget
     runs-on: ubuntu-latest
     outputs:
       number: ${{ steps.pr.outputs.number }}
@@ -47,6 +58,7 @@ jobs:
         env:
           PR_INPUT: ${{ inputs.pr }}
           REASON_INPUT: ${{ inputs.reason }}
+          BUDGET_OK: ${{ needs.budget.outputs.ok }}
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -73,6 +85,15 @@ jobs:
                   { id: pr.node_id }).catch(e => core.info(`disable auto-merge: ${e.message}`));
                 await github.rest.issues.createComment({ owner, repo, issue_number: number,
                   body: `agent-fix：自动修复已达 3 次上限（本次原因：${reason}），已打 \`hold\` 关闭 auto-merge，需要人工处理。` });
+              }
+              return;
+            }
+            // 超出月度预算：不修复、不计入次数（同一 head 只提醒一次）
+            if (process.env.BUDGET_OK !== 'true') {
+              const marker = `<!-- agent-fix-budget:${pr.head.sha} -->`;
+              if (!comments.some(c => (c.body || '').includes(marker))) {
+                await github.rest.issues.createComment({ owner, repo, issue_number: number,
+                  body: `${marker}\nagent-fix：本月 agent 预算已用完，这次（原因：\`${reason}\`）没有自动修复，需要人工处理或调整预算（见 docs/ops/agent-workflow-runbook.md「月度预算」）。` });
               }
               return;
             }
@@ -129,6 +150,26 @@ jobs:
             --max-turns 120
             --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,Bash(make:*),Bash(go:*),Bash(gofmt:*),Bash(git:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr edit:*),Bash(gh run view:*),Bash(gh api repos/${{ github.repository }}/pulls/*)"
             --json-schema '{"type":"object","properties":{"fixed":{"type":"boolean"},"note":{"type":"string"}},"required":["fixed","note"]}'
+
+      # 月度预算用量记录（格式见 agent-budget.yml）。没有执行文件说明 Claude 没跑起来，不计
+      - name: Record agent usage
+        id: usage
+        if: always() && steps.claude.outcome != 'skipped'
+        env:
+          EXEC: ${{ steps.claude.outputs.execution_file }}
+          NAME: agent-usage.fix.p${{ needs.prepare.outputs.number }}.${{ github.run_attempt }}
+        run: |
+          f="${EXEC:-$RUNNER_TEMP/claude-execution-output.json}"
+          if [ ! -s "$f" ]; then echo "no execution file, nothing to record"; exit 0; fi
+          jq '[.[] | select(.type == "result")] | last // {} | {usage, total_cost_usd, num_turns, duration_ms}' "$f" > "$RUNNER_TEMP/agent-usage.json"
+          tokens=$(jq '[.usage // {} | .input_tokens, .output_tokens, .cache_creation_input_tokens | numbers] | add // 0' "$RUNNER_TEMP/agent-usage.json")
+          echo "name=$NAME.t$tokens" >> "$GITHUB_OUTPUT"
+      - if: always() && steps.usage.outputs.name != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.usage.outputs.name }}
+          path: ${{ runner.temp }}/agent-usage.json
+          retention-days: 90
 
       - name: Post note
         if: always()

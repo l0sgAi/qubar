@@ -246,11 +246,7 @@ func TestAcceptInvite_ConcurrentUsersCappedByMaxUses(t *testing.T) {
 	t.Parallel()
 	f := newInviteFixture(t)
 	link := f.createLink(t, intPtr(3))
-	// 预热统计 Hash：冷 Hash 下并发入圈的「DB 恢复覆盖并发 HINCRBY」是 incrMemberCountWithRecovery
-	// 既有的软计数竞态（与邀请无关），这里只验证邀请次数与入圈人数。
-	if err := f.stats.SetStats(t.Context(), f.circleID, &domain.CircleStatistics{MemberCount: 1}); err != nil {
-		t.Fatalf("warm stats: %v", err)
-	}
+	// 统计 Hash 保持冷态：并发入圈各自从 DB 回种也不覆盖彼此的 HINCRBY（#180 回归）。
 	users := make([]uuid.UUID, 10)
 	for i := range users {
 		users[i] = f.user(t)

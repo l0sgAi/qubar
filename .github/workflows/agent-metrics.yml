@@ -1,0 +1,150 @@
+# agent 工作流效果指标（l0sgAi/qubar#114）：只用 gh api + jq，按月统计，结果写进 job summary。
+#   1. issue → 合入周期：当月合入 develop 的 PR，从关联 issue（正文 Closes / Fixes / Resolves #N 或 agent/<N>- 分支名）
+#      创建到 PR 合入的天数；按模式（actions / local / dependabot / human）给中位数、平均、P90。
+#      develop 不是默认分支，GitHub 不会建立 closingIssuesReferences 关联，所以自己解析。
+#   2. 每个 PR 的人工介入：人工提交（非合并提交、作者是真人账号且没有 Co-Authored-By: Claude）、人工评论（不含 /approve）、
+#      /approve 次数、人工 review 次数。本地 session 的提交挂在维护者账号下，靠 Co-Authored-By: Claude 区分。
+#   3. agent:found 采纳率：当月新建、时间线里打过 agent:found 的 issue 中，后来被打上 agent:ready（以及 agent:local）的比例，
+#      按开 issue 的账号分来源（github-actions = agent-patrol）。按创建月份统计，月底开的 issue 可能还没筛选，后续重跑数字会变。
+#   4. 当月 agent 用量（agent-budget 的 artifact 记录）。
+# 触发：每月 1 日统计上个月（schedule 只在 main 上生效）；手动 workflow_dispatch 可指定月份。
+name: agent-metrics
+
+on:
+  schedule:
+    - cron: "37 2 1 * *" # 每月 1 日 02:37 UTC
+  workflow_dispatch:
+    inputs:
+      month:
+        description: 统计月份 YYYY-MM（留空 = 上个月）
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+  actions: read
+
+jobs:
+  metrics:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          MONTH: ${{ inputs.month }}
+        run: |
+          set -euo pipefail
+          MONTH=${MONTH:-$(date -u -d "$(date -u +%Y-%m-01) -1 day" +%Y-%m)}
+          if ! [[ "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then echo "::error::month must be YYYY-MM: $MONTH"; exit 1; fi
+          y=${MONTH%-*}
+          m=$((10#${MONTH#*-}))
+          if [ "$m" -eq 12 ]; then next="$((y + 1))-01"; else next=$(printf '%d-%02d' "$y" $((m + 1))); fi
+          since="${MONTH}-01T00:00:00Z"
+          before="${next}-01T00:00:00Z"
+          search() { # $1 = 搜索条件，$2 = 节点字段；输出 JSON 数组
+            gh api graphql --paginate -F q="repo:$REPO $1" -f query="
+              query(\$q: String!, \$endCursor: String) {
+                search(query: \$q, type: ISSUE, first: 25, after: \$endCursor) {
+                  pageInfo { hasNextPage endCursor }
+                  nodes { $2 }
+                }
+              }" --jq '.data.search.nodes[]' | jq -s -c .
+          }
+
+          # 1) 本月合入 develop 的 PR（develop 不是默认分支，Closes #N 不会建立关联，按正文 / agent/<N>- 分支名解析 issue）
+          prs=$(search "is:pr is:merged base:develop merged:$since..$before" '... on PullRequest {
+            number headRefName mergedAt body
+            commits(first: 100) { nodes { commit { message parents { totalCount } author { user { login } } } } }
+            comments(first: 100) { nodes { author { __typename } body } }
+            reviews(first: 100) { nodes { author { __typename } } } }')
+          # 关联 issue：正文里的 Closes / Fixes / Resolves #N，以及 agent/<N>- 分支名
+          refs='def refs: ((.body // "") | [scan("(?i)\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#(\\d+)")[0]]) + [(.headRefName | capture("^agent/(?<n>\\d+)-").n)?];'
+          issue_numbers=$(jq -r "$refs"' [.[] | refs[]] | unique | .[]' <<< "$prs")
+          issues='{}'
+          for n in $issue_numbers; do
+            created=$(gh api "repos/$REPO/issues/$n" --jq .created_at 2>/dev/null || true)
+            if [ -n "$created" ]; then issues=$(jq -c --arg n "$n" --arg c "$created" '. + {($n): $c}' <<< "$issues"); fi
+          done
+          rows=$(jq -c --argjson issues "$issues" "$refs"'
+            def bot: . == null or (.user == null) or (.user.login | endswith("[bot]"));
+            map(. as $pr
+              | [.commits.nodes[].commit | select(.parents.totalCount == 1)
+                 | . + {claude: (.message | test("co-authored-by: claude"; "i"))}] as $commits
+              | [.comments.nodes[] | select(.author.__typename == "User")] as $comments
+              | refs as $refs
+              | {
+                  number,
+                  mode: (if (.headRefName | startswith("agent/")) then "actions"
+                         elif (.headRefName | startswith("dependabot/")) then "dependabot"
+                         elif ([$commits[].claude] | any) then "local" else "human" end),
+                  human_commits: [$commits[] | select((.author | bot | not) and (.claude | not))] | length,
+                  human_comments: [$comments[] | select(.body | test("^\\s*/approve\\b") | not)] | length,
+                  approves: [$comments[] | select(.body | test("^\\s*/approve\\b"))] | length,
+                  human_reviews: [.reviews.nodes[] | select(.author.__typename == "User")] | length,
+                  issue: ([$refs[] | select($issues[.] != null) | tonumber] | min),
+                  cycle_days: ([$refs[] | $issues[.] // empty] | min
+                    | if . == null then null else ((($pr.mergedAt | fromdateiso8601) - fromdateiso8601) / 86400 * 10 | round / 10) end)
+                })' <<< "$prs")
+
+          # 2) 本月新建、打过 agent:found 的 issue 后来是否被采纳（时间线里出现过 agent:ready / agent:local）
+          found=$(search "is:issue created:$since..$before" '... on Issue {
+            number state author { login }
+            timelineItems(itemTypes: [LABELED_EVENT], first: 50) { nodes { ... on LabeledEvent { label { name } } } } }' \
+            | jq -c 'map({number, state, source: (if .author.login == "github-actions" then "patrol" else (.author.login // "?") end),
+                labels: [.timelineItems.nodes[].label.name]} | select(.labels | index("agent:found")))')
+
+          # 3) 本月 agent 用量（agent-budget 的 artifact 记录，保留 90 天）
+          usage='[]'
+          for page in $(seq 1 50); do
+            batch=$(gh api "repos/$REPO/actions/artifacts?per_page=100&page=$page" --jq '[.artifacts[] | {name, created_at}]')
+            usage=$(jq -c --arg s "$since" --arg e "$before" --argjson b "$batch" \
+              '. + [$b[] | select(.created_at >= $s and .created_at < $e and (.name | startswith("agent-usage.")))]' <<< "$usage")
+            if [ "$(jq -r --arg s "$since" 'length < 100 or .[-1].created_at < $s' <<< "$batch")" = true ]; then break; fi
+          done
+
+          {
+            echo "## agent 工作流指标 ${MONTH}"
+            echo
+            echo "### issue → 合入周期（天，从 issue 创建到 PR 合入 develop）"
+            echo
+            echo "| 模式 | 合入 PR | 关联 issue 的 PR | 中位数 | 平均 | P90 | 人工提交 / PR | 人工评论 / PR | /approve / PR | 人工 review / PR |"
+            echo "|---|---|---|---|---|---|---|---|---|---|"
+            jq -r '
+              def r: . * 10 | round / 10;
+              def pct(p): if length == 0 then "-" else sort | .[((length - 1) * p | floor)] end;
+              def avg: if length == 0 then "-" else (add / length | r) end;
+              group_by(.mode)[] | . as $g | [.[].cycle_days | numbers] as $c
+              | "| \($g[0].mode) | \($g | length) | \($c | length) | \($c | pct(0.5)) | \($c | avg) | \($c | pct(0.9)) | \([$g[].human_commits] | avg) | \([$g[].human_comments] | avg) | \([$g[].approves] | avg) | \([$g[].human_reviews] | avg) |"' <<< "$rows"
+            echo
+            echo "模式：actions = agent/ 分支（agent-dispatch）；local = 提交带 Co-Authored-By: Claude 的本地 session；dependabot；human = 其余。"
+            echo "人工提交 = 非合并提交中作者是真人账号、且没有 Co-Authored-By: Claude 的；人工评论不含 /approve；bot 一律不计。"
+            echo
+            echo "### agent:found 采纳率（本月新建的 issue）"
+            echo
+            echo "| 来源 | 数量 | 转 agent:ready | 转 agent:local | 已关闭未采纳 | 待筛选 | ready 采纳率 |"
+            echo "|---|---|---|---|---|---|---|"
+            jq -r '
+              def has($l): .labels | index($l) != null;
+              def adopted: has("agent:ready") or has("agent:local");
+              (group_by(.source) | map({k: .[0].source, v: .})) + [{k: "合计", v: .}] | .[] | .v as $g
+              | ($g | map(select(has("agent:ready"))) | length) as $ready
+              | "| \(.k) | \($g | length) | \($ready) | \($g | map(select(has("agent:local") and (has("agent:ready") | not))) | length) | \($g | map(select(.state == "CLOSED" and (adopted | not))) | length) | \($g | map(select(.state == "OPEN" and (adopted | not))) | length) | \(if ($g | length) == 0 then "-" else "\($ready * 1000 / ($g | length) | round / 10)%" end) |"' <<< "$found"
+            echo
+            echo "来源：patrol = agent-patrol 巡检；其他为开 issue 的账号（如 claude = agent-dispatch 实现时顺手发现的）。"
+            echo
+            echo "### agent 用量（agent-budget 记录）"
+            echo
+            echo "| 工作流 | 运行次数 | token（input + output + cache_creation） |"
+            echo "|---|---|---|"
+            jq -r 'map(.name | split(".") | {wf: .[1], tokens: (.[-1] | ltrimstr("t") | tonumber? // 0)})
+              | if length == 0 then "| （无记录） | 0 | 0 |" else group_by(.wf)[] | "| \(.[0].wf) | \(length) | \(map(.tokens) | add) |" end' <<< "$usage"
+            echo
+            echo "<details><summary>每个 PR 的明细</summary>"
+            echo
+            echo "| PR | 模式 | issue | 周期（天） | 人工提交 | 人工评论 | /approve | 人工 review |"
+            echo "|---|---|---|---|---|---|---|---|"
+            jq -r 'sort_by(.number)[] | "| #\(.number) | \(.mode) | \(if .issue then "#\(.issue)" else "-" end) | \(.cycle_days // "-") | \(.human_commits) | \(.human_comments) | \(.approves) | \(.human_reviews) |"' <<< "$rows"
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
