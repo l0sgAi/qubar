@@ -1,5 +1,8 @@
 # Claude 代码审查（l0sgAi/qubar#67 P3）。结果写成 commit status `claude-review`（develop 分支规则的必需检查）：
 #   pass → success；有阻塞问题 → failure（agent/ 分支自动交给 agent-fix，reason=review）。
+# 按三个维度审查（#189）：需求正确性（对照关联 issue 的验收标准）/ 实现一致性（测试与接口契约，可跑已有单测）/
+#   系统层面正确性（对老功能的影响、一致性 / 分布式 / 性能 / 架构）。每个维度 pass / fail / unverified，
+#   任一维度 fail 即判为有阻塞问题；unverified 不阻塞，写进总结与状态描述，提醒人工确认。
 #
 # 触发：同仓库 PR 的 opened / synchronize / reopened / ready_for_review（草稿跳过）；
 #       workflow_dispatch(carry=true)：pr-sync 用 update-branch 把 develop 合进来之后，如果新 head 是
@@ -126,12 +129,61 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.review == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ needs.prepare.outputs.sha }}
           fetch-depth: 0
+
+      # 审查可以对改动涉及的包跑已有单测（实现一致性维度）；集成测试由 ci 的 integration job 覆盖，这里不起开发栈。
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # 关联 issue 由工作流先收集到 tmp/review/issues.md（与 agent-patrol 同一做法），审查对照其中的验收标准。
+      # 用 GraphQL closingIssuesReferences（PR 描述里的 Closes / Fixes / Resolves #N）；没有关联时写明，审查记为无法核对。
+      - name: Collect linked issues
+        uses: actions/github-script@v8
+        env:
+          NUMBER: ${{ needs.prepare.outputs.number }}
+        with:
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const { repository } = await github.graphql(`
+              query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $number) {
+                    closingIssuesReferences(first: 10) {
+                      nodes {
+                        number title body
+                        labels(first: 20) { nodes { name } }
+                        comments(last: 5) { nodes { author { login } body } }
+                      }
+                    }
+                  }
+                }
+              }`, { owner, repo, number: Number(process.env.NUMBER) });
+            const issues = repository.pullRequest.closingIssuesReferences.nodes;
+            const cut = (s, n) => (s || '').length > n ? `${s.slice(0, n)}\n…（已截断）` : (s || '');
+            const parts = issues.map(i => [
+              `## #${i.number} ${i.title}`,
+              `标签：${i.labels.nodes.map(l => l.name).join(', ') || '无'}`,
+              '',
+              cut(i.body, 20000),
+              '',
+              '### 最近评论',
+              ...(i.comments.nodes.length
+                ? i.comments.nodes.map(c => `- @${c.author?.login ?? 'ghost'}：\n\n${cut(c.body, 3000)}`)
+                : ['无']),
+            ].join('\n'));
+            const text = parts.length
+              ? `# PR 关联的 issue\n\n${parts.join('\n\n---\n\n')}\n`
+              : '# PR 关联的 issue\n\n无：PR 描述里没有 Closes / Fixes / Resolves #N。\n';
+            fs.mkdirSync('tmp/review', { recursive: true });
+            fs.writeFileSync('tmp/review/issues.md', text);
+            core.info(`linked issues: ${issues.map(i => '#' + i.number).join(' ') || 'none'}`);
 
       - id: claude
         uses: anthropics/claude-code-action@v1
@@ -145,24 +197,57 @@ jobs:
             PR NUMBER: ${{ needs.prepare.outputs.number }}
             HEAD: ${{ needs.prepare.outputs.sha }}
 
-            审查这个合入 develop 的 PR。先读 CLAUDE.md 和 .agents/skills/qubar-skill/SKILL.md，用 `gh pr view` / `gh pr diff` 看改动。
-            只报真实问题，不要风格偏好或泛泛建议。重点：
-            1. 正确性：逻辑错误、边界、错误处理（不吞错误）、并发 / 事务、缓存与 DB 一致性、分页。
-            2. qubar 规则：分层与跨域只走 Facade（业务层不 import 兄弟域或 hertz）；插入显式 `sharedomain.NewID()`；
-               不用 AutoMigrate；迁移 forward-only 且兼容旧版本应用（expand / contract），新表登记 CDC 或 `-- cdc: none`；
-               新配置同步 config.example.yaml 与 config.dev.yaml；不提交密钥。
-            3. 安全：鉴权 / 越权、SSRF（netguard）、注入、敏感数据进日志。
-            4. 测试：改了 infrastructure / SQL / Lua / Redpanda 是否补了集成测试；PR 描述是否写了验证与未验证部分。
-            5. 范围：是否与关联 issue 一致、有没有顺手改无关代码、业务代码是否明显超过 ~500 行。
+            审查这个合入 develop 的 PR。准备：
+            - 读 CLAUDE.md 和 .agents/skills/qubar-skill/SKILL.md（分层、命名、Facade、配置与迁移规则）。
+            - 用 `gh pr view` / `gh pr diff` 看 PR 描述和改动；读 `tmp/review/issues.md`（工作流收集的关联 issue 正文与最近评论）。
+              issue 里引用的其他 issue（如总览、依赖）需要时用 `gh issue view` 查。
+            - 改动所在领域在 `docs/` 下有设计文档（`*-design.md` 等）的，读相关章节。
+
+            按下面三个维度审查。只报真实问题，不要风格偏好或泛泛建议；没把握的结论写成「无法判断 / 未验证」，不要猜。
+
+            ## 一、需求正确性：是否做了 issue 要求的事
+            1. 把关联 issue 的验收标准逐条列出，每条判定「满足 / 未满足 / 无法判断」，并给出对应的代码或测试位置（文件:行）。
+               标准里写明需要人工或生产环境执行的项（如压测、发版后手动运行），PR 描述写明未做即可，记「无法判断」。
+            2. 行为是否与 issue 的背景 / 期望行为一致：不只是「有这段代码」，而是语义对（边界值、默认值、开关关闭时的行为、错误码）。
+            3. 范围：是否做了 issue「范围外」的事、顺手改了无关代码；业务代码（不含测试）是否明显超过 ~500 行。
+            4. 没有关联 issue 时：此维度记 unverified，按 PR 描述审查其余两项。
+
+            ## 二、实现一致性：输入输出是否符合预期、是否真的测过
+            1. 测试是否覆盖了每条验收标准与关键分支（成功、失败、边界、并发）；断言是否检查了预期输出（返回值、错误码、落库 / 缓存 / 事件内容），
+               而不只是「不报错」。验收项没有任何测试或手动验证覆盖，算问题。
+            2. 可以对改动涉及的包运行已有单测：`go test -short -count=1 ./pkg/<改动的包>/...`（不能改文件；集成测试需要开发栈，
+               这里跑不了，由 ci 的 integration job 覆盖）。把运行的命令和结果写进总结。
+            3. 改了 infrastructure / SQL / 迁移 / Redis Lua / Redpanda 生产者或消费者，是否补了集成测试（`*_integration_test.go`），
+               写法是否符合 CLAUDE.md（随机 ID、注册清理、只断言自己插入的数据、可并行）。
+            4. 接口契约：请求参数校验、响应字段、错误码 / HTTP 状态是否与 issue 和现有约定一致；接口有变时 `docs/` 中 API 文档是否同步。
+            5. PR 描述是否写了怎么验证的（`make verify`、集成测试、手动调用）和哪些没验证；描述写了的验证与改动风险是否匹配。
+
+            ## 三、系统层面正确性：会不会弄坏别的、是否符合设计原则
+            1. 对老功能的影响：对每个被修改的导出函数 / 接口方法 / 共享常量、Redis key 与 Lua、Redpanda 事件格式、表结构，
+               用 Grep 找出仓库里的其他使用方，判断行为变化是否影响它们（列出查过的使用方）。改了公共行为却没有覆盖老路径的测试，算问题。
+            2. 一致性：并发 / 事务边界、缓存与 DB 一致性（回填不能覆盖并发增量、写顺序）、计数漂移、分页游标稳定性、错误处理（不吞错误）。
+            3. 分布式：消费者幂等（at-least-once 下重复投递）、事件顺序、重试与补偿、多实例下定时任务重复执行（现有定时任务无分布式锁，
+               靠唯一约束兜底的要确认约束存在）、外部调用超时。
+            4. 性能：N+1 查询、新查询是否有索引支撑、无界查询 / IN 列表 / 全表扫描、热点行更新、Redis 大 key 与无 TTL、热路径上的同步外部调用。
+            5. 架构与规范：分层与跨域只走 Facade（业务层不 import 兄弟域或 hertz）；插入显式 `sharedomain.NewID()`；不用 AutoMigrate；
+               迁移 forward-only 且兼容旧版本应用（expand / contract），新表登记 CDC 或 `-- cdc: none`；新配置同步
+               config.example.yaml 与 config.dev.yaml；不提交密钥；与相关设计文档不一致的地方（若是有意偏离，PR 里要说明）。
+            6. 安全：鉴权 / 越权、SSRF（netguard）、注入、敏感数据进日志。
+
+            ## 结论
+            - 每个维度给出 `pass`（查过、没有阻塞问题）/ `fail`（有阻塞问题）/ `unverified`（关键部分无法在这里核实，如缺关联 issue、
+              依赖开发栈没有的 CDC / ES / 外部服务），`notes` 用一两句话说明依据。
+            - 阻塞问题 = 验收标准未满足、会导致 bug / 数据问题 / 安全问题、破坏老功能、违反上面 qubar 规则；其他都是非阻塞建议。
+              任一维度 `fail` 时 `verdict` 必须是 `changes_requested`，`blocking` 为阻塞问题总数。
 
             具体代码问题用 `mcp__github_inline_comment__create_inline_comment`（confirmed: true）标在对应行，每条写清问题、影响、修法。
-            不要自己发 PR 评论（Actions 里 `gh pr comment` 一律被拒）：把中文总结（结论 + 阻塞问题列表，Markdown）
-            放进结构化输出的 `summary` 字段，工作流会替你发成 PR 评论。
-            阻塞问题 = 会导致 bug、数据问题、安全问题或违反上面 qubar 规则的问题；其他都是非阻塞建议。
+            不要自己发 PR 评论（Actions 里 `gh pr comment` 一律被拒）：把中文总结放进结构化输出的 `summary` 字段，工作流会替你发成 PR 评论
+            （工作流会在前面加三个维度的结论表，`summary` 里不用重复）。`summary` 用 Markdown，依次写：
+            阻塞问题列表；验收标准逐条核对表；运行过的测试命令与结果；查过的老功能使用方与结论；未验证、需要人工确认的部分；非阻塞建议。
           claude_args: >-
-            --max-turns 40
-            --allowedTools "Read,Glob,Grep,mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*)"
-            --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["pass","changes_requested"]},"blocking":{"type":"integer"},"summary":{"type":"string"}},"required":["verdict","blocking","summary"]}'
+            --max-turns 60
+            --allowedTools "Read,Glob,Grep,mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh issue view:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*),Bash(go test:*)"
+            --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["pass","changes_requested"]},"blocking":{"type":"integer"},"dimensions":{"type":"object","properties":{"requirement":{"type":"object","properties":{"status":{"type":"string","enum":["pass","fail","unverified"]},"notes":{"type":"string"}},"required":["status","notes"]},"implementation":{"type":"object","properties":{"status":{"type":"string","enum":["pass","fail","unverified"]},"notes":{"type":"string"}},"required":["status","notes"]},"system":{"type":"object","properties":{"status":{"type":"string","enum":["pass","fail","unverified"]},"notes":{"type":"string"}},"required":["status","notes"]}},"required":["requirement","implementation","system"]},"summary":{"type":"string"}},"required":["verdict","blocking","dimensions","summary"]}'
 
       - name: Report status
         if: always()
@@ -198,11 +283,19 @@ jobs:
               return 'Claude returned no verdict, see run log';
             }
 
-            const ok = out.verdict === 'pass';
-            const state = out.verdict ? (ok ? 'success' : 'failure') : 'error';
+            // 三个维度的结论：任一维度 fail 就按有阻塞问题处理（即使 verdict 写了 pass），unverified 不阻塞。
+            const DIMS = [['requirement', '需求正确性', 'req'], ['implementation', '实现一致性', 'impl'], ['system', '系统层面正确性', 'sys']];
+            const dims = out.dimensions || {};
+            const dimFail = DIMS.some(([k]) => dims[k]?.status === 'fail');
+            const verdict = out.verdict && dimFail ? 'changes_requested' : out.verdict;
+            const blocking = verdict === 'changes_requested' ? Math.max(Number(out.blocking) || 0, 1) : 0;
+            const dimBrief = DIMS.map(([k, , abbr]) => `${abbr}=${dims[k]?.status ?? '?'}`).join(' ');
+
+            const ok = verdict === 'pass';
+            const state = verdict ? (ok ? 'success' : 'failure') : 'error';
             let description;
-            if (out.verdict) {
-              description = ok ? 'no blocking issues' : `${out.blocking} blocking issue(s)`;
+            if (verdict) {
+              description = `${ok ? 'no blocking issues' : `${blocking} blocking issue(s)`} · ${dimBrief}`;
             } else {
               description = await noVerdictReason().catch(e => `no verdict (reason check failed: ${e.message})`);
               core.warning(`claude-review: ${description}`);
@@ -212,17 +305,21 @@ jobs:
             await github.rest.repos.createCommitStatus({ owner, repo, sha, state, context: 'claude-review', description, target_url: runUrl });
 
             // 总结评论由工作流发（Claude 在 Actions 里不能用 gh pr comment）。同一个 head sha 只发一次。
-            if (out.verdict && (out.summary || '').trim()) {
+            if (verdict && (out.summary || '').trim()) {
               const marker = `<!-- claude-review:${sha} -->`;
               const issue_number = Number(process.env.NUMBER);
               const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });
               if (!comments.some(c => (c.body || '').includes(marker))) {
-                const head = ok ? '✅ **Claude 审查：没有阻塞问题**' : `❌ **Claude 审查：${out.blocking} 个阻塞问题**`;
+                const head = ok ? '✅ **Claude 审查：没有阻塞问题**' : `❌ **Claude 审查：${blocking} 个阻塞问题**`;
+                const icon = { pass: '✅ 通过', fail: '❌ 有阻塞问题', unverified: '⚠️ 未能核实，需人工确认' };
+                const cell = t => (t || '').replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
+                const table = ['| 维度 | 结论 | 依据 |', '|---|---|---|',
+                  ...DIMS.map(([k, name]) => `| ${name} | ${icon[dims[k]?.status] ?? '❔ 未给出'} | ${cell(dims[k]?.notes)} |`)].join('\n');
                 await github.rest.issues.createComment({ owner, repo, issue_number,
-                  body: `${marker}\n${head}（\`${sha.slice(0, 7)}\`，[run](${runUrl})）\n\n${out.summary.trim()}`.slice(0, 65000) });
+                  body: `${marker}\n${head}（\`${sha.slice(0, 7)}\`，[run](${runUrl})）\n\n${table}\n\n${out.summary.trim()}`.slice(0, 65000) });
               }
             }
-            if (out.verdict === 'changes_requested' && process.env.REF.startsWith('agent/')) {
+            if (verdict === 'changes_requested' && process.env.REF.startsWith('agent/')) {
               await github.rest.actions.createWorkflowDispatch({ owner, repo, workflow_id: 'agent-fix.yml', ref: 'develop',
                 inputs: { pr: String(process.env.NUMBER), reason: 'review' } });
             }
