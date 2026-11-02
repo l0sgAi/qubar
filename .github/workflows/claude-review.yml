@@ -49,7 +49,7 @@ jobs:
       review: ${{ steps.pr.outputs.review }}
     steps:
       - id: pr
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           PR_INPUT: ${{ inputs.pr }}
           CARRY: ${{ inputs.carry }}
@@ -144,7 +144,7 @@ jobs:
       # 关联 issue 由工作流先收集到 tmp/review/issues.md（与 agent-patrol 同一做法），审查对照其中的验收标准。
       # 用 GraphQL closingIssuesReferences（PR 描述里的 Closes / Fixes / Resolves #N）；没有关联时写明，审查记为无法核对。
       - name: Collect linked issues
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           NUMBER: ${{ needs.prepare.outputs.number }}
         with:
@@ -251,7 +251,7 @@ jobs:
 
       - name: Report status
         if: always()
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           OUTPUT: ${{ steps.claude.outputs.structured_output }}
           STEP_OUTCOME: ${{ steps.claude.outcome }}
