@@ -10,6 +10,8 @@ import (
 const (
 	// AutoConfigKeyAutoReply 自动回复高热度帖子 / 评论（#99）。
 	AutoConfigKeyAutoReply = "auto_reply"
+	// AutoConfigKeyAutoPost 全局机器人在 hot 圈自动发帖（#101）。
+	AutoConfigKeyAutoPost = "auto_post"
 )
 
 // 自动回复目标类型（auto_reply.targets 取值）。
@@ -53,13 +55,24 @@ func (c AutoConfigJSON) Value() (driver.Value, error) {
 // AutoReply 解析 auto_reply 子对象。未配置返回零值（enabled=false）；
 // 解析失败（库里被手工写坏）同样视为未开启，并返回错误供调用方记日志。
 func (c AutoConfigJSON) AutoReply() (AutoReplyConfig, error) {
-	var cfg AutoReplyConfig
-	raw, ok := c[AutoConfigKeyAutoReply]
+	return decodeSub[AutoReplyConfig](c, AutoConfigKeyAutoReply)
+}
+
+// AutoPost 解析 auto_post 子对象，语义同 AutoReply。
+func (c AutoConfigJSON) AutoPost() (AutoPostConfig, error) {
+	return decodeSub[AutoPostConfig](c, AutoConfigKeyAutoPost)
+}
+
+// decodeSub 解析某个子对象：未配置返回零值，解析失败返回零值 + 错误。
+func decodeSub[T any](c AutoConfigJSON, key string) (T, error) {
+	var cfg T
+	raw, ok := c[key]
 	if !ok || len(raw) == 0 {
 		return cfg, nil
 	}
 	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return AutoReplyConfig{}, err
+		var zero T
+		return zero, err
 	}
 	return cfg, nil
 }
@@ -88,6 +101,33 @@ func (c AutoReplyConfig) HasTarget(target string) bool {
 		}
 	}
 	return false
+}
+
+// AutoPostConfig 全局机器人自动发帖配置（auto_config.auto_post，#101）。
+//
+// 每轮到期判定：当前小时在 ActiveHours 内、距上次发帖尝试 >= IntervalMin 分钟、
+// 当日（服务器本地时区自然日）尝试次数 < DailyMax；失败也计入（与回复链路"失败也算已触发"一致）。
+// Topics 为空时用平台默认热点关键词（conf aiagent.autonomy.default_hot_topics）。
+// RequireReview 为草稿审核预留（#104），本期只能为 false。
+type AutoPostConfig struct {
+	Enabled       bool     `json:"enabled"`
+	IntervalMin   int      `json:"interval_min"`
+	DailyMax      int      `json:"daily_max"`
+	ActiveHours   []int    `json:"active_hours"` // [start, end) 小时，start > end 表示跨零点；空 = 全天
+	Topics        []string `json:"topics"`
+	RequireReview bool     `json:"require_review"`
+}
+
+// ActiveAt 报告 hour（0-23）是否在活跃时段内。
+func (c AutoPostConfig) ActiveAt(hour int) bool {
+	if len(c.ActiveHours) != 2 {
+		return true
+	}
+	start, end := c.ActiveHours[0], c.ActiveHours[1]
+	if start <= end {
+		return hour >= start && hour < end
+	}
+	return hour >= start || hour < end
 }
 
 // AutoConfigPatch auto_config 的顶层 key 合并补丁（UpdateFields 的 "auto_config" 字段值）。

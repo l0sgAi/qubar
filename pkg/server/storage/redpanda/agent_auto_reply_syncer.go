@@ -10,16 +10,18 @@ import (
 	"interestBar/pkg/logger"
 )
 
-// AgentAutoReplyScanner 自动回复扫描执行端口（aiagent.ReplyService 实现，composition 注入）。
-// 本包只依赖这一个方法，不 import aiagent 领域包。
+// AgentAutoReplyScanner 机器人自主行为扫描执行端口（aiagent.ReplyService + AutoPostService，composition 注入）。
+// 本包只依赖这两个方法，不 import aiagent 领域包。
 type AgentAutoReplyScanner interface {
 	RunAutoReplyScan(ctx context.Context)
+	// RunAutoPostScan 全局机器人在 hot 圈自动发帖（#101），每轮在自动回复之后执行。
+	RunAutoPostScan(ctx context.Context)
 }
 
 // AgentAutoReplySyncer 机器人自动回复定时扫描器（#99，设计见 docs/agent-auto-reply-design.md）。
 //
 // 每 aiagent.autonomy.scan_interval_sec 秒执行一轮 RunAutoReplyScan：按热度门槛挑出高热度
-// 帖子 / 评论，复用回复执行链路自动回复。与 TrendingRankSyncer 同形：{mu, ticker, stopChan, stopped}。
+// 帖子 / 评论，复用回复执行链路自动回复；随后执行 RunAutoPostScan（全局机器人 hot 圈自动发帖，#101）。与 TrendingRankSyncer 同形：{mu, ticker, stopChan, stopped}。
 // 区别：一轮可能包含多次 LLM 调用（秒级~分钟级），关停时**不排干**——取消进行中的一轮并等待退出，
 // 而不是再跑一轮。上一轮未结束时 ticker 的到期信号被丢弃（time.Ticker 语义），不会堆积。
 //
@@ -88,6 +90,9 @@ func (s *AgentAutoReplySyncer) flush() {
 		return
 	}
 	s.scanner.RunAutoReplyScan(s.ctx)
+	if s.ctx.Err() == nil {
+		s.scanner.RunAutoPostScan(s.ctx)
+	}
 }
 
 // Stop 停止扫描器（幂等）：取消进行中的一轮并等待退出（最多 agentAutoReplyStopWait）。

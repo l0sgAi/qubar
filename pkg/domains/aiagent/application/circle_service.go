@@ -146,6 +146,9 @@ func (s *circleAgentServiceImpl) CreateCircleAgent(ctx context.Context, operator
 	if err := s.requireCircleManager(ctx, circleID, operatorID); err != nil {
 		return nil, err
 	}
+	if input.AutoConfig != nil && input.AutoConfig.AutoPost != nil {
+		return nil, errAutoPostGlobalOnly // 圈内机器人自动发帖见 #102
+	}
 
 	// 复用全局链路的校验函数组 + api_key 加密 + 默认值补齐（语义一致，防规则漂移）。
 	agent, err := validateAndBuildAgent(ctx, input)

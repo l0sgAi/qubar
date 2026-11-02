@@ -233,6 +233,10 @@ type CreatePostInput struct {
 // PostService 是 post 领域的应用服务接口。
 type PostService interface {
 	CreatePost(ctx context.Context, userID uuid.UUID, input CreatePostInput) (uuid.UUID, error)
+	// CreateAgentPost 机器人自动发帖（只供 composition 桥接 aiagent 调用，不注册路由，#101）：
+	// 跳过成员身份检查（机器人账号不一定是目标圈成员）、不解析 @提及，
+	// 其余（圈子可用性、清洗、摘要、审核、圈子计数等发布副作用）与 CreatePost 一致。
+	CreateAgentPost(ctx context.Context, userID uuid.UUID, input CreatePostInput) (uuid.UUID, error)
 	GetPostDetail(ctx context.Context, userID, postID uuid.UUID) (*PostDetailVO, error)
 	// SearchPosts 帖子搜索；viewerID 不可见的私密圈帖子不返回（访客 uuid.Nil）。
 	SearchPosts(ctx context.Context, viewerID uuid.UUID, keyword string, circleID uuid.UUID, size int, searchAfter []interface{}) (*PostSearchResult, error)
@@ -446,17 +450,6 @@ func (s *postServiceImpl) SetAgentTrigger(t AgentPostTrigger)          { s.agent
 //  5. 清洗 content + 生成 summary；
 //  6. 创建帖子 + 递增圈子帖子计数。
 func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, input CreatePostInput) (uuid.UUID, error) {
-	// 默认值
-	postType := input.Type
-	if postType == 0 {
-		postType = domain.PostTypeTextImage
-	}
-	postStatus := int16(domain.PostStatusPublished)
-	moderated := s.moderationActive()
-	if moderated {
-		postStatus = domain.PostStatusReviewing
-	}
-
 	if input.CircleID == uuid.Nil {
 		return uuid.Nil, errCircleIDRequired
 	}
@@ -477,6 +470,33 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 		if err := checkMemberStatus(member); err != nil {
 			return uuid.Nil, err
 		}
+	}
+	return s.createPost(ctx, userID, input)
+}
+
+// CreateAgentPost 机器人自动发帖：不校验成员身份、清空 @提及，其余走 createPost。
+func (s *postServiceImpl) CreateAgentPost(ctx context.Context, userID uuid.UUID, input CreatePostInput) (uuid.UUID, error) {
+	if input.CircleID == uuid.Nil {
+		return uuid.Nil, errCircleIDRequired
+	}
+	if input.Title == "" {
+		return uuid.Nil, errTitleRequired
+	}
+	input.MentionUserIDs = nil
+	return s.createPost(ctx, userID, input)
+}
+
+// createPost 发帖公共部分（调用方已完成入参与发帖人身份校验）：圈子可用性 → 清洗 / 摘要 →
+// 落库 → @提及 → 发布副作用或审核事件。
+func (s *postServiceImpl) createPost(ctx context.Context, userID uuid.UUID, input CreatePostInput) (uuid.UUID, error) {
+	postType := input.Type
+	if postType == 0 {
+		postType = domain.PostTypeTextImage
+	}
+	postStatus := int16(domain.PostStatusPublished)
+	moderated := s.moderationActive()
+	if moderated {
+		postStatus = domain.PostStatusReviewing
 	}
 
 	// 校验圈子可用性

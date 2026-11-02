@@ -24,6 +24,12 @@ var (
 	// errInvalidAutoConfig auto_config.auto_reply 取值非法（规则见 buildAutoReply）。
 	errInvalidAutoConfig = errors.New("auto_config.auto_reply is invalid: targets must be post/comment; " +
 		"when enabled, window_hours must be 1-168 and each target needs a threshold >= 1")
+	// errInvalidAutoPostConfig auto_config.auto_post 取值非法（规则见 buildAutoPost）。
+	errInvalidAutoPostConfig = errors.New("auto_config.auto_post is invalid: topics <= 10 (1-50 chars each); " +
+		"active_hours must be empty or [start 0-23, end 1-24] with start != end; require_review is not supported yet; " +
+		"when enabled, interval_min must be 10-10080 and daily_max 1-48")
+	// errAutoPostGlobalOnly 圈内机器人不支持 auto_post（本期只有全局机器人在 hot 圈自动发帖）。
+	errAutoPostGlobalOnly = errors.New("auto_config.auto_post is only available for global agents")
 )
 
 // 回复执行链路错误（reply_service）。
@@ -65,7 +71,10 @@ func IsAPIKeyNotSetErr(err error) bool     { return errors.Is(err, errAPIKeyNotS
 func IsNoFieldsToUpdateErr(err error) bool { return errors.Is(err, errNoFieldsToUpdate) }
 
 // IsInvalidAutoConfigErr auto_config 取值非法（handler 映射 400）。
-func IsInvalidAutoConfigErr(err error) bool { return errors.Is(err, errInvalidAutoConfig) }
+func IsInvalidAutoConfigErr(err error) bool {
+	return errors.Is(err, errInvalidAutoConfig) || errors.Is(err, errInvalidAutoPostConfig) ||
+		errors.Is(err, errAutoPostGlobalOnly)
+}
 
 // 回复执行链路错误谓词（供 handler 映射手动触发接口的响应）。
 func IsAgentDisabledErr(err error) bool    { return errors.Is(err, errAgentDisabled) }

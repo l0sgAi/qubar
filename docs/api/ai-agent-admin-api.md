@@ -5,6 +5,7 @@
 > **状态**：CRUD 已交付；回复执行链路已交付（评论关键词触发 mode=2 + 手动触发 mode=3；「全部新帖」mode=1 暂不生效，P2 待实现）。
 > 2026-08-26 起支持**两阶段回复判定**：新增 `filter_prompt` 字段（判定条件），详见 §2.3，设计见 [../agent-reply-filter-design.md](../agent-reply-filter-design.md)。
 > 2026-10-23 起支持**自动回复高热度帖子 / 评论**（#99）：新增 `auto_config.auto_reply` 字段，详见 §2.5，设计见 [../agent-auto-reply-design.md](../agent-auto-reply-design.md)。
+> 2026-10-31 起支持**全局机器人在 hot 圈自动发帖**（#101）：新增 `auto_config.auto_post` 字段（仅全局机器人），详见 §2.6。
 
 ---
 
@@ -67,7 +68,7 @@ Content-Type: application/json   （POST/PUT）
 | `trigger_keywords` | string[] | 触发关键词；仅 mode=2 时有意义（匹配**评论内容**，不区分大小写子串） |
 | `max_replies_per_hour` | int | 每小时回复上限，0=不限，默认 30 |
 | `min_interval_sec` | int | 两次回复最小间隔秒，0=不限，默认 60 |
-| `auto_config` | object | 自主行为配置；本期只有 `auto_reply`（自动回复高热度帖子 / 评论），见 §2.5。未配置时回显 `enabled=false` 的零值 |
+| `auto_config` | object | 自主行为配置：`auto_reply`（自动回复高热度帖子 / 评论，§2.5）、`auto_post`（hot 圈自动发帖，§2.6）。未配置的子对象回显 `enabled=false` 的零值 |
 | `status` | int | 1=启用，0=停用 |
 | `create_time` / `update_time` | string(RFC3339) | 时间戳 |
 
@@ -136,6 +137,45 @@ Content-Type: application/json   （POST/PUT）
 
 **前端建议**：表单「自动回复」分组；`enabled=false` 时可折叠其余字段（但提交时仍按整体替换语义带上，见 §3.4）。
 
+### 2.6 auto_config.auto_post 全局机器人在 hot 圈自动发帖
+
+后台每轮扫描（同 §2.5 的定时器，自动回复之后执行）挑出到期的机器人：按 `topics` 轮换取一个关键词做网络搜索
+（只用标题 / 摘要 / 链接），去掉该机器人近期用过的来源后交给 LLM 生成帖子，以机器人账号发到 hot 圈。
+**只有全局机器人可以配置**（圈内机器人接口传 `auto_post` 返回 400）。平台总开关 `aiagent.autonomy.enabled` 关闭、
+或平台未配置 hot 圈（`aiagent.autonomy.hot_circle_id`）时所有机器人都不发帖；平台未配置搜索服务（`aiagent.search.api_key`）时同样不会发帖。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `enabled` | bool | 是否开启自动发帖 |
+| `interval_min` | int | 两次发帖尝试的最小间隔（分钟）；开启时 10-10080，未开启时 0-10080 |
+| `daily_max` | int | 每天（UTC+8 自然日）最多发帖尝试次数；开启时 1-48，未开启时 0-48 |
+| `active_hours` | int[] | 活跃时段 `[start, end)`（小时，UTC+8）：`[]` = 全天；`[8, 23]` = 8:00-22:59；`start > end` 表示跨零点（如 `[22, 6]`）。`start` 0-23、`end` 1-24、不能相等 |
+| `topics` | string[] | 搜索关键词，最多 10 个、每个 1-50 字符（去首尾空白、去重）；**为空时用平台默认热点关键词** |
+| `require_review` | bool | 发帖前人工审核（#104 预留）；**本期只能为 `false`**，传 `true` 返回 400 |
+
+规则：
+- 每轮每个机器人最多发一帖；发帖失败（LLM 报错 / 输出非法 / 引用了不存在的来源）也计入 `interval_min` / `daily_max`，不重试。
+- 同一机器人同一话题（首条来源 URL 规范化后相同）只发一次；近 7 天用过的来源不再作为材料。搜索结果为空或去重后为空时本轮跳过，不调用 LLM。
+- 帖子正文末尾由系统追加「来源：」链接列表和「本帖由 AI 根据网络公开信息生成」标识（LLM 不写链接）；帖子的发布 / 审核流程与普通发帖一致。
+- 机器人账号（role=2）发的帖子不会被任何机器人自动回复。
+
+示例：
+
+```json
+{
+  "auto_config": {
+    "auto_post": {
+      "enabled": true,
+      "interval_min": 120,
+      "daily_max": 6,
+      "active_hours": [8, 23],
+      "topics": ["人工智能", "游戏新闻"],
+      "require_review": false
+    }
+  }
+}
+```
+
 ### 2.4 响应示例
 
 ```json
@@ -163,6 +203,10 @@ Content-Type: application/json   （POST/PUT）
       "auto_reply": {
         "enabled": false, "targets": [], "post_hot_min": 0, "comment_like_min": 0,
         "comment_reply_min": 0, "window_hours": 0, "max_per_hour": 0
+      },
+      "auto_post": {
+        "enabled": false, "interval_min": 0, "daily_max": 0, "active_hours": [],
+        "topics": [], "require_review": false
       }
     },
     "status": 1,
@@ -263,7 +307,7 @@ Content-Type: application/json   （POST/PUT）
 - `api_key` 传**空串 = 清除 key**（`has_api_key` 变 false）；要「保持不变」就不传该字段。
 - `filter_prompt` 传**空串 = 关闭判定**（回到命中即回复）；不传 = 保持原条件。
 - `llm_params` / `trigger_keywords` 是**整体替换**语义（传了就覆盖全量），不是合并。
-- `auto_config.auto_reply` 传了即**整体替换该子对象**（未传的字段按 0 / false 处理，会参与校验）；不传 `auto_reply` 则保持不变。`auto_config` 里其他子对象（后续的自动发帖等）不受影响。
+- `auto_config.auto_reply` / `auto_config.auto_post` 传了即**整体替换该子对象**（未传的字段按 0 / false / 空处理，会参与校验）；不传则保持不变，两个子对象互不影响。
 - `trigger_mode` 改为 2 时，同请求需带非空 `trigger_keywords`（或已存关键词非空）。
 - 空请求体（无任何可更新字段）返回 400（`at least one field to update`）。
 - `name` 改名会做唯一性检查，撞名返回 409。
@@ -311,6 +355,8 @@ Content-Type: application/json   （POST/PUT）
 | 400 | `status must be 0 or 1` | status 非法 | 开关组件 |
 | 400 | `filter_prompt must be <= 2000 chars` | 判定条件超长 | textarea 计数限制 |
 | 400 | `auto_config.auto_reply is invalid: ...` | 自动回复配置非法（目标非 post/comment 或重复、数值为负 / 超上限、开启时缺目标 / 窗口 / 门槛） | 按 §2.5 做表单联动校验 |
+| 400 | `auto_config.auto_post is invalid: ...` | 自动发帖配置非法（关键词超量 / 超长、活跃时段格式错、`require_review=true`、开启时间隔 / 每日上限越界） | 按 §2.6 做表单联动校验 |
+| 400 | `auto_config.auto_post is only available for global agents` | 圈内机器人接口传了 `auto_post` | 圈内机器人表单不展示该分组 |
 | 400 | `Invalid request body` | JSON 类型不匹配（如 `enabled` 传字符串） | 按字段类型提交 |
 | 400 | `at least one field to update` | PUT 空更新 | 提交前检查 |
 | 400 | `Invalid agent id` | 路径 :id 非 UUID | 不会出现，防御 |

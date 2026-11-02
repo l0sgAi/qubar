@@ -115,6 +115,7 @@ var (
 	_ agentapp.BotUserProfileUpdater = (*agentBotUserUpdater)(nil)
 	_ agentapp.BotUserMentionSyncer  = (*agentBotUserMentionSyncer)(nil)
 	_ agentapp.PostReader            = (*agentPostReader)(nil)
+	_ agentapp.AutoPostCreator       = (*agentPostCreator)(nil)
 	_ agentapp.CommentCreator        = (*agentCommentCreator)(nil)
 	_ agentapp.CircleRoleReader      = (*circleRoleReaderForAgent)(nil)
 	_ circleapp.CircleAgentCounter   = (*circleAgentCounterForCircle)(nil)
@@ -289,3 +290,15 @@ func (b *agentCandidateReader) ListHotComments(ctx context.Context, q agentapp.A
 
 // 编译期保证：候选桥接器满足 aiagent 领域端口。
 var _ agentapp.AutoReplyCandidateReader = (*agentCandidateReader)(nil)
+
+// agentPostCreator 桥接 aiagent.AutoPostCreator -> post.PostService.CreateAgentPost（内部发帖，#101）。
+type agentPostCreator struct {
+	delegate postapp.PostService
+}
+
+// CreateAgentPost 以机器人账号在目标圈发帖（跳过成员检查、不解析 @提及）。
+func (b *agentPostCreator) CreateAgentPost(ctx context.Context, userID uuid.UUID, input agentapp.AutoPostInput) (uuid.UUID, error) {
+	return b.delegate.CreateAgentPost(ctx, userID, postapp.CreatePostInput{
+		CircleID: input.CircleID, Title: input.Title, Content: input.Content,
+	})
+}
