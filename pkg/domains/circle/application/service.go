@@ -1147,7 +1147,7 @@ func (s *circleServiceImpl) GetCirclePosts(ctx context.Context, viewerID, circle
 
 // getStatsWithRecovery 获取统计信息，缓存不存在时从 DB 恢复。
 //
-// 与旧 controller getCircleStatistics / restoreAllCounters 行为一致。
+// 与旧 controller getCircleStatistics / restoreAllCounters 行为一致；回种用 HSETNX，不覆盖并发的增减（#180）。
 func (s *circleServiceImpl) getStatsWithRecovery(ctx context.Context, circleID uuid.UUID) (memberCount, postCount, hot int) {
 	stats, err := s.statsCache.GetStats(ctx, circleID)
 	if err != nil {
@@ -1159,17 +1159,56 @@ func (s *circleServiceImpl) getStatsWithRecovery(ctx context.Context, circleID u
 	}
 
 	// 缓存未命中，从 DB 恢复
+	restored, ok := s.seedStatsFromDB(ctx, circleID)
+	if !ok {
+		return 0, 0, 0
+	}
+	// 回种可能是空操作（并发请求已回种并增减过），以 Redis 实际值为准；读不到再退回 DB 值。
+	if stats, err := s.statsCache.GetStats(ctx, circleID); err == nil && stats != nil {
+		return stats.MemberCount, stats.PostCount, stats.Hot
+	}
+	return restored.MemberCount, restored.PostCount, restored.Hot
+}
+
+// incrMemberCountWithRecovery 递增成员计数（缓存不存在时先从 DB 回种）。
+func (s *circleServiceImpl) incrMemberCountWithRecovery(ctx context.Context, circleID uuid.UUID) error {
+	s.ensureStatsSeeded(ctx, circleID)
+	return s.statsCache.IncrMemberCount(ctx, circleID)
+}
+
+// decrMemberCountWithRecovery 递减成员计数（缓存不存在时先从 DB 回种）。
+func (s *circleServiceImpl) decrMemberCountWithRecovery(ctx context.Context, circleID uuid.UUID) error {
+	s.ensureStatsSeeded(ctx, circleID)
+	return s.statsCache.DecrMemberCount(ctx, circleID)
+}
+
+// ensureStatsSeeded 统计 Hash 未回种时从 DB 回种，供写路径在增减前调用。
+//
+// 并发请求可能同时判定为未回种：回种是 HSETNX，先到的生效、后到的不覆盖已发生的 HINCRBY（#180）。
+// 回种失败时增减是空操作（Hash 未回种不写），DB 计数仍由事件落库，下次读路径会从 DB 回种。
+func (s *circleServiceImpl) ensureStatsSeeded(ctx context.Context, circleID uuid.UUID) {
+	exists, err := s.statsCache.StatsExists(ctx, circleID)
+	if err != nil {
+		logger.Log.Error("Failed to check Redis statistics existence: " + err.Error())
+	}
+	if !exists {
+		s.seedStatsFromDB(ctx, circleID)
+	}
+}
+
+// seedStatsFromDB 读 DB 计数并 SeedStatsIfAbsent 回种；返回 DB 计数，读 DB 失败时 ok=false。
+func (s *circleServiceImpl) seedStatsFromDB(ctx context.Context, circleID uuid.UUID) (*domain.CircleStatistics, bool) {
 	circle, err := s.repo.GetByID(ctx, circleID)
 	if err != nil {
 		logger.Log.Error(fmt.Sprintf("Failed to load circle %s from DB for cache recovery: %s", circleID.String(), err.Error()))
-		return 0, 0, 0
+		return nil, false
 	}
 	restored := &domain.CircleStatistics{
 		MemberCount: circle.MemberCount,
 		PostCount:   circle.PostCount,
 		Hot:         circle.Hot,
 	}
-	if err := s.statsCache.SetStats(ctx, circleID, restored); err != nil {
+	if err := s.statsCache.SeedStatsIfAbsent(ctx, circleID, restored); err != nil {
 		logger.Log.Error("Failed to restore Redis cache from DB: " + err.Error())
 	}
 	logger.Log.Debug("Restored circle statistics cache",
@@ -1177,61 +1216,13 @@ func (s *circleServiceImpl) getStatsWithRecovery(ctx context.Context, circleID u
 		zap.Int("member", circle.MemberCount),
 		zap.Int("post", circle.PostCount),
 		zap.Int("hot", circle.Hot))
-	return circle.MemberCount, circle.PostCount, circle.Hot
-}
-
-// incrMemberCountWithRecovery 递增成员计数（缓存不存在时先从 DB 恢复）。
-func (s *circleServiceImpl) incrMemberCountWithRecovery(ctx context.Context, circleID uuid.UUID) error {
-	exists, err := s.statsCache.StatsExists(ctx, circleID)
-	if err != nil {
-		logger.Log.Error("Failed to check Redis statistics existence: " + err.Error())
-	}
-	if !exists {
-		// 从 DB 恢复
-		circle, err := s.repo.GetByID(ctx, circleID)
-		if err != nil {
-			logger.Log.Error(fmt.Sprintf("Failed to load circle %s from DB for cache recovery: %s", circleID.String(), err.Error()))
-		} else {
-			restored := &domain.CircleStatistics{
-				MemberCount: circle.MemberCount,
-				PostCount:   circle.PostCount,
-				Hot:         circle.Hot,
-			}
-			if err := s.statsCache.SetStats(ctx, circleID, restored); err != nil {
-				logger.Log.Error("Failed to restore Redis cache from DB: " + err.Error())
-			}
-		}
-	}
-	return s.statsCache.IncrMemberCount(ctx, circleID)
-}
-
-// decrMemberCountWithRecovery 递减成员计数（缓存不存在时先从 DB 恢复）。
-func (s *circleServiceImpl) decrMemberCountWithRecovery(ctx context.Context, circleID uuid.UUID) error {
-	exists, err := s.statsCache.StatsExists(ctx, circleID)
-	if err != nil {
-		logger.Log.Error("Failed to check Redis statistics existence: " + err.Error())
-	}
-	if !exists {
-		circle, err := s.repo.GetByID(ctx, circleID)
-		if err != nil {
-			logger.Log.Error(fmt.Sprintf("Failed to load circle %s from DB for cache recovery: %s", circleID.String(), err.Error()))
-		} else {
-			restored := &domain.CircleStatistics{
-				MemberCount: circle.MemberCount,
-				PostCount:   circle.PostCount,
-				Hot:         circle.Hot,
-			}
-			if err := s.statsCache.SetStats(ctx, circleID, restored); err != nil {
-				logger.Log.Error("Failed to restore Redis cache from DB: " + err.Error())
-			}
-		}
-	}
-	return s.statsCache.DecrMemberCount(ctx, circleID)
+	return restored, true
 }
 
 // IncrPostCount 发帖后递增圈子帖子计数（Redis 实时 + Redpanda 异步持久化）。
 // 供 post 领域通过 CirclePostCountPort 调用。
 func (s *circleServiceImpl) IncrPostCount(ctx context.Context, circleID uuid.UUID) error {
+	s.ensureStatsSeeded(ctx, circleID)
 	if err := s.statsCache.IncrPostCount(ctx, circleID); err != nil {
 		return err
 	}

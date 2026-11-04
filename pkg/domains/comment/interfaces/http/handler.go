@@ -289,6 +289,10 @@ func writeCommentError(c appctx.AppContext, err error) {
 		httputil.NotFound(c, "Root comment not found")
 	case errors.Is(err, domain.ErrRootCommentMismatch):
 		httputil.BadRequest(c, "Root comment does not belong to this post")
+	case errors.Is(err, domain.ErrRootCommentNotTopLevel):
+		httputil.BadRequest(c, "Root comment is not a top-level comment")
+	case errors.Is(err, domain.ErrReplyTargetWithoutRoot):
+		httputil.BadRequest(c, "reply_to_id requires root_id")
 	case errors.Is(err, domain.ErrReplyTargetNotFound):
 		httputil.NotFound(c, "Reply target comment not found")
 	case errors.Is(err, domain.ErrReplyTargetNotInThread):

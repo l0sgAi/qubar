@@ -116,8 +116,8 @@ func (c *circleStatsCacheRedis) StatsExists(ctx context.Context, circleID uuid.U
 	return redispkg.CircleStatisticsExists(circleID)
 }
 
-func (c *circleStatsCacheRedis) SetStats(ctx context.Context, circleID uuid.UUID, stats *domain.CircleStatistics) error {
-	return redispkg.UpdateCircleStatistics(circleID, &redispkg.CircleStatistics{
+func (c *circleStatsCacheRedis) SeedStatsIfAbsent(ctx context.Context, circleID uuid.UUID, stats *domain.CircleStatistics) error {
+	return redispkg.SeedCircleStatisticsIfAbsent(circleID, &redispkg.CircleStatistics{
 		MemberCount: stats.MemberCount,
 		PostCount:   stats.PostCount,
 		Hot:         stats.Hot,

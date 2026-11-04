@@ -7,6 +7,8 @@
 #       在 issue 里说明并退回 agent:triage。运行失败或没开 PR 也退回 agent:triage。
 #
 # 触发：issue 被打上 agent:ready、每小时补位、手动（可指定 issue）。issues / schedule 事件只在默认分支（main）上生效。
+# 月度预算（#114）：pick 之前先过 agent-budget；超出预算不认领（issue 保持 agent:ready），本月剩余次数也会限制空位数。
+#   implement 结束后上传 agent-usage.* artifact 记录用量。
 name: agent-dispatch
 
 on:
@@ -27,8 +29,17 @@ env:
   WIP_LIMIT: 3
 
 jobs:
-  pick:
+  budget:
     if: github.event_name != 'issues' || github.event.label.name == 'agent:ready'
+    uses: ./.github/workflows/agent-budget.yml
+    permissions:
+      actions: read
+      issues: write
+    with:
+      workflow: dispatch
+
+  pick:
+    needs: budget
     runs-on: ubuntu-latest
     concurrency:
       group: agent-dispatch-pick
@@ -43,11 +54,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           ONLY: ${{ inputs.issue }}
+          BUDGET_OK: ${{ needs.budget.outputs.ok }}
+          BUDGET_REMAINING: ${{ needs.budget.outputs.remaining }}
         run: |
           set -euo pipefail
+          if [ "$BUDGET_OK" != true ]; then echo "monthly budget exhausted, skip"; echo 'issues=[]' >> "$GITHUB_OUTPUT"; exit 0; fi
           wip=$(gh issue list -R "$REPO" --state open --label agent:wip --json number --jq length)
           free=$(( WIP_LIMIT - wip ))
-          echo "wip=$wip free=$free"
+          if [ "$BUDGET_REMAINING" -lt "$free" ]; then free=$BUDGET_REMAINING; fi
+          echo "wip=$wip free=$free budget_remaining=$BUDGET_REMAINING"
           if [ "$free" -le 0 ]; then echo 'issues=[]' >> "$GITHUB_OUTPUT"; exit 0; fi
           ready=$(gh issue list -R "$REPO" --state open --label agent:ready --limit 100 --json number,createdAt \
             --jq 'sort_by(.createdAt) | .[].number')
@@ -82,7 +97,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - uses: anthropics/claude-code-action@v1
+      - id: claude
+        uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
@@ -108,6 +124,26 @@ jobs:
           claude_args: >-
             --max-turns 200
             --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,Bash(make:*),Bash(go:*),Bash(gofmt:*),Bash(git:*),Bash(curl -s localhost:8888/*),Bash(curl -s http://localhost:8888/*),Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh issue edit:*),Bash(gh issue create:*),Bash(gh pr create:*),Bash(gh pr view:*)"
+
+      # 月度预算用量记录（格式见 agent-budget.yml）。没有执行文件说明 Claude 没跑起来，不计
+      - name: Record agent usage
+        id: usage
+        if: always() && steps.claude.outcome != 'skipped'
+        env:
+          EXEC: ${{ steps.claude.outputs.execution_file }}
+          NAME: agent-usage.dispatch.i${{ matrix.issue }}.${{ github.run_attempt }}
+        run: |
+          f="${EXEC:-$RUNNER_TEMP/claude-execution-output.json}"
+          if [ ! -s "$f" ]; then echo "no execution file, nothing to record"; exit 0; fi
+          jq '[.[] | select(.type == "result")] | last // {} | {usage, total_cost_usd, num_turns, duration_ms}' "$f" > "$RUNNER_TEMP/agent-usage.json"
+          tokens=$(jq '[.usage // {} | .input_tokens, .output_tokens, .cache_creation_input_tokens | numbers] | add // 0' "$RUNNER_TEMP/agent-usage.json")
+          echo "name=$NAME.t$tokens" >> "$GITHUB_OUTPUT"
+      - if: always() && steps.usage.outputs.name != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.usage.outputs.name }}
+          path: ${{ runner.temp }}/agent-usage.json
+          retention-days: 90
 
       - name: Return issue to triage if no PR was opened
         if: always()

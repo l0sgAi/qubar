@@ -2,6 +2,7 @@
 package composition
 
 import (
+	"interestBar/pkg/conf"
 	agentapp "interestBar/pkg/domains/aiagent/application"
 	agentdomain "interestBar/pkg/domains/aiagent/domain"
 	agentinfra "interestBar/pkg/domains/aiagent/infrastructure"
@@ -30,6 +31,26 @@ func newAgentReplyService(deps *Deps, postSvc postapp.PostService, commentSvc co
 	svc.SetCommentCreator(&agentCommentCreator{delegate: commentSvc})
 	svc.SetCandidateReader(&agentCandidateReader{post: postSvc, comment: commentSvc})
 	return svc
+}
+
+// newAgentAutoPostService 构造全局机器人自动发帖服务（#101）：发帖日志 + eino LLM +
+// 网络搜索热点来源（平台 key + 每机器人每日配额）+ post 内部发帖桥接。
+func newAgentAutoPostService(deps *Deps, postSvc postapp.PostService) agentapp.AutoPostService {
+	search := agentinfra.NewHotTopicSource(conf.Config.AiAgent.Search, agentinfra.NewSearchQuota(), conf.Config.AiAgent.AllowPrivateBaseURL)
+	svc := agentapp.NewAutoPostService(
+		agentinfra.NewAgentRepository(deps.DB.Get()),
+		agentinfra.NewPostLogRepository(deps.DB.Get()),
+		agentinfra.NewLLMCaller(),
+		search,
+	)
+	svc.SetPostCreator(&agentPostCreator{delegate: postSvc})
+	return svc
+}
+
+// agentAutonomyScanner 合并自动回复 / 自动发帖两个扫描入口，供同一个定时器每轮依次执行。
+type agentAutonomyScanner struct {
+	agentapp.ReplyService
+	agentapp.AutoPostService
 }
 
 // registerAgent 装配 aiagent 领域（全局机器人 CRUD + 圈子级机器人 CRUD + 手动触发回复；

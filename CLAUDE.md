@@ -66,7 +66,8 @@ make dev-psql q="select ..."   # 查开发库
 
 - `agent-dispatch`：`agent:ready` 的 issue 由 Actions 里的 Claude 实现并开 PR（同时最多 3 个 `agent:wip`）；做不了就退回 `agent:triage`。
   `agent:local` 的 issue 不会被认领（由本地 session 实现）。
-- `claude-review`：每个 PR 自动审查，结论写成 `claude-review` 状态；`agent/` 分支有阻塞问题时交给 `agent-fix`。
+- `claude-review`：每个 PR 自动审查，按需求正确性（对照关联 issue 验收标准）/ 实现一致性（测试与接口契约）/ 系统层面正确性三个维度给结论，
+  任一维度 fail 即失败，写成 `claude-review` 状态；`agent/` 分支有阻塞问题时交给 `agent-fix`。PR 必须写 `Closes #N`，否则需求维度无法核对。
 - `agent-fix`：`agent/` 分支 CI 失败 / 审查有阻塞问题 / 更新冲突时自动修复，每个 PR 最多 3 次，超过打 `hold`。
   本地模式的 PR 不归它管，由 app 的 PR Auto-fix 处理。
 - `pr-gate`：打 `risk:high`、写 `risk-gate` 状态、给同仓库非草稿且无 `risk:high` / `hold` 的 PR 开 auto-merge。
@@ -75,6 +76,11 @@ make dev-psql q="select ..."   # 查开发库
   Dependabot PR 直接记 success（CI 是闸口）；只改 `go.mod` / `go.sum` 的自动合并，Actions 版本 PR 是 `risk:high`。
   安全更新 PR 固定提到 `main`：不要合并，关闭或改 base 到 `develop`（见 `.github/rulesets/README.md`）。不要往 Dependabot 分支推提交。
 - `claude`：有写权限的人在 issue / PR 里 `@claude` 让它答疑或改代码。
+- `agent-patrol`：每日巡检 develop（测试缺口 / `TODO` / 文档与代码不一致 / 依赖漏洞），按 issue 模板开 `agent:found` issue，
+  每天最多 N 个（默认 3）、按标题和去重键去重。Claude 只读代码，issue 由工作流步骤创建；结果必须人筛，不会自动转 `agent:ready`。
+- `agent-budget`：`agent-dispatch` / `agent-fix` / `agent-patrol` 的月度预算闸口（次数 / token，仓库变量 `AGENT_BUDGET`），
+  超出后停止自动运行并开 issue 提醒；`claude-review` 不计入。查看与重置见 `docs/ops/agent-workflow-runbook.md`「月度预算」。
+- `agent-metrics`：每月 1 日统计上个月的 issue → 合入周期、每个 PR 的人工介入次数、`agent:found` 采纳率与 agent 用量，写进 job summary。
 
 ## 需要人工审核的改动（高风险）
 
