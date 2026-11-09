@@ -70,14 +70,6 @@ type AutoReplyCommentRow struct {
 	PostCircleID uuid.UUID  `gorm:"column:post_circle_id"`
 }
 
-// CommentStatsCache 评论统计信息缓存（like_count）。
-type CommentStatsCache interface {
-	// Exists 检查统计 Hash 是否存在。
-	Exists(ctx context.Context, commentID uuid.UUID) (bool, error)
-	// Set 设置统计信息（用于从 DB 恢复）。
-	Set(ctx context.Context, commentID uuid.UUID, likeCount int) error
-}
-
 // LikeCheck 用户评论点赞 ZSET 批查结果。
 type LikeCheck struct {
 	// Hits 每个查询 commentID → 是否命中缓存（已赞）；未命中为 false。
