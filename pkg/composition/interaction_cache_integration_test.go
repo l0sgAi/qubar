@@ -156,7 +156,6 @@ func TestCommentLiked_FullLoadNegativeCache(t *testing.T) {
 		}
 		testkit.CleanupRows(t, "domains.comment", "id", c.ID)
 		testkit.CleanupRows(t, "domains.comment_like", "comment_id", c.ID)
-		testkit.CleanupKeys(t, redispkg.GetCommentStatsKey(c.ID))
 		ids = append(ids, c.ID)
 	}
 	likedID, plainID, laterID := ids[0], ids[1], ids[2]

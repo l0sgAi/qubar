@@ -47,7 +47,3 @@ func (c *commentLikeCacheRedis) Set(ctx context.Context, userID, commentID uuid.
 	}
 	return domain.ToggleResult(r), nil
 }
-
-func (c *commentLikeCacheRedis) StatsExists(ctx context.Context, commentID uuid.UUID) (bool, error) {
-	return redispkg.CommentStatisticsExists(ctx, commentID)
-}
