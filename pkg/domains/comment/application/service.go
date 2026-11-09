@@ -219,9 +219,6 @@ type CommentService interface {
 	// GetCommentMeta 获取评论元信息（供 like 领域校验用）。
 	// 返回评论所属帖子ID。未找到返回 nil, nil。
 	GetCommentMeta(ctx context.Context, commentID uuid.UUID) (*uuid.UUID, error)
-	// RestoreCommentStats 恢复评论统计缓存（如果不存在）。
-	// 供 like 领域点赞前确保 Redis stats Hash 存在。
-	RestoreCommentStats(ctx context.Context, commentID uuid.UUID) error
 	// IsLikedByUser 用户是否已赞该评论（缓存优先，miss 回源 DB，DB 已赞则回填缓存）。
 	// 供 like 领域点赞前解析真实状态；DB 错误原样返回（调用方不得猜测）。
 	IsLikedByUser(ctx context.Context, userID, commentID uuid.UUID) (bool, error)
@@ -240,7 +237,6 @@ type CommentService interface {
 
 type commentServiceImpl struct {
 	repo         domain.CommentRepository
-	statsCache   domain.CommentStatsCache
 	likeCache    domain.CommentLikeCache
 	publisher    domain.CommentEventPublisher
 	userFacade   UserFacade
@@ -254,15 +250,13 @@ type commentServiceImpl struct {
 // userFacade / postLookup 是跨领域依赖，通过 setter 注入（composition 层负责把它们连起来）。
 func NewCommentService(
 	repo domain.CommentRepository,
-	statsCache domain.CommentStatsCache,
 	likeCache domain.CommentLikeCache,
 	publisher domain.CommentEventPublisher,
 ) CommentService {
 	return &commentServiceImpl{
-		repo:       repo,
-		statsCache: statsCache,
-		likeCache:  likeCache,
-		publisher:  publisher,
+		repo:      repo,
+		likeCache: likeCache,
+		publisher: publisher,
 	}
 }
 
@@ -568,26 +562,6 @@ func (s *commentServiceImpl) GetCommentMeta(ctx context.Context, commentID uuid.
 	}
 	postID := comment.PostID
 	return &postID, nil
-}
-
-// RestoreCommentStats 恢复评论统计缓存（如果不存在）。
-// 供 like 领域点赞前确保 Redis stats Hash 存在，避免 Lua 脚本读到空 stats。
-//
-// 与旧 controller.restoreCommentStatsIfNeed 行为一致：
-// 检查缓存是否存在 → 不存在则从 DB 读 like_count 写入 Redis。
-func (s *commentServiceImpl) RestoreCommentStats(ctx context.Context, commentID uuid.UUID) error {
-	exists, err := s.statsCache.Exists(ctx, commentID)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return nil
-	}
-	comment, err := s.repo.GetByID(ctx, commentID)
-	if err != nil {
-		return err
-	}
-	return s.statsCache.Set(ctx, commentID, comment.LikeCount)
 }
 
 // buildCommentVOs 批量构建 CommentVO（包含评论者信息和被回复人信息）。
