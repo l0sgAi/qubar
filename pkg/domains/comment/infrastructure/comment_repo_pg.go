@@ -52,7 +52,7 @@ func (r *commentRepoPG) Create(ctx context.Context, comment *domain.Comment) err
 	})
 }
 
-// GetByID 根据 ID 获取评论（未删除）。
+// GetByID 根据 ID 获取评论（未删除，不看 status：写路径用；读路径在 application 层再判 Visible）。
 func (r *commentRepoPG) GetByID(ctx context.Context, commentID uuid.UUID) (*domain.Comment, error) {
 	var comment domain.Comment
 	err := r.db.WithContext(ctx).Where("id = ? AND deleted = ?", commentID, 0).First(&comment).Error
@@ -65,10 +65,29 @@ func (r *commentRepoPG) GetByID(ctx context.Context, commentID uuid.UUID) (*doma
 	return &comment, nil
 }
 
-// GetRootCommentsByCursor 游标分页获取帖子的顶层评论。
+// visibleScope 评论可见性谓词（domain.VisibleCondition：未删除且状态正常，#208）。
+func visibleScope(q *gorm.DB) *gorm.DB {
+	return q.Where(domain.VisibleCondition)
+}
+
+// rootListScope 帖子顶层评论列表的范围：列表与定位（rank 计数 / 取页起点）共用，口径逐字节一致。
+func rootListScope(postID uuid.UUID) func(*gorm.DB) *gorm.DB {
+	return func(q *gorm.DB) *gorm.DB {
+		return visibleScope(q.Where("post_id = ? AND root_id IS NULL", postID))
+	}
+}
+
+// replyListScope 楼内回复列表的范围：列表与定位共用，口径逐字节一致。
+func replyListScope(rootID uuid.UUID) func(*gorm.DB) *gorm.DB {
+	return func(q *gorm.DB) *gorm.DB {
+		return visibleScope(q.Where("root_id = ?", rootID))
+	}
+}
+
+// GetRootCommentsByCursor 游标分页获取帖子的顶层评论（仅可见评论）。
 // sort: 0=按点赞倒序, 1=按时间倒序。
 func (r *commentRepoPG) GetRootCommentsByCursor(ctx context.Context, postID uuid.UUID, size, sort int, cursor string) ([]domain.Comment, string, bool, error) {
-	query := r.db.WithContext(ctx).Model(&domain.Comment{}).Where("post_id = ? AND root_id IS NULL AND deleted = 0", postID)
+	query := rootListScope(postID)(r.db.WithContext(ctx).Model(&domain.Comment{}))
 
 	// 应用游标条件
 	var err error
@@ -100,10 +119,10 @@ func (r *commentRepoPG) GetRootCommentsByCursor(ctx context.Context, postID uuid
 	return comments, nextCursor, hasMore, nil
 }
 
-// GetRepliesByCursor 游标分页获取某条评论的子回复。
+// GetRepliesByCursor 游标分页获取某条评论的子回复（仅可见评论）。
 // sort: 0=按点赞倒序, 1=按时间倒序（与顶层列表同一套排序键映射）。
 func (r *commentRepoPG) GetRepliesByCursor(ctx context.Context, rootID uuid.UUID, size, sort int, cursor string) ([]domain.Comment, string, bool, error) {
-	query := r.db.WithContext(ctx).Model(&domain.Comment{}).Where("root_id = ? AND deleted = 0", rootID)
+	query := replyListScope(rootID)(r.db.WithContext(ctx).Model(&domain.Comment{}))
 
 	// 应用游标条件
 	var err error
@@ -137,19 +156,13 @@ func (r *commentRepoPG) GetRepliesByCursor(ctx context.Context, rootID uuid.UUID
 
 // LocateRootCursor 计算顶层列表的定位游标（设计见 docs/comment-locate-design.md）。
 func (r *commentRepoPG) LocateRootCursor(ctx context.Context, postID uuid.UUID, sort int, target *domain.Comment, size int) (string, error) {
-	scope := func(q *gorm.DB) *gorm.DB {
-		return q.Where("post_id = ? AND root_id IS NULL AND deleted = 0", postID)
-	}
-	cursor, _, err := r.locateCursor(ctx, scope, sort, target, size)
+	cursor, _, err := r.locateCursor(ctx, rootListScope(postID), sort, target, size)
 	return cursor, err
 }
 
 // LocateReplyCursor 计算回复列表的定位游标与页码（设计见 docs/comment-locate-design.md）。
 func (r *commentRepoPG) LocateReplyCursor(ctx context.Context, rootID uuid.UUID, sort int, target *domain.Comment, size int) (string, int, error) {
-	scope := func(q *gorm.DB) *gorm.DB {
-		return q.Where("root_id = ? AND deleted = 0", rootID)
-	}
-	return r.locateCursor(ctx, scope, sort, target, size)
+	return r.locateCursor(ctx, replyListScope(rootID), sort, target, size)
 }
 
 // locateCursor 定位算法公共部分：rank 计数 → 页码 → 页起始游标（上一页末条 keyset）。
