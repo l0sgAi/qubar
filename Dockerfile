@@ -10,7 +10,11 @@
 # 配置：挂载 /etc/qubar/config.yaml（模板见 configs/config.example.yaml），
 # 密钥用 QUBAR_* 环境变量注入（见 pkg/conf/env.go）。镜像内不含任何配置/密钥。
 
-FROM --platform=$BUILDPLATFORM golang:1.26 AS build
+# 构建镜像固定到与 go.mod `go` 指令相同的补丁版本，并锁定 digest（多架构 index），避免浮动标签带入旧工具链（#196）。
+# 升级 Go 时：先改 go.mod 的 `go` 指令，再把下面的标签改成同一版本，digest 用
+#   docker buildx imagetools inspect golang:<版本> --format '{{json .Manifest.Digest}}'
+# 取 index 的 digest（不是某个平台的 manifest digest）。
+FROM --platform=$BUILDPLATFORM golang:1.26.10@sha256:cfa27959837144bf4649802ba38e59daffd0dd2a7994aa83daaf113285b0f551 AS build
 ARG TARGETOS TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
