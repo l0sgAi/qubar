@@ -19,7 +19,7 @@
 
 | 文档 | 领域 | 表 |
 |---|---|---|
-| [user.md](user.md) | 用户 | `users` |
+| [user.md](user.md) | 用户 | `users`、`user_setting` |
 | [circle.md](circle.md) | 圈子 | `category`、`circle`、`circle_member`、`circle_invite_link`、`circle_invite_email` |
 | [post.md](post.md) | 帖子 | `post` |
 | [comment.md](comment.md) | 评论 | `comment`、`comment_like` |

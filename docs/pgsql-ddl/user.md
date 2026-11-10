@@ -139,3 +139,30 @@ FROM domains.users u
 JOIN domains.ai_agent a ON a.linked_user_id = u.id
 WHERE (a.deleted = 0 AND a.status = 1) = (u.agent_mention_disabled = 1);
 ```
+
+## 用户设置表
+
+> 权威 DDL 见 `migrations/20261110170808_add_user_setting.up.sql`（#218）。不进 CDC（`-- cdc: none`），只在 PG 内读写。
+> 设计见 [follow-design.md](../follow-design.md) §3.3、§8.5。
+
+```sql
+CREATE TABLE domains.user_setting (
+    user_id UUID PRIMARY KEY,                             -- 用户ID (users.id),每个用户至多一行
+    follow_list_visibility SMALLINT NOT NULL DEFAULT 0,   -- 关注/粉丝列表可见性 (0=公开, 1=私密)
+    create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+| 字段 | 说明 |
+|---|---|
+| `user_id` | 主键，无 FK。用户首次修改设置时建行；**没有行视为全部设置取默认值** |
+| `follow_list_visibility` | 关注列表 / 粉丝列表可见性，一个开关同时控制两个列表：`0` = 公开（默认，访客可读），`1` = 私密（仅本人可看名单；关注数 / 粉丝数仍公开）。无 CHECK，取值由应用层校验 |
+| `create_time` | 首次修改设置的时间 |
+| `update_time` | 设置值实际变化时由应用层更新（写入相同的值不产生更新） |
+
+- 个人中心的开关类设置都放这张表，**一列一个设置项**，应用按列单独 upsert（`INSERT … ON CONFLICT (user_id) DO UPDATE SET <该列>`），
+  并发修改不同设置项不会互相覆盖。新增设置项 = 加一个带常量默认值的 NOT NULL 列（兼容旧版本应用）。
+- 不放在 `users` 表：`users` 在 CDC / ES 同步链路里，设置项与搜索无关，改设置不应该触发 ES 同步。
+- 没有 `deleted` / `create_by` / `update_by`：行不会被逻辑删除，操作人恒为 `user_id` 本人。
+- 跨域读取走 user 域的 `SettingService`（follow 域经 `pkg/composition/follow_bridges.go` 桥接），其他域不直接查这张表。
