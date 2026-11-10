@@ -29,12 +29,15 @@
 pkg/domains/follow/
   domain/follow.go                  实体 UserFollow / UserFollowStat、Relation 常量与 RelationOf
   domain/repository.go              端口 RelationRepository / StatRepository + 哨兵错误
+  domain/event_publisher.go         端口 FollowEventPublisher（被关注通知事件，#219）
   application/service.go            FollowService（由小接口组合）、UserChecker 端口、构造器
   application/relation.go           RelationService：Follow / Unfollow
   application/stats.go              StatsService：GetStats
+  application/notify.go             关注成功（changed）后发布被关注通知事件，失败只记日志（#219）
   infrastructure/follow_repo_pg.go            followRepoPG + 两个构造器
   infrastructure/follow_relation_repo_pg.go   Follow / Unfollow / GetRelation（事务、锁顺序）
   infrastructure/follow_stat_repo_pg.go       GetStat / RecountStat
+  infrastructure/follow_event_publisher.go    FollowEventPublisher 的 Redpanda 实现（notification_events）
   interfaces/http/handler.go, routes.go
 pkg/composition/wire_follow.go      newFollowService / registerFollow
 pkg/composition/follow_bridges.go   followUserChecker（user → follow）
@@ -146,7 +149,7 @@ follow:
 | 达到上限后的关注尝试 | 每次尝试会写入关系行再回滚，产生少量死元组；关注接口暂无限流（项目没有通用限流中间件，见 #217 范围外） |
 | 热点用户 | 关注同一个大 V 的事务在其计数行上串行，单行更新耗时很短；真成为瓶颈时再考虑把粉丝数改成异步聚合 |
 | 机器人关注别人 | 机器人账号不登录，不会走到关注接口，未做额外限制 |
-| 通知 / 事件 | 本期不发任何事件；`RelationRepository.Follow` 返回的 `changed` 是 #219 判断「是否真的新关注」的依据 |
+| 通知 / 事件 | `RelationRepository.Follow` 返回 `changed == true`（这次真的新关注 / 重新关注）时发一条被关注通知事件（#219，`notice_type = 12`）；重复关注与取关不发，发布失败只记日志。规则与消费端见 `docs/notice-design.md` §九 |
 
 ## 八、分阶段交付
 

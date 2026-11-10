@@ -618,7 +618,7 @@ func InitNotificationEventProducer() error {
 }
 
 // PublishNotificationEvent 发布通知事件（消息中心）。
-// key = 目标 ID（post_id 或 comment_id），同目标事件保序。
+// key = 目标 ID（comment_id > post_id > recipient_id，都没有时用 actor_id），同目标事件保序。
 func PublishNotificationEvent(msg NotificationEventMessage) error {
 	if notificationEventWriter == nil {
 		return fmt.Errorf("notification event writer is not initialized")
@@ -637,6 +637,8 @@ func PublishNotificationEvent(msg NotificationEventMessage) error {
 		key = []byte(msg.CommentID.String())
 	} else if msg.PostID != nil {
 		key = []byte(msg.PostID.String())
+	} else if msg.RecipientID != nil {
+		key = []byte(msg.RecipientID.String())
 	} else {
 		key = []byte(msg.ActorID.String())
 	}

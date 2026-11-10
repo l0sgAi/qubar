@@ -5,13 +5,15 @@
 
 ## 站内通知表
 
-> 用户对用户行为（赞/收藏/评论/回复/@提及）产生的站内通知。
-> 写路径：4 触发域（like/collect/comment/post）发 `notification_events` Redpanda 事件
+> 用户对用户行为（赞/收藏/评论/回复/@提及/关注）产生的站内通知。
+> 写路径：触发域（like/collect/comment/post/follow）发 `notification_events` Redpanda 事件
 > → NotificationEventConsumer 批量反查接收人 + 规则过滤 + `ON CONFLICT` upsert 本表。
 > 读路径：notice 域 keyset 翻页（`ORDER BY id DESC`，UUIDv7 字典序==时间序）。
 >
 > - 去重模型：每对 (recipient, actor, type, target) 仅一行，重复触发（re-like）upsert 复用行 + 重置未读。
-> - 取消赞/收藏**不回收**通知（发出即留；负向事件触发端不发布）。
+> - 取消赞/收藏/关注**不回收**通知（发出即留；负向事件触发端不发布）。
+> - 被关注通知（`notice_type = 12`，#219）不挂帖子 / 评论：`post_id` / `comment_id` 为 NULL、`snippet` 为空串，
+>   去重键退化为 (recipient, actor, type)，每个关注者对同一接收人一行。
 > - `snippet` 快照入库，读侧不反查 live 内容；目标删除后通知保留（R7）。
 
 ```sql
@@ -71,7 +73,8 @@ CREATE UNIQUE INDEX uk_notice_dedup ON domains.notification(
 
 ## 应用义务（DB 不强制，应用层保证）
 
-- `notice_type` 枚举合法性（1-11；7 / 8 为人工审核结果，#118；9 / 10 发给圈主 + 管理员、11 为举报下架，#153）：consumer 按事件 type 映射，非法丢弃。
+- `notice_type` 枚举合法性（1-12；7 / 8 为人工审核结果，#118；9 / 10 发给圈主 + 管理员、11 为举报下架，#153；12 为被关注，#219）：consumer 按事件 type 映射，非法丢弃。
+  列注释（上面的 `COMMENT ON COLUMN ... notice_type`）与库里一致，还停在 1–11：#219 不含迁移，12 随后续迁移补进注释。
 - `recipient_id != actor_id`：consumer R1 过滤。
 - mention 上限截断（`notice.mention_max`，默认 10）：post/comment application 层。
 - 软删过滤 `deleted = 0`：所有查询手动带。

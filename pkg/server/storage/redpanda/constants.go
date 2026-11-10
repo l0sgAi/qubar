@@ -121,19 +121,22 @@ const (
 	NoticeTypePostReported = "post_reported"  // 帖子待处理举报达到阈值 → 本圈圈主 + 管理员（#153）
 	NoticeTypePostSelfHarm = "post_self_harm" // 帖子疑似自伤 / 轻生倾向（已发布）→ 本圈圈主 + 管理员（#153）
 	NoticeTypePostRemoved  = "post_removed"   // 帖子被举报后经圈管复核下架 → 帖子作者（#153）
+	NoticeTypeFollow       = "follow"         // 被关注 → 被关注者（#219，接收人由触发端自带 RecipientID）
 )
 
 // NotificationEventMessage 通知事件消息（topic: notification_events）。
 //
 // 仅正向动作发布（取消赞/收藏不通知也不回收，触发端直接不发）。
-// 接收人不在事件里：consumer 按类型批量反查 post/comment 表解析（mention 例外，
-// 接收人由触发端校验后自带 MentionUserIDs）。
+// 接收人不在事件里：consumer 按类型批量反查 post/comment 表解析。两个例外由触发端自带接收人：
+// mention（校验后的 MentionUserIDs）与 follow（RecipientID，没有可反查的帖子 / 评论）。
+// 新增字段一律 omitempty：旧版本发出的消息没有该字段，解码后为零值，各类型的处理不受影响。
 type NotificationEventMessage struct {
 	Type           string      `json:"type"` // NoticeType* 常量
 	ActorID        uuid.UUID   `json:"actor_id"`
 	PostID         *uuid.UUID  `json:"post_id,omitempty"`          // 跳转用；like_post/collect_post/comment_post/mention(post)/审核 / 举报类必填
 	CommentID      *uuid.UUID  `json:"comment_id,omitempty"`       // like_comment/comment_post/reply_comment/mention(comment) 必填
 	MentionUserIDs []uuid.UUID `json:"mention_user_ids,omitempty"` // type=mention 专用（触发端已校验+截断）
+	RecipientID    *uuid.UUID  `json:"recipient_id,omitempty"`     // type=follow 专用：被关注者（#219）；其他类型不带、consumer 也不读
 	Snippet        string      `json:"snippet,omitempty"`          // comment 类：正文快照（已 SanitizeForPg）；like/collect/审核结果由 consumer 反查帖子标题
 	Ts             int64       `json:"ts"`                         // 事件时间 Unix 毫秒
 }

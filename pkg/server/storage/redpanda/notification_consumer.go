@@ -32,6 +32,7 @@ var noticeTypeCode = map[string]int16{
 	NoticeTypePostReported: noticedomain.NoticeTypePostReported,
 	NoticeTypePostSelfHarm: noticedomain.NoticeTypePostSelfHarm,
 	NoticeTypePostRemoved:  noticedomain.NoticeTypePostRemoved,
+	NoticeTypeFollow:       noticedomain.NoticeTypeFollow,
 }
 
 // 圈管类通知（举报 / 疑似自伤）的接收人：帖子所属圈子的圈主 + 管理员（role >= 20）且成员状态正常（与 circle 域取值一致）。
@@ -318,7 +319,7 @@ type commentLookupRow struct {
 // buildNotificationRows 把一批事件解析成通知行 + 每接收人未读增量。
 //
 // 规则落点（设计 docs/notice-design.md §3.3）：
-//   - 接收人消费端批量反查（post/comment 各一次 IN 查询；mention 自带接收人）
+//   - 接收人消费端批量反查（post/comment 各一次 IN 查询；mention / follow 自带接收人）
 //   - 举报 / 疑似自伤（#153）：帖子所属圈子的圈主 + 管理员（circle_member 一次 IN 查询）
 //   - R1 自动作不通知；R4 同 (recipient, comment) mention 优先；批内全键去重
 //   - 目标已删（反查 miss）→ 丢弃
@@ -429,6 +430,16 @@ func buildNotificationRows(events []NotificationEventMessage) ([]noticeRow, map[
 			for _, recipient := range event.MentionUserIDs {
 				addRow(recipient, event, event.Snippet)
 			}
+
+		case NoticeTypeFollow:
+			// 被关注（#219）：接收人由触发端自带；缺失（非法消息）丢弃。
+			if event.RecipientID == nil {
+				continue
+			}
+			// 不挂帖子 / 评论、没有快照：去重键只剩 (recipient, actor, type)，每个关注者对同一接收人一行，
+			// 取关后再关注走 upsert 冲突分支复用该行并重新置为未读（与重赞一致）。
+			event.PostID, event.CommentID = nil, nil
+			addRow(*event.RecipientID, event, "")
 		}
 	}
 
