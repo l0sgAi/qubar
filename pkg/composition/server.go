@@ -94,8 +94,8 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 		logger.Log.Info("cross-domain facades injected: circle<-user/post, post<-user/circle, comment<-user/post, like<-post/comment, collect<-post, history<-post, notice<-user/post, follow<-user")
 	}
 
-	// recommend 需要 post（hydrate + circle_id 反查）+ circle（joined IDs），均为只读消费者，无反向注入。
-	recommendSvc := newRecommendService(postSvc, circleSvc, circleVisibility)
+	// recommend 需要 post（hydrate + circle_id 反查）+ circle（joined IDs）+ follow（关注的用户 ID），均为只读消费者，无反向注入。
+	recommendSvc := newRecommendService(postSvc, circleSvc, circleVisibility, followSvc)
 
 	// trending 需要 post（hydrate + 交互态）+ circle（GetByIDs）+ user（GetBriefs），均为只读消费者。
 	trendingSvc := newTrendingService(postSvc, circleRepo, userFacade)

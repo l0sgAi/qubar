@@ -17,6 +17,10 @@ func (s *visSearcher) Search(_ context.Context, _ string, _, exclude []uuid.UUID
 	return []uuid.UUID{uuid.New()}, nil, nil
 }
 
+func (s *visSearcher) SearchFollowing(context.Context, []uuid.UUID, []uuid.UUID, []uuid.UUID, int, []interface{}) ([]uuid.UUID, []interface{}, error) {
+	panic("hot / latest must not use the following search")
+}
+
 type visHydrator struct{ viewer uuid.UUID }
 
 func (h *visHydrator) Hydrate(_ context.Context, viewer uuid.UUID, _ []uuid.UUID) ([]domain.FeedPostItem, error) {
@@ -40,7 +44,7 @@ func TestSimpleFeed_ExcludesHiddenCircles(t *testing.T) {
 	viewer := uuid.New()
 	for _, tab := range []string{"hot", "latest"} {
 		searcher, hydrator := &visSearcher{}, &visHydrator{}
-		svc := NewRecommendService(searcher, nil, nil, nil, hydrator, noInteractions{}, nil, nil, hidden)
+		svc := NewRecommendService(searcher, nil, nil, nil, hydrator, noInteractions{}, nil, nil, hidden, nil)
 		if _, err := svc.GetHomeFeed(context.Background(), viewer, tab, 10, 0, "", nil); err != nil {
 			t.Fatalf("%s: %v", tab, err)
 		}

@@ -1,17 +1,18 @@
-// Package composition 的 recommend_bridges.go：注入 recommend 领域的跨域桥接器（post / circle → recommend）。
+// Package composition 的 recommend_bridges.go：注入 recommend 领域的跨域桥接器（post / circle / follow → recommend）。
 package composition
 
 import (
 	"context"
 
 	circleapp "interestBar/pkg/domains/circle/application"
+	followapp "interestBar/pkg/domains/follow/application"
 	postapp "interestBar/pkg/domains/post/application"
 	recommenddomain "interestBar/pkg/domains/recommend/domain"
 
 	"github.com/google/uuid"
 )
 
-// ===== recommend ← (post, circle) =====
+// ===== recommend ← (post, circle, follow) =====
 
 // recommendCircleLookup 把 circle.application.CircleService 适配为 recommend.domain.CircleLookup。
 type recommendCircleLookup struct {
@@ -57,6 +58,18 @@ func (h *recommendPostHydrator) Hydrate(ctx context.Context, viewerID uuid.UUID,
 		})
 	}
 	return out, nil
+}
+
+// recommendFolloweeLookup 把 follow.application.FolloweeIDsService 适配为 recommend.domain.FolloweeLookup
+// （首页关注 tab：关注的用户发的帖子，#220）。
+type recommendFolloweeLookup struct {
+	delegate followapp.FolloweeIDsService
+}
+
+var _ recommenddomain.FolloweeLookup = (*recommendFolloweeLookup)(nil)
+
+func (l *recommendFolloweeLookup) ListFolloweeIDs(ctx context.Context, userID uuid.UUID) ([]uuid.UUID, error) {
+	return l.delegate.ListFolloweeIDs(ctx, userID)
 }
 
 var _ recommenddomain.InteractionChecker = (*postInteractionChecker)(nil)

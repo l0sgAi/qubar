@@ -13,7 +13,7 @@ import (
 //	  tab=recommend  推荐流（候选池 offset + pool_token；5 路召回 + CF）—— 需登录，匿名→401
 //	  tab=hot         全局热门（rank_score 时间衰减，search_after 翻页）—— 访客可读
 //	  tab=latest      全局最新（create_time desc，search_after 翻页）—— 访客可读
-//	  tab=following   关注流（已加入圈子，时间倒序，search_after 翻页）—— 需登录，匿名→401
+//	  tab=following   关注流（已加入圈子的帖子 + 关注的用户发的帖子，时间倒序，search_after 翻页）—— 需登录，匿名→401
 //
 // 复用 /post 前缀（home 是 post 列表的 tab 化入口）。与 post 域共用 /post 前缀但不冲突
 // （本域只注册 /post/home 单条路径，post 域注册 /post/list 等）。
