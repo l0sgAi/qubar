@@ -112,17 +112,17 @@ redpanda:
   post_stats_ttl: 43 # 帖子统计Redis缓存TTL(分钟)
   like_event_topic: "like_events" # 点赞事件topic
   like_event_consumer_group: "like_events_consumer_group" # 点赞事件消费者组
-  like_event_flush_interval: 10 # 点赞事件刷写间隔(秒)
+  like_event_flush_interval: 60 # 点赞事件刷写间隔(秒)；读路径以 Redis 为准，拉长窗口减少 post 计数 UPDATE（#130 D4）
   collect_event_topic: "collect_events" # 收藏事件topic
   collect_event_consumer_group: "collect_events_consumer_group" # 收藏事件消费者组
-  collect_event_flush_interval: 10 # 收藏事件刷写间隔(秒)
+  collect_event_flush_interval: 60 # 收藏事件刷写间隔(秒)；同上（#130 D4）
   history_event_topic: "post_view_history" # 浏览历史事件topic
   history_event_consumer_group: "post_view_history_consumer_group" # 浏览历史事件消费者组
   history_event_flush_interval: 10 # 浏览历史事件刷写间隔(秒)
   post_hot_topic: "post_hot" # 帖子热度增量topic
   post_hot_consumer_group: "post_hot_consumer_group" # 帖子热度消费者组
   post_hot_flush_interval: 13 # 帖子热度刷新间隔(分钟)
-  post_hot_flush_messages: 500 # 帖子热度批量刷新条数阈值
+  post_hot_flush_messages: 0 # 帖子热度批量刷新条数阈值；<=0 关闭条数触发，只按 post_hot_flush_interval flush（#130 D3）
   circle_hot_flush_interval: 34 # 圈子热度落库间隔(分钟)
   circle_hot_ttl: 50 # 圈子热度累加器key TTL(小时)
   post_interaction_topic: "post_interaction" # 帖子互动事件topic（CF 灌数）
