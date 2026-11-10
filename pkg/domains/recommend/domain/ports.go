@@ -1,8 +1,8 @@
 // Package domain 定义 recommend 领域的端口与 DTO。
 //
 // recommend 是跨域编排器（无聚合根）：调 post(hydrate/circle_id)、circle(joined IDs)、
-// redis(seed/cf:item/feed 池)。所有跨域依赖经此包接口抽象，由 composition 注入桥接器，
-// 本包不 import post/circle，避免环依赖。
+// follow(关注的用户 ID)、redis(seed/cf:item/feed 池)。所有跨域依赖经此包接口抽象，由 composition 注入桥接器，
+// 本包不 import post/circle/follow，避免环依赖。
 package domain
 
 import (
@@ -60,6 +60,10 @@ type HomeFeedSearcher interface {
 	// circleIDs nil/空=全局；非空=terms 过滤。next 为下一页 searchAfter（recall 内部翻页用）。
 	// excludeCircleIDs 为查看者不可见的私密圈（must_not）。
 	Search(ctx context.Context, sort string, circleIDs, excludeCircleIDs []uuid.UUID, size int, searchAfter []interface{}) (ids []uuid.UUID, next []interface{}, err error)
+	// SearchFollowing 关注流：帖子所在圈子在 circleIDs 内，或作者在 authorIDs 内（命中任一即可，同一帖子只返回一次），
+	// create_time desc；其余过滤与 Search 的 "latest" 一致。两个列表都为空时返回空结果，不退化成全局流。
+	// excludeCircleIDs 为查看者不可见的私密圈（must_not），对两种条件都生效。
+	SearchFollowing(ctx context.Context, circleIDs, authorIDs, excludeCircleIDs []uuid.UUID, size int, searchAfter []interface{}) (ids []uuid.UUID, next []interface{}, err error)
 }
 
 // PostHydrator 把 postID 列表 hydrate 成 FeedPostItem（作者/圈子/图片/统计；不含交互态）。
@@ -82,6 +86,12 @@ type PostMetaReader interface {
 // CircleLookup 用户已加入的圈子 ID 列表（C1 兴趣圈子路用）。
 type CircleLookup interface {
 	ListJoinedCircleIDs(ctx context.Context, userID uuid.UUID, limit int) ([]uuid.UUID, error)
+}
+
+// FolloweeLookup 用户关注的全部用户 ID（关注流用；composition 桥接 follow 域，数量上限由 follow 域按
+// follow.max_following 控制）。
+type FolloweeLookup interface {
+	ListFolloweeIDs(ctx context.Context, userID uuid.UUID) ([]uuid.UUID, error)
 }
 
 // SeedReader 用户互动种子（C5 CF seed + exclude 已交互 + CF 相似召回）。
