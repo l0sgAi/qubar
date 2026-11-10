@@ -1,9 +1,9 @@
 # 用户关注（follow）设计：关注关系核心
 
 > 目标：新增 `pkg/domains/follow`，落地用户间关注 / 取关、四种关系状态、关注数 / 粉丝数与关注上限（issue #217，总览 #29 的第 1 步）。
-> 列表与隐私开关（#218）、被关注通知（#219）、首页关注 tab（#220）在后续 issue，都建在本文的表和仓储之上。
+> 列表与隐私开关（#218）、被关注通知（#219）在后续 issue，都建在本文的表和仓储之上；首页关注 tab（#220）见第九节。
 >
-> 基线：此前没有用户间关注关系；首页 `following` tab 把「关注」映射成「已加入的圈子」（`recommend` 域的 `getFollowing`）。
+> 基线：此前没有用户间关注关系；首页 `following` tab 把「关注」映射成「已加入的圈子」（`recommend` 域的 `getFollowing`，#220 起改为合并流）。
 
 ---
 
@@ -155,4 +155,78 @@ follow:
 | P0 | #217（本文） | 关注 / 取关、关系状态、计数、上限、重算方法 |
 | P1 | #218 | 关注 / 粉丝 / 互关列表、批量关系查询、列表隐私开关 |
 | P1 | #219 | 被关注通知 |
-| P1 | #220 | 首页关注 tab 合并关注用户的帖子 |
+| P1 | #220 | 首页关注 tab 合并关注用户的帖子（第九节） |
+
+## 九、首页关注 tab 合并关注用户的帖子（#220）
+
+`GET /post/home?tab=following` 从「已加入圈子的帖子」改为合并流：帖子所在圈子是我已加入的，**或**帖子作者是我关注的用户。
+排序（发帖时间倒序）、`search_after` 翻页、访客返回 401 都不变。接口说明见 [api/home-feed-api.md](api/home-feed-api.md)。
+
+### 数据流
+
+```
+recommend.getFollowing(userID)
+  ├─ CircleLookup.ListJoinedCircleIDs(userID, 200)          已加入圈子（joined ZSET，失败 → 空）
+  ├─ FolloweeLookup.ListFolloweeIDs(userID)                 关注的用户 ID（失败 → 空，降级为仅圈子）
+  │     └─ composition.recommendFolloweeLookup → follow.FollowService.ListFolloweeIDs
+  │           └─ FolloweeIDRepository.ListFolloweeIDs(userID, follow.max_following)
+  │                 SELECT followee_id FROM user_follow WHERE follower_id=? AND deleted=0
+  │                 ORDER BY follow_time DESC, id DESC LIMIT ?      -- idx_user_follow_following
+  ├─ 两个列表都为空 → 空页（不查 ES）
+  ├─ CircleVisibility.HiddenCircleIDs(userID)               查看者不可见的私密圈
+  └─ HomeFeedSearcher.SearchFollowing(circles, followees, hidden, size, searchAfter)
+        └─ elasticsearch.SearchFollowingFeed → hydrate → 补 is_liked / is_collected
+```
+
+recommend 域只依赖自己声明的 `FolloweeLookup` 端口（`recommend/domain/ports.go`），不 import follow 域；桥接器在
+`pkg/composition/recommend_bridges.go`。follow 域的读取能力是 `FollowService` 里新增的小接口 `FolloweeIDsService`
+（`follow/application/followee_ids.go`），仓储端口 `FolloweeIDRepository` 在 `follow/domain/followee_ids.go`。
+
+### ES 查询
+
+`post` 索引的作者字段是 `user_id`：索引模板 `pg_domains_template`（`pkg/server/storage/elasticsearch/init.go`）把 `id` / `*_id`
+动态映射为 `keyword`，CDC 的 es-sink 字段白名单（`deploy/ansible/group_vars/all.yml` 的 `es_sinks.post`）包含它，值是 UUID 字符串。
+查询体由 `homeFeedQuery`（`pkg/server/storage/elasticsearch/home_feed_query.go`）构造，`hot` / `latest` / `following` 共用同一套基础过滤：
+
+```jsonc
+{
+  "query": { "bool": {
+    "must":     [ { "term": { "deleted": 0 } }, { "term": { "status": 1 } } ],   // 与 latest 一致：只要已发布帖子
+    "should":   [ { "terms": { "circle_id": ["<已加入圈子>", "…"] } },
+                  { "terms": { "user_id":   ["<关注的用户>", "…"] } } ],
+    "minimum_should_match": 1,                                                    // 圈子 或 作者，至少命中一个
+    "must_not": [ { "terms": { "circle_id": ["<查看者不可见的私密圈>", "…"] } } ] // 对两个条件都生效
+  } },
+  "sort": [ { "create_time": { "order": "desc" } }, { "id": { "order": "desc" } } ],
+  "size": 20,
+  "search_after": ["<上一页最后一条的 sort 值>"]
+}
+```
+
+- 圈子与关注只有一种非空时，对应的 `terms` 直接放进 `must`，不产生 `should`（只有圈子时查询体与改动前完全一致）。
+- 一次查询取并集，每个文档至多命中一次，所以「既在已加入圈子里、作者又是关注的人」的帖子不会重复。
+- `terms` 的元素上限是 `index.max_terms_count`（默认 65536），200 个圈子 + 2000 个关注远低于它。
+
+### 边界与取舍
+
+| 项 | 现状 |
+|---|---|
+| 关注 ID 的数量 | 一次取全量，上限 `follow.max_following`（默认 2000）。上限被调低后，已超出的用户只取最近关注的那部分 |
+| 关注 ID 的来源 | 每次请求直接读 PG（部分索引的有序扫描），不加 Redis 缓存；所以关注 / 取关后下一次从第一页请求就按新关系返回。压测显示成为瓶颈时再参考已加入圈子的 joined ZSET 加缓存 |
+| 翻页中途关系变化 | 圈子与关注列表每页都重新读取，已打开的翻页序列从下一页起按新关系过滤；游标是 `(create_time, id)`，仍然有效，不会重复 |
+| 关注 ID 读取失败 | 记错误日志，降级为仅圈子（没有加入圈子则返回空页），接口不报错 |
+| 已加入圈子读取失败 | 沿用原有行为（记日志、按空处理），此时仍按关注的用户返回 |
+| 私密圈 | 查看者不可见的私密圈走 `must_not`，关注的人发在里面的帖子同样不返回；hydrate 仍按查看者再过滤一次 |
+| 被关注者被禁用 / 删除 | 关系行保留（见第七节），其已发布帖子是否出现与 `latest` 流一致，本期不额外过滤 |
+| AI 机器人账号 | 机器人自动发的帖子就是普通的已发布帖子，被关注后同样出现 |
+| 自己的帖子 | 不单独加入：只有发在已加入圈子里时才出现（与改动前一致） |
+| 已加入圈子数量 | 仍取最多 200 个（与改动前一致） |
+
+### 测试
+
+| 层 | 测试 | 覆盖 |
+|---|---|---|
+| recommend 应用层 | `recommend/application/following_test.go` | 仅圈子 / 仅关注 / 两者都有 / 两者都空、私密圈排除、关注 ID 读取失败降级、翻页透传、访客 401 |
+| ES 查询体 | `elasticsearch/home_feed_query_test.go` | `should` + `minimum_should_match`、单一范围进 `must`、`must_not`、与重构前的 `hot` / `latest` 查询体一致 |
+| ES 真实检索（开发栈临时索引） | `elasticsearch/following_feed_integration_test.go` | 并集不重复、私密圈、未发布 / 已删除、同一发帖时间的翻页、2000 个关注 ID 的 `terms` |
+| follow 仓储（开发栈 PG） | `follow/infrastructure/follow_followee_ids_repo_pg_integration_test.go` | 只返回有效关系、关注时间倒序、limit、取关 / 再关注、走部分索引 |

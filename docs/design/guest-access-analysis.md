@@ -98,7 +98,7 @@
 |---|---|---|
 | `GET /post/home?tab=hot\|latest` | 是（强制） | 全局流，但 handler 注释"推荐流强制登录"（`handler.go:66`） |
 | `GET /post/home?tab=recommend` | 是 | 个性化 CF + 防气泡（依赖用户行为池） |
-| `GET /post/home?tab=following` | 是 | 已加圈子最新流 |
+| `GET /post/home?tab=following` | 是 | 已加圈子 + 关注用户的最新流（#220 起合并关注用户的帖子） |
 
 #### storage 域（`/upload` 组 LOCKED）
 | 端点 | handler 用身份？ | 用途 |
@@ -163,7 +163,7 @@ handler 需要 userID 但仅用于**个性化标记**（is_liked / is_collected 
 | `POST /like/toggle` / `POST /collect/toggle` / `GET /collect/posts` | 写交互状态 / 个人收藏 |
 | `GET /history/posts` | 个人浏览历史 |
 | `GET /post/home?tab=recommend` | 依赖用户行为池（like/collect/view ZSET + CF），匿名无数据源 |
-| `GET /post/home?tab=following` | 依赖已加圈子列表 |
+| `GET /post/home?tab=following` | 依赖已加圈子与关注用户列表 |
 | `POST /upload/*`（全部） | **强烈建议保持锁定**——见下方"存储滥用风险" |
 
 ### ⚠️ `/post/home` 混合 tab 的特殊处理
