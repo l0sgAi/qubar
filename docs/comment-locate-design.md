@@ -1,7 +1,7 @@
 # 评论定位（通知点击直达评论）设计
 
 > 版本：2026-09-03 · 需求来源：前端《通知点击定位评论 — 后端需求文档》
-> 状态：**已实现**（2026-09-03，Q1~Q3 已拍板，见 §11）
+> 状态：**已实现**（2026-09-03，Q1~Q3 已拍板，见 §11）；2026-11-10 游标升级为 v2（#209，见 §12）
 > 目标：新增 `GET /comment/locate`，一次请求返回定位目标评论所需的全部游标信息，
 > 支撑「点击通知 → 直达评论 → 滚动居中 + 高亮」。
 
@@ -12,11 +12,12 @@
 现状已具备全部基础：
 
 - 顶层列表 `GET /comment/list`：keyset 游标，页大小**服务端固定 20**
-  （[service.go](../pkg/domains/comment/application/service.go) `GetRootComments` 硬编码 `20`）；
+  （[query.go](../pkg/domains/comment/application/query.go) `GetRootComments`，常量 `rootCommentPageSize`）；
   sort=0 → `like_count DESC, id DESC`，sort=1 → `id DESC`（UUIDv7 字典序=时间序）。
 - 回复列表 `GET /comment/replies`：同一套游标函数，`limit` 由客户端传（1~50，默认 10）。
-- 游标格式：base64(JSON)，sort=0 含 `{like_count, id}`，sort=1 含 `{id}`；
+- 游标格式：base64(JSON)，keyset 键 sort=0 为 `{like_count, id}`，sort=1 为 `{id}`；
   条件为严格小于（`id < ?` / `like_count < ? OR (= AND id < ?)`）。
+  #209 起游标为 v2，另带版本、排序与作用域（帖子 / 楼），格式与校验见 §12。
 - `GetByID` 过滤 `deleted=0`，已删除评论天然返回 `ErrCommentNotFound`；
   审核中 / 隐藏由 application 层 `Comment.Visible()` 判定后同样按 `ErrCommentNotFound` 处理（#208）。
 - 现有索引（[docs/pgsql-ddl/comment.md](pgsql-ddl/comment.md)）：
@@ -39,7 +40,7 @@
 ### P2. 回复排序语义文档与实现不一致 ⚠️ 既有注释错位
 
 - handler/service 注释声称 replies `sort: 0=时间倒序, 1=点赞倒序`；
-- 实际 repo 实现（`applyOrderBy`/`applyCursorCondition`/`buildNextCursor`）对两个列表
+- 实际 repo 实现（`applyOrderBy`/`applyCursorCondition`/`encodeListCursor`，原 `buildNextCursor`）对两个列表
   是同一套映射：**sort=0 → 点赞倒序，sort=1 → 时间倒序**，回复并未反转。
 - 前端实际认知「0最热 1最新」与 repo 实际行为**一致**（确认 2026-09-03）——
   错的只是后端 Go 注释，线上行为无需改动。
@@ -63,7 +64,7 @@ locate 若与列表口径不同会自相矛盾（locate 说不存在，列表却
 **决策 D6：locate 与列表同谓词。** 原为「仅 `deleted=0`」；#208 起统一为评论可见性谓词
 `domain.VisibleCondition`（`deleted = 0 AND status = 1`，[visibility.go](../pkg/domains/comment/domain/visibility.go)），
 列表与定位共用 `rootListScope` / `replyListScope`（[comment_repo_pg.go](../pkg/domains/comment/infrastructure/comment_repo_pg.go)），
-rank 计数、取页起点与列表游标逐字节一致。目标或其根评论不可见（审核中 / 隐藏 / 已删）→ 与「评论不存在」相同的 404。
+rank 计数、取页起点与列表口径一致；`listScope` 同时携带游标作用域 ID，定位游标与列表游标逐字节一致（§12）。目标或其根评论不可见（审核中 / 隐藏 / 已删）→ 与「评论不存在」相同的 404。
 
 ### P5. 并发漂移（固有限制，接受）
 
@@ -176,7 +177,9 @@ ORDER BY like_count DESC, id DESC   -- sort=0；sort=1 改 ORDER BY id DESC
 LIMIT 1 OFFSET k - 1;
 ```
 
-cursor 编码复用既有 `buildNextCursor(item, sort)`，保证与列表接口游标格式逐字节一致。
+cursor 编码与列表的 `next_cursor` 是同一个函数 `encodeListCursor(scope.id, sort, item)`
+（[comment_cursor.go](../pkg/domains/comment/infrastructure/comment_cursor.go)）：顶层 `scope.id` = 帖子 ID，
+回复 `scope.id` = 根评论 ID。定位游标与「顺序翻页翻到该页时拿到的 `next_cursor`」逐字节相同（§12）。
 
 ### 5.3 边界自测表（验收 #6）
 
@@ -223,9 +226,9 @@ DB 往返：顶层 2~3 次（GetByID + COUNT + 必要时 OFFSET 查），回复 
 | 层 | 文件 | 改动 |
 |---|---|---|
 | domain | [repository.go](../pkg/domains/comment/domain/repository.go) | 接口 +2 方法：`LocateRootCursor(ctx, postID, sort, target *Comment, size) (string, error)`（`""`=首页）；`LocateReplyCursor(ctx, rootID, sort, target *Comment, size) (string, int, error)`（cursor + page 从 1） |
-| infra | [comment_repo_pg.go](../pkg/domains/comment/infrastructure/comment_repo_pg.go) | 实现两方法；抽 `countCommentsBefore(scope, sort, target)` 与 `keysetItemAt(scope, sort, k)` 两 helper；游标编码复用 `buildNextCursor` |
-| application | [service.go](../pkg/domains/comment/application/service.go) | `LocateComment(ctx, commentID, sort, replySort, replyLimit) (*CommentLocateResult, error)`；提取常量 `rootCommentPageSize = 20`（替换 GetRootComments 硬编码）、`defaultReplyLimit = 10`（替换 GetReplies 硬编码），locate 与列表共用同一常量，防页大小漂移 |
-| application | service.go | `CommentLocateResult` 结构体：`ListCursor`/`ReplyCursor` 用 `*string`（nil → JSON `null`） |
+| infra | [comment_repo_pg.go](../pkg/domains/comment/infrastructure/comment_repo_pg.go) | 实现两方法（公共部分 `locateCursor(scope, sort, target, size)`）；游标编码复用 `encodeListCursor`（原 `buildNextCursor`，#209 移到 [comment_cursor.go](../pkg/domains/comment/infrastructure/comment_cursor.go)） |
+| application | [query.go](../pkg/domains/comment/application/query.go)（#209 自 service.go 拆出） | `LocateComment(ctx, viewerID, commentID, sort, replySort) (*CommentLocateResult, error)`；提取常量 `rootCommentPageSize = 20`（替换 GetRootComments 硬编码）、`defaultReplyLimit = 10`（替换 GetReplies 硬编码），locate 与列表共用同一常量，防页大小漂移 |
+| application | [service.go](../pkg/domains/comment/application/service.go) | `CommentLocateResult` 结构体：`ListCursor`/`ReplyCursor` 用 `*string`（nil → JSON `null`） |
 | http | [handler.go](../pkg/domains/comment/interfaces/http/handler.go) | `LocateCommentRequest`（query 绑定，`comment_id` 必填 uuid 校验，sort `oneof=0 1`）+ handler；`reply_sort` 手动解析（缺省=1）避开指针 query 绑定不确定性；`ErrCommentNotFound` → `httputil.NotFound(c, "评论不存在或已删除")` |
 | http | [routes.go](../pkg/domains/comment/interfaces/http/routes.go) | `pub.GET("/locate", h.LocateComment)`（optionalCheck 组） |
 | http | handler.go 注释修正 | P2：GetRepliesRequest / GetReplies 的 sort 注释改为与实际一致（0=点赞倒序，1=时间倒序）；service/repo 接口注释同步修正 |
@@ -236,7 +239,10 @@ DB 往返：顶层 2~3 次（GetByID + COUNT + 必要时 OFFSET 查），回复 
 
 - **infra 单测**（扩展现有 [cursor_test.go](../pkg/domains/comment/infrastructure/cursor_test.go)
   或新增 locate_test.go）：page/cursor 计算覆盖 §5.3 边界表，两种 sort 各一遍；
-  回复侧 rank=10/11 边界。
+  回复侧 rank=10/11 边界。游标 v1 / v2 解析、跨帖 / 跨楼 / 换排序被拒绝见 cursor_test.go（#209）。
+- **infra 集成测试**（[comment_repo_pg_integration_test.go](../pkg/domains/comment/infrastructure/comment_repo_pg_integration_test.go)）：
+  `TestCommentRepo_LocateCursorMatchesListPages` 断言定位游标与顺序翻页拿到的页起始游标字符串相等；
+  `TestCommentRepo_CursorScopeAndV1Compat` 走真实 SQL 验证作用域校验与 v1 兼容。
 - **service 单测**（参照 mention_test.go 的 fake repo 模式）：
   顶层目标、回复目标、目标已删 → ErrCommentNotFound、根已删 → ErrCommentNotFound、
   is_root=1 时 reply_cursor=nil/reply_page=0。
@@ -268,3 +274,53 @@ DB 往返：顶层 2~3 次（GetByID + COUNT + 必要时 OFFSET 查），回复 
   与 repo 实际行为一致（仅后端注释错位，已修）。`reply_sort` 缺省=1。
 - **Q3（P1 回复页大小）**：✅ 前端不传 limit → 砍掉 `reply_limit` 参数，
   回复页大小固定服务端默认 10（`defaultReplyPageSize` 常量共用）。
+
+## 12. 游标 v2（#209，2026-11-10）
+
+列表（`/comment/list`、`/comment/replies` 的 `next_cursor`）与定位（`list_cursor` / `reply_cursor`）
+共用同一套游标。编解码集中在 [comment_cursor.go](../pkg/domains/comment/infrastructure/comment_cursor.go)。
+
+### 12.1 格式
+
+base64(JSON)，对前端是**不透明字符串**（前端原样回传，不解析）：
+
+```
+v2  sort=0：{"v":2,"sort":0,"scope_id":"<帖子ID|根评论ID>","like_count":7,"id":"<上一页末条ID>"}
+v2  sort=1：{"v":2,"sort":1,"scope_id":"<帖子ID|根评论ID>","id":"<上一页末条ID>"}
+v1（旧）  ：{"id":"...","like_count":7} / {"id":"..."}        -- 无 v / sort / scope_id
+```
+
+| 字段 | 说明 |
+|---|---|
+| `v` | 版本号，当前 2。v1 游标没有该字段 |
+| `sort` | 生成游标时的排序（0=点赞倒序，1=时间倒序） |
+| `scope_id` | 游标所属列表：顶层列表 = 帖子 ID；楼内回复 = 根评论 ID |
+| `like_count` / `id` | keyset 键（上一页末条），键名与 v1 相同；`like_count` 仅 sort=0 |
+
+字段顺序固定（结构体编码），同一 `(scope_id, sort, 上一页末条)` 的编码结果唯一。
+
+### 12.2 解析与校验（`parseListCursor`）
+
+| 游标 | 处理 |
+|---|---|
+| v2，`sort` 与请求一致且 `scope_id` 等于请求的帖子 / 根评论 | 正常翻页 |
+| v2，`sort` 不一致 | `ErrInvalidCursor` → HTTP 400 |
+| v2，`scope_id` 不一致（跨帖、跨楼、顶层游标用于楼内或反之） | `ErrInvalidCursor` → HTTP 400 |
+| v1（无 `v`） | **仍接受**：没有作用域信息，无法校验归属，按旧逻辑只校验 keyset 字段 |
+| 未知版本、缺字段、类型错误、base64 / JSON 损坏 | `ErrInvalidCursor` → HTTP 400（绝不 panic） |
+
+- 服务端只**产出** v2；v1 只为兼容 v2 上线时前端内存里还持有的旧游标（页面刷新即换新），
+  评论列表游标不落盘，过渡期后可删除 v1 分支。
+- 行为变化仅一处：v1 时 sort=0 的游标带到 sort=1 的请求会被静默接受（只取 `id`，翻到错位的页）；
+  v2 起返回 400。sort=1 的游标带到 sort=0 的请求 v1 时就是 400（缺 `like_count`）。前端切排序会重置游标，不受影响。
+- 兼容性：v2 的 keyset 键名与类型和 v1 相同，v2 上线前的旧版本也能读 v2 游标（忽略多出的字段），发版 / 回滚期间游标不失效。
+
+### 12.3 定位游标与列表游标逐字节一致
+
+`listScope{id, apply}`（[comment_repo_pg.go](../pkg/domains/comment/infrastructure/comment_repo_pg.go)）把「过滤条件」
+与「游标作用域 ID」绑在一起：`rootListScope(postID)` / `replyListScope(rootID)` 各只有一个构造点，
+列表 `listByCursor` 与定位 `locateCursor` 都用 `encodeListCursor(scope.id, sort, 上一页末条)` 产出游标。
+因此定位返回的 `list_cursor` / `reply_cursor` 与顺序翻页到同一页时的 `next_cursor` 是同一个字符串，
+前端可以混用（定位后继续向后翻页用的是列表的 `next_cursor`）。
+
+换排序键（如 #184 阶段 3 的 `hot_score`）时：新增 keyset 字段并升 `v`，旧版本游标按上表「未知版本」或保留一个兼容分支处理。
