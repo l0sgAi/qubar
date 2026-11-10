@@ -5,6 +5,7 @@ import (
 
 	"interestBar/pkg/conf"
 	"interestBar/pkg/logger"
+	"interestBar/pkg/shared/mention"
 
 	"github.com/google/uuid"
 )
@@ -57,33 +58,9 @@ func (s *commentServiceImpl) filterMentionUserIDs(ctx context.Context, actorID u
 		valid = append(valid, id)
 	}
 	// 机器人剔除先于截断：不可 @ 的机器人不占用 MentionMax 配额。
-	valid = stripUnmentionableAgents(ctx, s.userFacade, valid, postCircleID)
+	valid = mention.StripUnmentionableAgents(ctx, s.userFacade, valid, postCircleID)
 	if len(valid) > max {
 		valid = valid[:max]
 	}
 	return valid
-}
-
-// stripUnmentionableAgents 从 mention 候选中剔除不可 @ 的机器人：停用/已删除的机器人，
-// 以及绑定圈子 ≠ postCircleID 的圈内机器人静默移除；普通用户/可 @ 的全局机器人（map 无记录）保留。
-// 查询失败 fail-open 跳过剔除。
-// post/comment 两域同构逻辑（各自 UserFacade 名义类型不同，无法共用实现）。
-func stripUnmentionableAgents(ctx context.Context, facade UserFacade, candidates []uuid.UUID, postCircleID uuid.UUID) []uuid.UUID {
-	if len(candidates) == 0 {
-		return candidates
-	}
-	scopes, err := facade.GetAgentMentionScopes(ctx, candidates)
-	if err != nil {
-		logger.Log.Warn("Failed to load agent mention scope, skip agent filtering: " + err.Error())
-		return candidates
-	}
-	kept := make([]uuid.UUID, 0, len(candidates))
-	for _, id := range candidates {
-		if scope, ok := scopes[id]; ok &&
-			(!scope.Mentionable || (scope.CircleID != uuid.Nil && scope.CircleID != postCircleID)) {
-			continue
-		}
-		kept = append(kept, id)
-	}
-	return kept
 }

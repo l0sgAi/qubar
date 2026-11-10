@@ -309,7 +309,7 @@ must: [deleted=0, status=1,
 | 删除圈内机器人 | **不再清 `agent_circle_id`**（`BotUserScopeCleaner` / `ClearAgentCircleScope` 删除）。即使投影失败，删除的圈内机器人也只会留在原圈 |
 | `users.status` | 恒为 1：`GetBriefs` 跳过非正常用户，改 status 会让机器人历史评论 / 帖子丢失作者信息（集成测试回归覆盖） |
 | ES @选人 | `userBaseFilterConditions` 追加 `must_not term agent_mention_disabled: 1`（全站、圈内、有无关键字都生效）。存量文档缺该字段天然命中，零重建索引；动态 mapping 推断为 long 即可 |
-| mention 兜底 | `GetAgentCircleIDs` 扩展为 `GetAgentMentionScopes`（`{CircleID, Mentionable}`），post / comment 的 `stripUnmentionableAgents` 剔除不可 @ 与越圈机器人：不落 mention、不发提醒、不触发回复（三者共用同一份过滤后名单） |
+| mention 兜底 | `GetAgentCircleIDs` 扩展为 `GetAgentMentionScopes`（`{CircleID, Mentionable}`），post / comment 共用 `mention.StripUnmentionableAgents`（`pkg/shared/mention`，#209 由两域各一份的 `stripUnmentionableAgents` 收敛而来）剔除不可 @ 与越圈机器人：不落 mention、不发提醒、不触发回复（三者共用同一份过滤后名单） |
 | CDC | `deploy/ansible/group_vars/all.yml` 的 `es_sinks.users` 字段白名单加 `agent_mention_disabled`（source connector 按表全列采集，无列白名单） |
 
 ### 9.2 投影写入失败策略：fail-open + 日志 + 异步重试

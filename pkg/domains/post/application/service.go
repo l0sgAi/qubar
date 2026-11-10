@@ -17,6 +17,7 @@ import (
 	"interestBar/pkg/domains/post/domain"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/utils"
+	"interestBar/pkg/shared/mention"
 
 	"github.com/google/uuid"
 )
@@ -50,12 +51,8 @@ type UserFacade interface {
 }
 
 // AgentMentionScope 机器人账号的 @提及 可见范围（user 域投影列的跨域视图）。
-type AgentMentionScope struct {
-	// CircleID 绑定圈子ID；uuid.Nil=全局机器人。
-	CircleID uuid.UUID
-	// Mentionable 能否被 @：机器人停用或已删除时为 false。
-	Mentionable bool
-}
+// 与 comment 域共用 pkg/shared/mention 的同一个类型与剔除规则（mention.StripUnmentionableAgents）。
+type AgentMentionScope = mention.AgentScope
 
 // CircleBrief 圈子精简视图。
 type CircleBrief struct {
@@ -642,7 +639,7 @@ func (s *postServiceImpl) filterMentionUserIDs(ctx context.Context, actorID uuid
 		}
 	}
 
-	valid = s.stripUnmentionableAgents(ctx, valid, postCircleID)
+	valid = mention.StripUnmentionableAgents(ctx, s.userFacade, valid, postCircleID)
 
 	max := conf.Config.Notice.MentionMax
 	if max <= 0 {
@@ -652,29 +649,6 @@ func (s *postServiceImpl) filterMentionUserIDs(ctx context.Context, actorID uuid
 		valid = valid[:max]
 	}
 	return valid
-}
-
-// stripUnmentionableAgents 从 mention 候选中剔除不可 @ 的机器人：停用/已删除的机器人，
-// 以及绑定圈子 ≠ postCircleID 的圈内机器人静默移除；普通用户/可 @ 的全局机器人（map 无记录）保留。
-// 查询失败 fail-open 跳过剔除（正常用户已被 @选人列表过滤，兜底只防构造请求）。
-func (s *postServiceImpl) stripUnmentionableAgents(ctx context.Context, candidates []uuid.UUID, postCircleID uuid.UUID) []uuid.UUID {
-	if len(candidates) == 0 {
-		return candidates
-	}
-	scopes, err := s.userFacade.GetAgentMentionScopes(ctx, candidates)
-	if err != nil {
-		logger.Log.Warn("Failed to load agent mention scope, skip agent filtering: " + err.Error())
-		return candidates
-	}
-	kept := make([]uuid.UUID, 0, len(candidates))
-	for _, id := range candidates {
-		if scope, ok := scopes[id]; ok &&
-			(!scope.Mentionable || (scope.CircleID != uuid.Nil && scope.CircleID != postCircleID)) {
-			continue
-		}
-		kept = append(kept, id)
-	}
-	return kept
 }
 
 // checkMemberStatus 检查成员状态是否允许发帖。

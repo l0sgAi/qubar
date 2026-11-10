@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"interestBar/pkg/domains/comment/domain"
+	"interestBar/pkg/shared/mention"
 
 	"github.com/google/uuid"
 )
@@ -40,12 +41,8 @@ type UserFacade interface {
 }
 
 // AgentMentionScope 机器人账号的 @提及 可见范围（user 域投影列的跨域视图）。
-type AgentMentionScope struct {
-	// CircleID 绑定圈子ID；uuid.Nil=全局机器人。
-	CircleID uuid.UUID
-	// Mentionable 能否被 @：机器人停用或已删除时为 false。
-	Mentionable bool
-}
+// 与 post 域共用 pkg/shared/mention 的同一个类型与剔除规则（mention.StripUnmentionableAgents）。
+type AgentMentionScope = mention.AgentScope
 
 // PostInfo comment 领域需要的帖子信息（发评论时校验用）。
 type PostInfo struct {
