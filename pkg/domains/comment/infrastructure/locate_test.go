@@ -48,26 +48,29 @@ func TestLocatePage(t *testing.T) {
 	}
 }
 
-// TestLocateCursor_OutputFormat 页起始游标必须由 buildNextCursor 编码，
-// 与列表接口游标格式逐字节一致——这里直接验证两 sort 下编码可回读，
-// 防止未来有人绕过 buildNextCursor 自行拼接。
+// TestLocateCursor_OutputFormat 定位的页起始游标与列表的 next_cursor 逐字节一致：
+// 两者是同一个 encodeListCursor(scope.id, sort, 上一页末条)，这里固定住「同一作用域 + 同一末条 → 同一字符串」，
+// 并验证它能被列表侧的 parseListCursor 在同一作用域下读回（真实 SQL 路径见集成测试
+// TestCommentRepo_LocateCursorMatchesListPages）。
 func TestLocateCursor_OutputFormat(t *testing.T) {
+	postID := uuid.MustParse("0192a0d0-0000-7000-8000-0000000000b0")
 	item := &domain.Comment{
 		ID:        uuid.MustParse("0192a0d0-0000-7000-8000-000000000042"),
 		LikeCount: 7,
 	}
-
-	// sort=0：游标须含 like_count+id 且可解析
-	c0 := buildNextCursor(item, 0)
-	likeCount, id, err := parseCursorValues(c0, 0)
-	if err != nil || likeCount != 7 || id != item.ID {
-		t.Fatalf("sort=0 cursor round-trip failed: likeCount=%d id=%v err=%v", likeCount, id, err)
+	scope := rootListScope(postID)
+	if scope.id != postID || replyListScope(item.ID).id != item.ID {
+		t.Fatalf("list scope id must be the post id (root list) / root comment id (replies)")
 	}
 
-	// sort=1：游标只含 id
-	c1 := buildNextCursor(item, 1)
-	_, id, err = parseCursorValues(c1, 1)
-	if err != nil || id != item.ID {
-		t.Fatalf("sort=1 cursor round-trip failed: id=%v err=%v", id, err)
+	for _, sort := range []int{sortByLike, sortByTime} {
+		cursor := encodeListCursor(scope.id, sort, item)
+		if again := encodeListCursor(scope.id, sort, item); again != cursor {
+			t.Fatalf("sort=%d: cursor encoding is not deterministic: %q vs %q", sort, cursor, again)
+		}
+		likeCount, id, err := parseListCursor(cursor, scope.id, sort)
+		if err != nil || id != item.ID || (sort == sortByLike && likeCount != 7) {
+			t.Fatalf("sort=%d cursor round-trip failed: likeCount=%d id=%v err=%v", sort, likeCount, id, err)
+		}
 	}
 }
