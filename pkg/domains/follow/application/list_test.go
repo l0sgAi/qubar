@@ -121,7 +121,7 @@ func newListEnv() *listEnv {
 		users:      &fakeUsers{missing: map[uuid.UUID]bool{}},
 	}
 	rel := newFakeRepo()
-	e.svc = NewFollowService(rel, rel, e.users, func() int { return 2000 },
+	e.svc = NewFollowService(rel, rel, e.users, func() int { return 2000 }, nil,
 		ListDeps{Repo: e.repo, Users: e.briefs, Visibility: e.visibility})
 	return e
 }

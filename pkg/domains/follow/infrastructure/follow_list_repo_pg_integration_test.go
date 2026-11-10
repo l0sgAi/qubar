@@ -2,7 +2,8 @@
 
 // follow_list_repo_pg_integration_test.go follow 列表仓储对开发栈 PostgreSQL 的集成测试（#218）：
 // 关注 / 粉丝两个方向的翻页顺序与 keyset、follow_time 相同时按 id 定序、取关后再关注排到最前、
-// 互关列表、批量关系查询。夹具（followEnv / newUsers / follow / unfollow）见 follow_repo_pg_integration_test.go。
+// 互关列表、批量关系查询。夹具（followEnv / newUsers / follow / unfollow）见 follow_repo_pg_integration_test.go，
+// setFollowTime 见 follow_followee_ids_repo_pg_integration_test.go。
 package infrastructure_test
 
 import (
@@ -19,16 +20,6 @@ import (
 const noLimit = 2000
 
 func (e *followEnv) lists() domain.ListRepository { return infrastructure.NewListRepository(e.db) }
-
-// setFollowTime 把一条关系的 follow_time 改成指定值（构造确定的顺序 / 相同时间）。
-func (e *followEnv) setFollowTime(t *testing.T, follower, followee uuid.UUID, at time.Time) {
-	t.Helper()
-	res := e.db.WithContext(t.Context()).Exec(
-		"UPDATE domains.user_follow SET follow_time = ? WHERE follower_id = ? AND followee_id = ?", at, follower, followee)
-	if res.Error != nil || res.RowsAffected != 1 {
-		t.Fatalf("set follow_time: rows=%d err=%v", res.RowsAffected, res.Error)
-	}
-}
 
 // walk 用 keyset 按 pageSize 翻完整个列表，返回每页的对端用户 ID。
 func (e *followEnv) walk(t *testing.T, kind domain.ListKind, owner uuid.UUID, pageSize int) [][]uuid.UUID {

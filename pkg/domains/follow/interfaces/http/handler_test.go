@@ -62,6 +62,11 @@ func (f *fakeSvc) GetStats(_ context.Context, viewer, target uuid.UUID) (*applic
 	return &application.StatsVO{UserID: target.String(), FollowingCount: 3, FollowerCount: 7, Relation: domain.RelationMutual}, f.err
 }
 
+// ListFolloweeIDs 没有对应的 HTTP 接口（供首页关注 tab 跨域读取），这里只为满足 FollowService。
+func (f *fakeSvc) ListFolloweeIDs(context.Context, uuid.UUID) ([]uuid.UUID, error) {
+	return nil, f.err
+}
+
 // newCtx 构造带路径参数 :user_id 的 AppContext；loginID 为空表示访客。
 func newCtx(loginID, target string) (appctx.AppContext, *app.RequestContext) {
 	rc := &app.RequestContext{}

@@ -21,6 +21,7 @@ func newFollowService(deps *Deps, userFacade userapp.UserFacade, userSettings us
 		followinfra.NewStatRepository(db),
 		&followUserChecker{delegate: userFacade},
 		func() int { return conf.Config.Follow.MaxFollowingOrDefault() },
+		followinfra.NewFolloweeIDRepository(db),
 		followapp.ListDeps{
 			Repo:       followinfra.NewListRepository(db),
 			Users:      &followUserBriefReader{delegate: userFacade},
