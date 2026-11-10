@@ -11,13 +11,14 @@ import (
 type CommentRepository interface {
 	// Create 创建评论（事务内：插入评论 + 如为回复则递增根评论 reply_count）。
 	Create(ctx context.Context, comment *Comment) error
-	// GetByID 根据 ID 获取评论（未删除）。未找到返回 ErrCommentNotFound。
+	// GetByID 根据 ID 获取评论（未删除，不看 status）。未找到返回 ErrCommentNotFound。
+	// 读路径（详情 / 定位 / 回复列表）须再用 Comment.Visible 判定可见性。
 	GetByID(ctx context.Context, commentID uuid.UUID) (*Comment, error)
-	// GetRootCommentsByCursor 游标分页获取帖子的顶层评论。
+	// GetRootCommentsByCursor 游标分页获取帖子的顶层评论（仅可见评论，见 VisibleCondition）。
 	// sort: 0=按点赞倒序, 1=按时间倒序。
 	// 返回评论列表、下一页游标、是否有更多、错误。
 	GetRootCommentsByCursor(ctx context.Context, postID uuid.UUID, size, sort int, cursor string) ([]Comment, string, bool, error)
-	// GetRepliesByCursor 游标分页获取某条评论的子回复。
+	// GetRepliesByCursor 游标分页获取某条评论的子回复（仅可见评论，见 VisibleCondition）。
 	// sort: 0=按点赞倒序, 1=按时间倒序（与 GetRootCommentsByCursor 同一套排序键映射）。
 	GetRepliesByCursor(ctx context.Context, rootID uuid.UUID, size, sort int, cursor string) ([]Comment, string, bool, error)
 	// LocateRootCursor 计算顶层列表的定位游标：把它作为列表接口的 cursor 传入时，
