@@ -146,6 +146,10 @@ notice_stream:
   coalesce_ms: 1000        # 合并推送窗口(毫秒)，<=0 兜底 1000
   retry_ms: 5000           # 写给客户端的重连建议(毫秒)，<=0 兜底 5000
 
+# 用户关注配置（设计见 docs/follow-design.md）
+follow:
+  max_following: 2000 # 每个用户最多关注人数(<=0 兜底 2000)；粉丝数不设上限
+
 # 热度计算配置（权重 + 上限）
 hot:
   weight:
