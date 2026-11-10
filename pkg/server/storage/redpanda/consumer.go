@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"interestBar/pkg/conf"
+	commentdomain "interestBar/pkg/domains/comment/domain"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/storage/db/pgsql"
 	redispkg "interestBar/pkg/server/storage/redis"
@@ -225,7 +226,9 @@ type postStatsRow struct {
 }
 
 // postStatsApplySQL 批量更新帖子统计：view / like / collect 累加增量，comment_count 对标记过的帖子按明细重算
-// （deleted=0 的评论 + 回复行数，与原同步 +1 的口径一致）。
+// （可见评论 + 回复行数，谓词复用 commentdomain.VisibleCondition，与评论列表口径一致，#208）。
+// 按行计数：根评论不可见时其下可见回复仍计入（与根评论删除的既有口径一致）。
+// 子查询里的 deleted / status 不带别名，按最内层作用域解析到 domains.comment（v 没有这两列）。
 // 重算结果与当前值相同且没有其他增量的行不写：不产生新的行版本，也就不产生 WAL / CDC 事件（#130）。
 const postStatsApplySQL = `
 WITH v AS (
@@ -234,7 +237,7 @@ WITH v AS (
 ),
 cc AS (
 	SELECT v.post_id,
-	       (SELECT count(*) FROM domains.comment c WHERE c.post_id = v.post_id AND c.deleted = 0) AS cnt
+	       (SELECT count(*) FROM domains.comment c WHERE c.post_id = v.post_id AND ` + commentdomain.VisibleCondition + `) AS cnt
 	FROM v WHERE v.comment_dirty
 )
 UPDATE domains.post p

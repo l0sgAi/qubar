@@ -17,7 +17,8 @@
 - 回复列表 `GET /comment/replies`：同一套游标函数，`limit` 由客户端传（1~50，默认 10）。
 - 游标格式：base64(JSON)，sort=0 含 `{like_count, id}`，sort=1 含 `{id}`；
   条件为严格小于（`id < ?` / `like_count < ? OR (= AND id < ?)`）。
-- `GetByID` 过滤 `deleted=0`，已删除评论天然返回 `ErrCommentNotFound`。
+- `GetByID` 过滤 `deleted=0`，已删除评论天然返回 `ErrCommentNotFound`；
+  审核中 / 隐藏由 application 层 `Comment.Visible()` 判定后同样按 `ErrCommentNotFound` 处理（#208）。
 - 现有索引（[docs/pgsql-ddl/comment.md](pgsql-ddl/comment.md)）：
   `idx_comment_post_root_like (post_id, root_id, like_count DESC)`、
   `idx_comment_post_root_time (post_id, root_id, create_time DESC)`、
@@ -55,13 +56,14 @@
 message="评论不存在或已删除"，与 `/comment/detail` 行为完全一致。
 前端按 HTTP 404（或 code=204）识别。**
 
-### P4. status（审核中/隐藏）不过滤 —— 与列表语义保持一致
+### P4. status（审核中/隐藏）—— 与列表同一可见性谓词（#208 已落地）
 
-现有 `list`/`replies` 均只过滤 `deleted=0`，**不过滤 status**（2=审核中、3=隐藏
-仍会出现在列表里）。locate 若额外按 status 判定"不可见"会与列表自相矛盾
-（locate 说不存在，列表却能刷到）。
-**决策 D6：locate 与列表同谓词（仅 `deleted=0`）。前端文档"审核/隐藏不可见"
-场景在当前列表语义下不存在；未来列表加 status 过滤时 locate 同步加。**
+locate 若与列表口径不同会自相矛盾（locate 说不存在，列表却能刷到；或 rank 计入列表里
+看不到的评论，定位到的页不含目标）。
+**决策 D6：locate 与列表同谓词。** 原为「仅 `deleted=0`」；#208 起统一为评论可见性谓词
+`domain.VisibleCondition`（`deleted = 0 AND status = 1`，[visibility.go](../pkg/domains/comment/domain/visibility.go)），
+列表与定位共用 `rootListScope` / `replyListScope`（[comment_repo_pg.go](../pkg/domains/comment/infrastructure/comment_repo_pg.go)），
+rank 计数、取页起点与列表游标逐字节一致。目标或其根评论不可见（审核中 / 隐藏 / 已删）→ 与「评论不存在」相同的 404。
 
 ### P5. 并发漂移（固有限制，接受）
 
@@ -142,12 +144,12 @@ GET /comment/locate
 ```sql
 -- 顶层，sort=1（时间倒序，key=id）：
 SELECT COUNT(*) FROM domains.comment
-WHERE post_id = $1 AND root_id IS NULL AND deleted = 0
+WHERE post_id = $1 AND root_id IS NULL AND deleted = 0 AND status = 1
   AND id > $2;
 
 -- 顶层，sort=0（点赞倒序，key=(like_count, id)）：
 SELECT COUNT(*) FROM domains.comment
-WHERE post_id = $1 AND root_id IS NULL AND deleted = 0
+WHERE post_id = $1 AND root_id IS NULL AND deleted = 0 AND status = 1
   AND (like_count > $2 OR (like_count = $2 AND id > $3));
 
 -- 回复：把 post_id = $1 AND root_id IS NULL 换成 root_id = $1，key 选择按 reply_sort 同上。
@@ -169,7 +171,7 @@ page > 1  → 取排序后第 (page-1)*SIZE 条（上一页末条）的 keyset �
 
 ```sql
 SELECT id, like_count FROM domains.comment
-WHERE post_id = $1 AND root_id IS NULL AND deleted = 0
+WHERE post_id = $1 AND root_id IS NULL AND deleted = 0 AND status = 1
 ORDER BY like_count DESC, id DESC   -- sort=0；sort=1 改 ORDER BY id DESC
 LIMIT 1 OFFSET k - 1;
 ```
