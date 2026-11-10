@@ -5,7 +5,7 @@
 
 ## 一、依赖清单（go.mod）
 
-Go module 名是 **`interestBar`**（不是 qubar），Go 版本 **1.26**（go.mod `go 1.26.0`）。
+Go module 名是 **`interestBar`**（不是 qubar），Go 版本 **1.26**（go.mod `go 1.26.10`，Dockerfile 构建镜像固定同一补丁版本 + digest，两处同步升级）。
 
 | 类别 | 包 | 版本 |
 |---|---|---|

@@ -151,7 +151,7 @@ hot:
     comment: 5000
     comment_like: 25000
   post_hot_flush_interval: 13    # 分钟
-  post_hot_flush_messages: 500
+  post_hot_flush_messages: 0     # 只按时间窗口 flush（#130 D3，原为 500）
   circle_hot_flush_interval: 34  # 分钟
   circle_hot_ttl: 50             # 小时
 ```

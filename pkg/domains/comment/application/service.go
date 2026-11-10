@@ -219,9 +219,6 @@ type CommentService interface {
 	// GetCommentMeta 获取评论元信息（供 like 领域校验用）。
 	// 返回评论所属帖子ID。未找到返回 nil, nil。
 	GetCommentMeta(ctx context.Context, commentID uuid.UUID) (*uuid.UUID, error)
-	// RestoreCommentStats 恢复评论统计缓存（如果不存在）。
-	// 供 like 领域点赞前确保 Redis stats Hash 存在。
-	RestoreCommentStats(ctx context.Context, commentID uuid.UUID) error
 	// IsLikedByUser 用户是否已赞该评论（缓存优先，miss 回源 DB，DB 已赞则回填缓存）。
 	// 供 like 领域点赞前解析真实状态；DB 错误原样返回（调用方不得猜测）。
 	IsLikedByUser(ctx context.Context, userID, commentID uuid.UUID) (bool, error)
@@ -240,7 +237,6 @@ type CommentService interface {
 
 type commentServiceImpl struct {
 	repo         domain.CommentRepository
-	statsCache   domain.CommentStatsCache
 	likeCache    domain.CommentLikeCache
 	publisher    domain.CommentEventPublisher
 	userFacade   UserFacade
@@ -254,15 +250,13 @@ type commentServiceImpl struct {
 // userFacade / postLookup 是跨领域依赖，通过 setter 注入（composition 层负责把它们连起来）。
 func NewCommentService(
 	repo domain.CommentRepository,
-	statsCache domain.CommentStatsCache,
 	likeCache domain.CommentLikeCache,
 	publisher domain.CommentEventPublisher,
 ) CommentService {
 	return &commentServiceImpl{
-		repo:       repo,
-		statsCache: statsCache,
-		likeCache:  likeCache,
-		publisher:  publisher,
+		repo:      repo,
+		likeCache: likeCache,
+		publisher: publisher,
 	}
 }
 
@@ -419,8 +413,8 @@ func (s *commentServiceImpl) GetRootComments(ctx context.Context, userID, postID
 
 // GetReplies 获取某条评论的子回复列表（游标分页）。
 func (s *commentServiceImpl) GetReplies(ctx context.Context, userID, rootID uuid.UUID, limit, sort int, cursor string) (*CommentListResult, error) {
-	// 校验根评论存在且是顶层评论
-	rootComment, err := s.repo.GetByID(ctx, rootID)
+	// 校验根评论可见且是顶层评论（根评论不可见时整楼不可见）
+	rootComment, err := s.getVisibleComment(ctx, rootID)
 	if err != nil {
 		return nil, err
 	}
@@ -446,25 +440,17 @@ func (s *commentServiceImpl) GetReplies(ctx context.Context, userID, rootID uuid
 
 // LocateComment 定位评论（通知点击直达）。
 //
-// 流程：取目标（已删 → ErrCommentNotFound）→ 是回复则解析根评论（根已删则其下回复
+// 流程：取目标（不可见 → ErrCommentNotFound）→ 是回复则解析根评论（根不可见则其下回复
 // 在列表中不可达，同样按不存在处理）→ 根评论在顶层列表的定位游标 → 回复时另算
 // 回复列表定位游标与页码。游标语义：目标所在页的「起始游标」（上一页末条 keyset），
 // 首页为 nil（JSON null），前端不传 cursor 直接拉首页。
 func (s *commentServiceImpl) LocateComment(ctx context.Context, viewerID, commentID uuid.UUID, sort, replySort int) (*CommentLocateResult, error) {
-	target, err := s.repo.GetByID(ctx, commentID)
+	target, root, err := s.getVisibleThread(ctx, commentID)
 	if err != nil {
 		return nil, err
 	}
 	if err := s.ensurePostVisible(ctx, viewerID, target.PostID, domain.ErrCommentNotFound); err != nil {
 		return nil, err
-	}
-
-	root := target
-	if target.RootID != nil {
-		root, err = s.repo.GetByID(ctx, *target.RootID)
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	listCursor, err := s.repo.LocateRootCursor(ctx, root.PostID, sort, root, rootCommentPageSize)
@@ -497,9 +483,9 @@ func (s *commentServiceImpl) LocateComment(ctx context.Context, viewerID, commen
 	return result, nil
 }
 
-// GetCommentDetail 获取单条评论详情。
+// GetCommentDetail 获取单条评论详情（评论或其根评论不可见 → ErrCommentNotFound）。
 func (s *commentServiceImpl) GetCommentDetail(ctx context.Context, userID, commentID uuid.UUID) (*CommentVO, error) {
-	comment, err := s.repo.GetByID(ctx, commentID)
+	comment, _, err := s.getVisibleThread(ctx, commentID)
 	if err != nil {
 		return nil, err
 	}
@@ -568,26 +554,6 @@ func (s *commentServiceImpl) GetCommentMeta(ctx context.Context, commentID uuid.
 	}
 	postID := comment.PostID
 	return &postID, nil
-}
-
-// RestoreCommentStats 恢复评论统计缓存（如果不存在）。
-// 供 like 领域点赞前确保 Redis stats Hash 存在，避免 Lua 脚本读到空 stats。
-//
-// 与旧 controller.restoreCommentStatsIfNeed 行为一致：
-// 检查缓存是否存在 → 不存在则从 DB 读 like_count 写入 Redis。
-func (s *commentServiceImpl) RestoreCommentStats(ctx context.Context, commentID uuid.UUID) error {
-	exists, err := s.statsCache.Exists(ctx, commentID)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return nil
-	}
-	comment, err := s.repo.GetByID(ctx, commentID)
-	if err != nil {
-		return err
-	}
-	return s.statsCache.Set(ctx, commentID, comment.LikeCount)
 }
 
 // buildCommentVOs 批量构建 CommentVO（包含评论者信息和被回复人信息）。

@@ -94,11 +94,11 @@ var (
 func newLocateRepo() *fakeLocateRepo {
 	return &fakeLocateRepo{
 		byID: map[uuid.UUID]*domain.Comment{
-			locRootID: {ID: locRootID, PostID: locPostID},
-			locTopID:  {ID: locTopID, PostID: locPostID},
-			locReplyID: {ID: locReplyID, PostID: locPostID,
+			locRootID: {ID: locRootID, PostID: locPostID, Status: domain.CommentStatusNormal},
+			locTopID:  {ID: locTopID, PostID: locPostID, Status: domain.CommentStatusNormal},
+			locReplyID: {ID: locReplyID, PostID: locPostID, Status: domain.CommentStatusNormal,
 				RootID: &[]uuid.UUID{locRootID}[0]},
-			locOrphanID: {ID: locOrphanID, PostID: locPostID,
+			locOrphanID: {ID: locOrphanID, PostID: locPostID, Status: domain.CommentStatusNormal,
 				RootID: &[]uuid.UUID{locDelRoot}[0]},
 		},
 	}
