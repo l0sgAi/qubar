@@ -30,8 +30,8 @@ func (h *visHydrator) Hydrate(_ context.Context, viewer uuid.UUID, _ []uuid.UUID
 
 type noInteractions struct{}
 
-func (noInteractions) BatchCheck(context.Context, uuid.UUID, []uuid.UUID) (map[uuid.UUID]bool, map[uuid.UUID]bool, error) {
-	return nil, nil, nil
+func (noInteractions) BatchCheck(context.Context, uuid.UUID, []uuid.UUID) (map[uuid.UUID]bool, map[uuid.UUID]bool, map[uuid.UUID]bool, error) {
+	return nil, nil, nil, nil
 }
 
 type fixedHidden []uuid.UUID

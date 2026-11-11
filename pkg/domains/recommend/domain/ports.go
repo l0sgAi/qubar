@@ -14,8 +14,8 @@ import (
 
 // FeedPostItem 推荐流帖子项（镜像 post.PostListItem 字段 + 当前用户交互态）。
 //
-// post 域的 PostListItem 无 is_liked/is_collected 字段且不改其签名；
-// recommend 域自定义本类型，由 InteractionChecker 批量回填两个 flag。
+// post 域的 PostListItem 无 is_liked/is_collected/is_shared 字段且不改其签名；
+// recommend 域自定义本类型，由 InteractionChecker 批量回填交互 flag。
 type FeedPostItem struct {
 	ID           uuid.UUID `json:"id"`
 	CircleID     uuid.UUID `json:"circle_id"`
@@ -28,6 +28,7 @@ type FeedPostItem struct {
 	CommentCount int       `json:"comment_count"`
 	LikeCount    int       `json:"like_count"`
 	CollectCount int       `json:"collect_count"`
+	ShareCount   int       `json:"share_count"` // 分享数（post 域 Redis post:sharecnt 回填，口径同详情，#233）
 	IsPinned     int16     `json:"is_pinned"`
 	IsEssence    int16     `json:"is_essence"`
 	IsLock       int16     `json:"is_lock"`
@@ -40,6 +41,7 @@ type FeedPostItem struct {
 	Images       []string  `json:"images"`
 	IsLiked      bool      `json:"is_liked"`
 	IsCollected  bool      `json:"is_collected"`
+	IsShared     bool      `json:"is_shared"` // 当前用户是否分享过（访客恒为 false，#233）
 }
 
 // FeedPage 推荐流分页结果。
@@ -103,9 +105,10 @@ type SeedReader interface {
 	CFSimilar(ctx context.Context, seedPostIDs []uuid.UUID, topNPerSeed int) (map[uuid.UUID]float64, error)
 }
 
-// InteractionChecker 批量回填 is_liked/is_collected（ZSET 缓存优先，miss 回源 DB；由 composition 桥接 post）。
+// InteractionChecker 批量回填 is_liked/is_collected（ZSET 缓存优先，miss 回源 DB）与 is_shared（查 post_share）；
+// 由 composition 桥接 post。
 type InteractionChecker interface {
-	BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (liked, collected map[uuid.UUID]bool, err error)
+	BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (liked, collected, shared map[uuid.UUID]bool, err error)
 }
 
 // FeedCache 推荐流候选池（Redis LIST feed:recommend:{uid} + 版本 token）。

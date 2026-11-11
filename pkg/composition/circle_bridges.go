@@ -65,3 +65,7 @@ type postMediaFetcherForCircle struct {
 func (f *postMediaFetcherForCircle) GetMediaByPostIDs(ctx context.Context, postIDs []string) (map[string][]string, error) {
 	return f.delegate.GetMediaByPostIDs(ctx, postIDs)
 }
+
+func (f *postMediaFetcherForCircle) BatchGetShareCounts(ctx context.Context, postIDs []uuid.UUID) map[uuid.UUID]int {
+	return f.delegate.BatchGetShareCounts(ctx, postIDs)
+}
