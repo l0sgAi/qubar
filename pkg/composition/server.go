@@ -42,6 +42,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	commentSvc := newCommentService(deps)
 	likeSvc := newLikeService(deps)
 	collectSvc := newCollectService(deps)
+	shareSvc := newShareService(deps)
 	historySvc := newHistoryService(deps)
 	noticeSvc := newNoticeService(deps)
 	// follow 只读依赖 user（目标用户校验、列表项简要信息、列表隐私开关），构造时直接注入。
@@ -80,6 +81,9 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	collectSvc.SetPostTarget(&collectPostTarget{delegate: postSvc})
 	collectSvc.SetPostFetcher(&collectPostFetcher{delegate: postSvc})
 
+	// share 需要 post 查询端口（可分享校验：已发布 + 可见性 + 作者 / 圈子，#232）
+	shareSvc.SetPostTarget(&sharePostTarget{delegate: postSvc})
+
 	// history 需要 post 组装端口（「最近浏览」列表 ES 查询）;post 需要 history 记录器（详情页 async 回调）
 	historySvc.SetPostFetcher(&historyPostFetcher{delegate: postSvc})
 	postSvc.SetHistoryRecorder(&postHistoryRecorder{delegate: historySvc})
@@ -94,7 +98,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	// 跨领域 Facade 注入完成。如遗漏注入，相关领域会在请求时表现为空数据/校验失败，
 	// 这里打一条启动日志便于排查（强类型断言成本过高，用日志替代 panic，见 review P2-2）。
 	if logger.Log != nil {
-		logger.Log.Info("cross-domain facades injected: circle<-user/post, post<-user/circle, comment<-user/post, like<-post/comment, collect<-post, history<-post, notice<-user/post, follow<-user, message<-user")
+		logger.Log.Info("cross-domain facades injected: circle<-user/post, post<-user/circle, comment<-user/post, like<-post/comment, collect<-post, share<-post, history<-post, notice<-user/post, follow<-user, message<-user")
 	}
 
 	// recommend 需要 post（hydrate + circle_id 反查）+ circle（joined IDs）+ follow（关注的用户 ID），均为只读消费者，无反向注入。
@@ -152,6 +156,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	registerComment(root, commentSvc, authCheck, OptionalLoginFn)
 	registerLike(root, likeSvc, authCheck)
 	registerCollect(root, collectSvc, authCheck)
+	registerShare(root, shareSvc, authCheck)
 	registerHistory(root, historySvc, authCheck)
 	registerNotice(root, noticeSvc, authCheck)
 	registerFollow(root, followSvc, authCheck, OptionalLoginFn)

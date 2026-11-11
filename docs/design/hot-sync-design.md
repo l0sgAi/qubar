@@ -24,7 +24,7 @@
 1. **`domain.Post` 结构体无 `Hot` 字段**（[post.go:16](../pkg/domains/post/domain/post.go#L16)）→ GORM 从不读写 hot 列，CDC 也拿不到变更。**必须先加字段。**
 2. **hot 增量计算与加权**：现 MQ 消息只带原始计数 ±1，无权重、无 hot 类型。
 3. **评论 / 评论点赞 hot**：评论计数当前是同步落库（`IncrCommentCount`），无 hot 贡献。
-4. **分享功能完全不存在**：无路由/handler/事件，`+7` 需从零搭建。
+4. **分享功能完全不存在**：无路由/handler/事件，`+7` 需从零搭建。（#232 已实现，见第九节 P4）
 5. **圈子 hot 无写入路径**：DB+Redis 字段在，但无事件递增。
 6. **上限（cap）机制**：评论 / 评论点赞需 per-post hot 贡献上限，当前无。
 7. **消息计数触发**：`conf.FlushMessages` 字段存在但未接线（现仅时间触发）。
@@ -59,11 +59,12 @@
 #### O5. 新帖 hot=0 在热点流被埋 —— 已知边界
 rank=0 → 热点流末尾。`sortType=2`（最新）覆盖新帖。无需改，记录即可。
 
-#### O6. 分享功能不存在 + 去重模型 —— **需决策**
+#### O6. 分享功能不存在 + 去重模型 —— **已决策（#232）**
 原文 "帖子分享 +7 因为一人只能点赞一次" 中"点赞"系笔误，应为"一人只能分享一次"。
-- 去重：推荐 **per-user ZSET**（`user:share:posts:{uid}`，同 like/collect 结构），防刷 +7。首次分享才加分，重复分享幂等返回。
-- 持久化：v1 用 ZSET + 计数器即可；若要审计/统计，Phase 2 加 `post_share` 流水表。
-- 不可撤销：分享单向 `+7`，无 decrement。
+- ~~去重：per-user ZSET（`user:share:posts:{uid}`）~~：ZSET 有 TTL / 容量上限，miss ≠ 未分享，不能做去重真值。
+- 去重（#232 实施）：**PG `domains.post_share` 为真值**，`(user_id, post_id)` 唯一，`INSERT … ON CONFLICT DO NOTHING` 的影响行数即「是否首次」，
+  并发同一用户只有一个请求插入成功。首次分享才加分，重复分享幂等返回。
+- 不可撤销：分享单向 `+7`，无 decrement，没有取消接口。
 
 #### O7. 权重/上限应可配置 —— **可运维性**
 权重 (2/5/7/5/1) 与上限 (5000/25000) 写死在 Lua 难调。集中到 `conf.Hot`，Lua/publisher 读配置。
@@ -176,7 +177,7 @@ hot:
 | **P1 帖子 hot 链路** | `post_hot` producer + aggregator + consumer；接线 FlushMessages 计数触发；like/collect 发加权 Δ | P0 |
 | **P2 评论维度** | comment 创建/删除发 ±5（clamp）；comment-like toggle 发 ±1（clamp 25000） | P1 |
 | **P3 圈子 hot** | `CircleHotSyncer` 34min SCAN+GETSET+批量 UPDATE+刷缓存；事件时 INCR circle:hot | P1 |
-| **P4 分享功能** | `POST /post/share` + Share service + per-user ZSET 去重 + 发 +7 | P1 |
+| **P4 分享功能** | `POST /post/share` + Share service + `post_share` 表去重 + 发 +7（#232 已实现） | P1 |
 | **P5（可选）** | hot_decay 滚动衰减（近期热点）；MQ event-id 幂等；circle 级交互总数 15s MQ | P1-P4 |
 
 ---
@@ -185,8 +186,9 @@ hot:
 
 | 决策点 | 结论 |
 |---|---|
-| 分享去重模型 | per-user ZSET（`user:share:posts:{uid}`，防刷） |
-| 分享热度同步 | **延后，打 TODO**。P4 整个分享功能（route/service/ZSET/+7）本期不做，权重/常量预留（`HotDimPostShare`、`hot.weight.post_share`） |
+| 分享去重模型 | ~~per-user ZSET~~ → **PG `post_share` 唯一索引**（#232，维护者 2026-11-11 确认） |
+| 分享热度同步 | ~~延后~~ → #232 实现：首次分享 `ApplyHotDelta(post_share, +1)` + `PublishPostHot`，与点赞 / 收藏同一写法 |
+| 分享数 | `post.share_count` 只在 PG + Redis 读路径，**不进 ES**（不登记 `es_sinks`）；列表 / 详情展示留给 #233 |
 | post_hot topic | **独立 topic**（`post_hot`），独立 producer/aggregator/consumer，13min/500 条节奏 |
 | hot_decay 衰减排序 | **延后 P5**。先用原始公式 `hot/(age+2)^0.8`（ES 已实现） |
 | 帖子→ES 同步 | **CDC 链路自动同步**（已搭建）。Go 只更新 PG `domains.post.hot`，无需写 ES |
@@ -202,7 +204,7 @@ hot:
 | P1 | `post_hot` topic producer + `PostHotAggregator`（13min 或 500 条双触发）；批量 UPDATE `post.hot` + fan-out `circle:hot`；like/collect publisher 发加权 Δ |
 | P2 | 评论创建 +5（`CommentEventPublisher`，clamp cap.comment=5000）；评论点赞 ±1（like publisher，clamp cap.comment_like=25000） |
 | P3 | `CircleHotSyncer` 34min SCAN `circle:hot:*` + GETDEL 读后清零 → 批量 UPDATE `circle.hot` + 条件刷 stats 缓存 |
-| P4 分享 | **未实现**（TODO） |
+| P4 分享（#232） | `POST /post/share`（share 域）：可分享校验（已发布 + `CanViewPost`）→ `post_share` 去重插入 → 首次分享同步发布分享事件（topic `post_share_events`，失败回滚记录、返回 503）→ best-effort 发 `post_share_count` 标记到 `post_statistics` + 热度 `+hot.weight.post_share`（无上限，`HotDimPostShare`）→ Redis `post:sharecnt:{post_id}` +1（冷 key 按 `post_share` 行数 SET NX 回种）。`post.share_count` 由帖子统计消费者按 `post_share` 行数批量重算（#130 批量窗口，值不变不写行），落库后 Redis 只升不降校准。接口见 [post-share-api.md](../api/post-share-api.md) |
 | P5 衰减 | **未实现**（TODO） |
 
 **未做**：评论删除反向 -5（无删评论接口，TODO）；MQ event-id 幂等（at-least-once，容忍小幅多算）。
