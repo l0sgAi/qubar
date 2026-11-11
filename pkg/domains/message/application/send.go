@@ -20,6 +20,8 @@ type SendService interface {
 	// 错误：发给自己 domain.ErrCannotMessageSelf；正文为空 / 只有空白 domain.ErrEmptyContent；
 	// 正文超过 MaxContentChars 个字符 包装了 domain.ErrContentTooLong 的错误（message 带上限值）；
 	// 接收方不存在 / 已禁用 / 已删除 domain.ErrRecipientNotFound；接收方是 AI 机器人账号 domain.ErrRecipientUnavailable；
+	// 接收方的私信权限设置不允许（#240，先于 5 条限制判断）：仅接收方关注的人 domain.ErrRecipientFollowingOnly、
+	// 仅互相关注 domain.ErrRecipientMutualOnly、关闭 domain.ErrRecipientDMClosed；
 	// 接收方没关注发送方、也没在会话里发过消息，且发送方在该会话已发满 UnfollowedSendLimit 条 domain.ErrSendLimitReached（#239）。
 	Send(ctx context.Context, senderID, receiverID uuid.UUID, content string) (*SendVO, error)
 }
@@ -53,16 +55,12 @@ func (s *messageServiceImpl) Send(ctx context.Context, senderID, receiverID uuid
 	if err != nil {
 		return nil, err
 	}
-	status, err := s.recipients.CheckRecipient(ctx, receiverID)
-	if err != nil {
+	if err := s.checkRecipient(ctx, receiverID); err != nil {
 		return nil, err
 	}
-	switch status {
-	case RecipientOK:
-	case RecipientBot:
-		return nil, domain.ErrRecipientUnavailable
-	default:
-		return nil, domain.ErrRecipientNotFound
+	// 私信权限设置（#240）先于未关注 5 条限制：权限拒绝时不再查 5 条。
+	if err := s.checkDMPermission(ctx, senderID, receiverID); err != nil {
+		return nil, err
 	}
 	limit, err := s.sendLimitFor(ctx, senderID, receiverID)
 	if err != nil {

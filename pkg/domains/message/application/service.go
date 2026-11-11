@@ -1,6 +1,6 @@
 // Package application 是 message（私信）领域的应用层：发送、会话列表、按对方查会话、消息历史、标记已读、删除会话。
 //
-// 文件按职责拆分：send.go（发送）、send_limit.go（未关注发送限制）、conversation.go（会话列表 / 按对方查会话 / 已读 / 删除）、history.go（消息历史）、
+// 文件按职责拆分：send.go（发送）、send_limit.go（未关注发送限制）、permission.go（私信权限设置与 can_send，#240）、conversation.go（会话列表 / 按对方查会话 / 已读 / 删除）、history.go（消息历史）、
 // cursor.go（两种列表的 keyset 游标）。MessageService 由各文件里的小接口组合而成。
 // 设计见 docs/message-design.md。
 package application
@@ -60,6 +60,7 @@ type MessageService interface {
 	SendService
 	ConversationService
 	HistoryService
+	PermissionService
 }
 
 type messageServiceImpl struct {
@@ -68,6 +69,8 @@ type messageServiceImpl struct {
 	users      UserBriefReader
 	// follows 关注关系查询（#239 未关注发送限制，见 send_limit.go）。
 	follows FollowChecker
+	// permissions 接收方私信权限设置（#240，见 permission.go），setter 注入；nil 时不校验（所有人可发）。
+	permissions DMPermissionReader
 }
 
 // NewMessageService 构造 MessageService。

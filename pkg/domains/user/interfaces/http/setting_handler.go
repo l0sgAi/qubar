@@ -35,6 +35,8 @@ func RegisterSettingRoutes(rg routing.RouterGroup, svc application.SettingServic
 type UpdateSettingsRequest struct {
 	// FollowListVisibility 关注列表 / 粉丝列表可见性：0=公开，1=私密。取值在 service 层校验。
 	FollowListVisibility *int `json:"follow_list_visibility"`
+	// DMPermission 谁可以给我发私信（#240）：0=所有人，1=仅我关注的人，2=仅互相关注，3=关闭。取值在 service 层校验。
+	DMPermission *int `json:"dm_permission"`
 }
 
 // GetSettings GET /user/settings —— 读取当前用户的设置。
@@ -65,6 +67,7 @@ func (h *SettingHandler) UpdateSettings(c appctx.AppContext) {
 	}
 	vo, err := h.svc.UpdateSettings(c, userID, application.UpdateSettingsInput{
 		FollowListVisibility: req.FollowListVisibility,
+		DMPermission:         req.DMPermission,
 	})
 	switch {
 	case err == nil:
@@ -73,6 +76,8 @@ func (h *SettingHandler) UpdateSettings(c appctx.AppContext) {
 		httputil.BadRequest(c, "At least one setting must be provided")
 	case application.IsFollowListVisibilityErr(err):
 		httputil.BadRequest(c, "follow_list_visibility must be 0 (public) or 1 (private)")
+	case application.IsDMPermissionErr(err):
+		httputil.BadRequest(c, "dm_permission must be 0 (everyone), 1 (people I follow), 2 (mutual follows) or 3 (no one)")
 	default:
 		logger.Log.Error("Failed to update user settings: " + err.Error())
 		httputil.InternalError(c, "Failed to update user settings")

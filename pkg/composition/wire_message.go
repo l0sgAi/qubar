@@ -25,6 +25,11 @@ func newMessageService(
 	)
 }
 
+// wireMessageDMPermission 注入私信权限设置读取（#240）：message 域经 messageDMPermissionReader 读 user 域的 SettingService。
+func wireMessageDMPermission(svc messageapp.MessageService, userSettings userapp.SettingService) {
+	svc.SetDMPermissionReader(&messageDMPermissionReader{delegate: userSettings})
+}
+
 // registerMessage 装配 message 领域。
 func registerMessage(root routing.RouterGroup, svc messageapp.MessageService, authCheck routing.HandlerFunc) {
 	messagehttp.RegisterRoutes(root, svc, authCheck)

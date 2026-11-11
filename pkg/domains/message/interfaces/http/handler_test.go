@@ -68,8 +68,10 @@ func (f *fakeSvc) GetConversationWithUser(_ context.Context, user, peer uuid.UUI
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &application.PeerConversationVO{}, nil
+	return &application.PeerConversationVO{SendPermissionVO: application.SendPermissionVO{CanSend: true}}, nil
 }
+
+func (f *fakeSvc) SetDMPermissionReader(application.DMPermissionReader) {}
 
 func (f *fakeSvc) MarkRead(_ context.Context, user, conv uuid.UUID) error {
 	f.calls++
@@ -147,6 +149,9 @@ func TestSend_AuthBodyAndErrors(t *testing.T) {
 		{domain.ErrRecipientNotFound, http.StatusNotFound, "No such user"},
 		{domain.ErrRecipientUnavailable, http.StatusForbidden, "cannot receive private messages"},
 		{domain.ErrSendLimitReached, http.StatusForbidden, `"message":"dm limit reached"`},
+		{domain.ErrRecipientFollowingOnly, http.StatusForbidden, "only accepts private messages from people they follow"},
+		{domain.ErrRecipientMutualOnly, http.StatusForbidden, "only accepts private messages from mutual follows"},
+		{domain.ErrRecipientDMClosed, http.StatusForbidden, "has turned off private messages"},
 		{errors.New("boom"), http.StatusInternalServerError, ""},
 	} {
 		svc = &fakeSvc{err: tc.err}
@@ -250,8 +255,8 @@ func TestGetConversationWithUser_ParamsAndErrors(t *testing.T) {
 		want int
 		body string
 	}{
-		// 没有会话：成功，conversation 为 null。
-		{nil, http.StatusOK, `"conversation":null`},
+		// 没有会话：成功，conversation 为 null，仍返回 can_send（#240）。
+		{nil, http.StatusOK, `"conversation":null,"can_send":true,"cannot_send_reason":null`},
 		{domain.ErrConversationWithSelf, http.StatusBadRequest, "Cannot have a conversation with yourself"},
 		{errors.New("boom"), http.StatusInternalServerError, ""},
 	} {

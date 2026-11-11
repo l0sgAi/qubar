@@ -142,13 +142,14 @@ WHERE (a.deleted = 0 AND a.status = 1) = (u.agent_mention_disabled = 1);
 
 ## 用户设置表
 
-> 权威 DDL 见 `migrations/20261110170808_add_user_setting.up.sql`（#218）。不进 CDC（`-- cdc: none`），只在 PG 内读写。
+> 权威 DDL 见 `migrations/20261110170808_add_user_setting.up.sql`（#218）、`migrations/20261111194151_add_user_setting_dm_permission.up.sql`（#240 加 `dm_permission` 列）。不进 CDC（`-- cdc: none`），只在 PG 内读写。
 > 设计见 [follow-design.md](../follow-design.md) §3.3、§8.5。
 
 ```sql
 CREATE TABLE domains.user_setting (
     user_id UUID PRIMARY KEY,                             -- 用户ID (users.id),每个用户至多一行
     follow_list_visibility SMALLINT NOT NULL DEFAULT 0,   -- 关注/粉丝列表可见性 (0=公开, 1=私密)
+    dm_permission SMALLINT NOT NULL DEFAULT 0,            -- 谁可以给我发私信 (0=所有人, 1=仅我关注的人, 2=仅互相关注, 3=关闭)
     create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -158,6 +159,7 @@ CREATE TABLE domains.user_setting (
 |---|---|
 | `user_id` | 主键，无 FK。用户首次修改设置时建行；**没有行视为全部设置取默认值** |
 | `follow_list_visibility` | 关注列表 / 粉丝列表可见性，一个开关同时控制两个列表：`0` = 公开（默认，访客可读），`1` = 私密（仅本人可看名单；关注数 / 粉丝数仍公开）。无 CHECK，取值由应用层校验 |
+| `dm_permission` | 谁可以给我发私信（#240，迁移 `20261111194151_add_user_setting_dm_permission`）：`0` = 所有人（默认，仍受私信未关注 5 条限制）、`1` = 仅我关注的人、`2` = 仅互相关注、`3` = 关闭。已有会话同样受约束。无 CHECK，取值由应用层校验；message 域经 `pkg/composition/message_bridges.go` 桥接读取。规则见 [message-design.md](../message-design.md) 第十二节 |
 | `create_time` | 首次修改设置的时间 |
 | `update_time` | 设置值实际变化时由应用层更新（写入相同的值不产生更新） |
 
@@ -165,4 +167,4 @@ CREATE TABLE domains.user_setting (
   并发修改不同设置项不会互相覆盖。新增设置项 = 加一个带常量默认值的 NOT NULL 列（兼容旧版本应用）。
 - 不放在 `users` 表：`users` 在 CDC / ES 同步链路里，设置项与搜索无关，改设置不应该触发 ES 同步。
 - 没有 `deleted` / `create_by` / `update_by`：行不会被逻辑删除，操作人恒为 `user_id` 本人。
-- 跨域读取走 user 域的 `SettingService`（follow 域经 `pkg/composition/follow_bridges.go` 桥接），其他域不直接查这张表。
+- 跨域读取走 user 域的 `SettingService`（follow 域经 `pkg/composition/follow_bridges.go`、message 域经 `pkg/composition/message_bridges.go` 桥接），其他域不直接查这张表。

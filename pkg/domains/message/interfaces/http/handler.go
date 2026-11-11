@@ -212,6 +212,12 @@ func writeMessageError(c appctx.AppContext, err error) {
 	case errors.Is(err, domain.ErrSendLimitReached):
 		// 固定文案，前端据此提示「对方关注你或回复后可继续发送」（#239）。
 		httputil.Forbidden(c, "dm limit reached")
+	case errors.Is(err, domain.ErrRecipientFollowingOnly):
+		httputil.Forbidden(c, "This user only accepts private messages from people they follow")
+	case errors.Is(err, domain.ErrRecipientMutualOnly):
+		httputil.Forbidden(c, "This user only accepts private messages from mutual follows")
+	case errors.Is(err, domain.ErrRecipientDMClosed):
+		httputil.Forbidden(c, "This user has turned off private messages")
 	case errors.Is(err, domain.ErrConversationNotFound):
 		httputil.NotFound(c, "No such conversation")
 	default:

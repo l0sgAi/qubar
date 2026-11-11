@@ -36,6 +36,10 @@ type fakeRepo struct {
 	gotPreview  int
 	gotSendLim  int
 	remaining   *int
+	// limitState / limitCalls：GetSendLimitState（#240 can_send，见 permission_test.go）。
+	limitState domain.SendLimitState
+	limitErr   error
+	limitCalls int
 }
 
 func (f *fakeRepo) SendDirect(_ context.Context, sender, _ uuid.UUID, msgType int16, content string, limit int) (*domain.SendResult, error) {
