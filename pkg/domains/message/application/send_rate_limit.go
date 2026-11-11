@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// SendRateLimitConfigurer 注入私信发送频率限制（#242，设计见 docs/message-design.md 第十二节）。
+// SendRateLimitConfigurer 注入私信发送频率限制（#242，设计见 docs/message-design.md 第十三节）。
 type SendRateLimitConfigurer interface {
 	// SetSendRateLimiter 注入频率计数与上限读取函数（每次发送时调用，配置热更新即时生效）。
 	// limiter 为 nil 时不限制频率（单测 / 未接 Redis 的场景）。
@@ -67,13 +67,29 @@ func (s *messageServiceImpl) acquireSendRate(ctx context.Context, senderID, rece
 	return ticket, nil
 }
 
-// settleSendRate 发送结束后结算占用的配额：发送失败（sendErr != nil）全部退还；
+// replayBypassesRateLimit 发送被频率限制拒绝（rateErr）时判断是否是幂等重放（#248）：带 client_msg_id 且发送方已用它发过消息，
+// 返回 true 放行（不占配额，SendDirect 会返回原消息）。只在被拒时多这一次按唯一索引的查询，正常发送不额外查询。
+// Redis 出错等其他错误不放行（仍拒绝）；查询出错按拒绝处理并记日志。
+func (s *messageServiceImpl) replayBypassesRateLimit(ctx context.Context, senderID uuid.UUID, clientMsgID *string, rateErr error) bool {
+	if clientMsgID == nil ||
+		!errors.Is(rateErr, domain.ErrSendRateLimited) && !errors.Is(rateErr, domain.ErrNewConversationLimited) {
+		return false
+	}
+	ok, err := s.repo.HasClientMsgID(ctx, senderID, *clientMsgID)
+	if err != nil {
+		logger.Log.Warn("message: check replay after rate limit failed for sender " + senderID.String() + ": " + err.Error())
+		return false
+	}
+	return ok
+}
+
+// settleSendRate 发送结束后结算占用的配额：发送失败（sendErr != nil）或幂等重放（#248，没有写任何数据）全部退还；
 // 发送成功但没有新建会话时退还预占的新会话名额。
 func (s *messageServiceImpl) settleSendRate(ctx context.Context, senderID uuid.UUID, ticket *sendRateTicket, res *domain.SendResult, sendErr error) {
 	if ticket == nil {
 		return
 	}
-	if sendErr != nil {
+	if sendErr != nil || res.Replayed {
 		s.releaseSendRate(ctx, senderID, ticket, true)
 		return
 	}

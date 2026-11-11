@@ -29,6 +29,9 @@ type SendRequest struct {
 	ReceiverID string `json:"receiver_id"`
 	// Content 正文：1–2000 个字符，不能只有空白。
 	Content string `json:"content"`
+	// ClientMsgID 可选，发送幂等键（#248）：客户端为每条消息生成一次（建议 UUID），超时重试时原样带上；
+	// 1–64 个 [A-Za-z0-9_-] 字符，不传或空串表示不启用幂等。
+	ClientMsgID string `json:"client_msg_id"`
 }
 
 // ListRequest 列表接口的 query 参数。
@@ -55,7 +58,7 @@ func (h *Handler) Send(c appctx.AppContext) {
 		httputil.BadRequest(c, "Invalid receiver_id")
 		return
 	}
-	vo, err := h.svc.Send(c, userID, receiverID, req.Content)
+	vo, err := h.svc.SendWithClientMsgID(c, userID, receiverID, req.Content, req.ClientMsgID)
 	if err != nil {
 		writeMessageError(c, err)
 		return
@@ -217,6 +220,9 @@ func writeMessageError(c appctx.AppContext, err error) {
 		httputil.BadRequest(c, "Message content is empty")
 	case errors.Is(err, domain.ErrContentTooLong):
 		// message 带上限值，如 "message content is too long: at most 2000 characters"
+		httputil.BadRequest(c, err.Error())
+	case errors.Is(err, domain.ErrInvalidClientMsgID):
+		// message 带具体原因，如 "invalid client_msg_id: at most 64 characters"（#248）
 		httputil.BadRequest(c, err.Error())
 	case errors.Is(err, domain.ErrInvalidCursor):
 		httputil.BadRequest(c, "Invalid cursor")

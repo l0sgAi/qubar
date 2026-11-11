@@ -70,16 +70,26 @@ SELECT
           WHERE conversation_id = @conv AND user_id = @receiver AND first_sent_time IS NOT NULL) AS peer_replied`
 )
 
+// sendLimitState 发送方在会话里的已发条数，以及接收方是否在会话里发过消息。
+type sendLimitState struct {
+	SentCount   int
+	PeerReplied bool
+}
+
+// readSendLimitState 在会话行锁内读取 sendLimitState（sqlSendLimitState）。
+func readSendLimitState(tx *gorm.DB, conversationID, senderID, receiverID uuid.UUID) (sendLimitState, error) {
+	var state sendLimitState
+	err := tx.Raw(sqlSendLimitState, map[string]any{
+		"conv": conversationID, "sender": senderID, "receiver": receiverID,
+	}).Scan(&state).Error
+	return state, err
+}
+
 // checkSendLimit 在会话行锁内检查未关注发送限制（limit > 0 时调用）。
 // 对方发过消息返回 nil（永久解除）；已发满 limit 条返回 ErrSendLimitReached；否则返回本条发出后的剩余条数。
 func checkSendLimit(tx *gorm.DB, conversationID, senderID, receiverID uuid.UUID, limit int) (*int, error) {
-	var state struct {
-		SentCount   int
-		PeerReplied bool
-	}
-	if err := tx.Raw(sqlSendLimitState, map[string]any{
-		"conv": conversationID, "sender": senderID, "receiver": receiverID,
-	}).Scan(&state).Error; err != nil {
+	state, err := readSendLimitState(tx, conversationID, senderID, receiverID)
+	if err != nil {
 		return nil, err
 	}
 	if state.PeerReplied {
@@ -94,13 +104,14 @@ func checkSendLimit(tx *gorm.DB, conversationID, senderID, receiverID uuid.UUID,
 
 // SendDirect 见 domain.Repository。
 func (r *messageRepoPG) SendDirect(
-	ctx context.Context, senderID, receiverID uuid.UUID, msgType int16, content string, limit int,
+	ctx context.Context, senderID, receiverID uuid.UUID, msgType int16, content string, limit int, clientMsgID *string,
 ) (*domain.SendResult, error) {
 	low, high := domain.OrderPair(senderID, receiverID)
-	msg := &domain.Message{SenderID: senderID, MsgType: msgType, Content: content}
+	msg := &domain.Message{SenderID: senderID, MsgType: msgType, Content: content, ClientMsgID: clientMsgID}
 	var remaining *int
 	// 会话行冲突时返回已有行的 ID：返回的 ID 等于本次生成的 ID 即为新建（#242 新会话频率，不多一次查询）。
 	newConvID := sharedomain.NewID()
+	var replayed *domain.Message // 命中发送幂等时的原消息（#248）
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var conv struct{ ID uuid.UUID }
 		if err := tx.Raw(sqlUpsertDirectConversation,
@@ -111,6 +122,18 @@ func (r *messageRepoPG) SendDirect(
 			return errors.New("message: upsert conversation returned no id")
 		}
 		msg.ConversationID = conv.ID
+		// 发送幂等（#248）：在会话行锁之后、发送限制之前查重放——已达上限时重试也返回原消息而不是 ErrSendLimitReached。
+		if clientMsgID != nil {
+			orig, err := findByClientMsgID(tx, senderID, *clientMsgID)
+			if err != nil {
+				return err
+			}
+			if orig != nil {
+				replayed = orig
+				remaining, err = replayRemaining(tx, conv.ID, senderID, receiverID, limit)
+				return err
+			}
+		}
 		if limit > 0 {
 			var err error
 			if remaining, err = checkSendLimit(tx, conv.ID, senderID, receiverID, limit); err != nil {
@@ -119,12 +142,20 @@ func (r *messageRepoPG) SendDirect(
 		}
 		// 在会话行锁内生成消息 ID（见上方说明）。
 		msg.ID = sharedomain.NewID()
-		var created struct{ CreateTime time.Time }
-		if err := tx.Raw(sqlInsertMessage,
-			msg.ID, msg.ConversationID, senderID, msgType, content).Scan(&created).Error; err != nil {
-			return err
+		if clientMsgID != nil {
+			orig, err := insertMessageIdempotent(tx, msg, *clientMsgID)
+			if err != nil || orig != nil {
+				replayed = orig
+				return err
+			}
+		} else {
+			var created struct{ CreateTime time.Time }
+			if err := tx.Raw(sqlInsertMessage,
+				msg.ID, msg.ConversationID, senderID, msgType, content).Scan(&created).Error; err != nil {
+				return err
+			}
+			msg.CreateTime = created.CreateTime
 		}
-		msg.CreateTime = created.CreateTime
 		if err := tx.Exec(sqlUpsertSenderMember,
 			sharedomain.NewID(), msg.ConversationID, senderID, receiverID, msg.ID).Error; err != nil {
 			return err
@@ -135,8 +166,85 @@ func (r *messageRepoPG) SendDirect(
 	if err != nil {
 		return nil, err
 	}
+	if replayed != nil {
+		return &domain.SendResult{Message: replayed, Remaining: remaining, Replayed: true}, nil
+	}
 	msg.UpdateTime = msg.CreateTime
 	return &domain.SendResult{Message: msg, Remaining: remaining, Created: msg.ConversationID == newConvID}, nil
+}
+
+// 发送幂等（#248）：唯一部分索引 uk_message_sender_client_msg (sender_id, client_msg_id) WHERE client_msg_id IS NOT NULL。
+//
+// 同一发送人同一 client_msg_id 的请求大多发往同一会话，被会话行锁串行化：后到的请求拿到锁时前一个已提交，
+// 锁之后的 findByClientMsgID（READ COMMITTED 每条语句新快照）就能看到原消息。唯一索引兜底锁覆盖不到的情况
+// （同一 client_msg_id 发往不同接收方，两次请求锁的是不同会话行）：插入用 ON CONFLICT DO NOTHING，
+// 冲突时等对方事务提交后不插入、不报错，再按同一键查回原消息，不会变成 500。
+const (
+	sqlInsertMessageIdempotent = `
+INSERT INTO domains.message (id, conversation_id, sender_id, msg_type, content, client_msg_id)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT (sender_id, client_msg_id) WHERE client_msg_id IS NOT NULL DO NOTHING
+RETURNING create_time`
+
+	sqlFindByClientMsgID = `
+SELECT id, conversation_id, sender_id, msg_type, content, client_msg_id, create_time, update_time, deleted
+FROM domains.message
+WHERE sender_id = ? AND client_msg_id = ?`
+)
+
+// findByClientMsgID 按 (senderID, clientMsgID) 查原消息（走 uk_message_sender_client_msg）；没有返回 nil。
+func findByClientMsgID(tx *gorm.DB, senderID uuid.UUID, clientMsgID string) (*domain.Message, error) {
+	var rows []domain.Message
+	if err := tx.Raw(sqlFindByClientMsgID, senderID, clientMsgID).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	return &rows[0], nil
+}
+
+// HasClientMsgID 见 domain.Repository。与 SendDirect 里的重放判断同一个查询（findByClientMsgID）。
+func (r *messageRepoPG) HasClientMsgID(ctx context.Context, senderID uuid.UUID, clientMsgID string) (bool, error) {
+	orig, err := findByClientMsgID(r.db.WithContext(ctx), senderID, clientMsgID)
+	return orig != nil, err
+}
+
+// insertMessageIdempotent 带 client_msg_id 插入消息。插入成功回填 msg.CreateTime 并返回 nil；
+// 撞唯一索引（并发的同键请求已先提交）时不插入，查回并返回原消息。
+func insertMessageIdempotent(tx *gorm.DB, msg *domain.Message, clientMsgID string) (*domain.Message, error) {
+	var created []struct{ CreateTime time.Time }
+	if err := tx.Raw(sqlInsertMessageIdempotent,
+		msg.ID, msg.ConversationID, msg.SenderID, msg.MsgType, msg.Content, clientMsgID).Scan(&created).Error; err != nil {
+		return nil, err
+	}
+	if len(created) > 0 {
+		msg.CreateTime = created[0].CreateTime
+		return nil, nil
+	}
+	orig, err := findByClientMsgID(tx, msg.SenderID, clientMsgID)
+	if err != nil {
+		return nil, err
+	}
+	if orig == nil {
+		// DO NOTHING 只在冲突行已提交时发生，此时一定查得到；查不到说明数据被并发删除，按异常处理。
+		return nil, errors.New("message: client_msg_id conflict but original message not found")
+	}
+	return orig, nil
+}
+
+// replayRemaining 重放时的剩余条数（#239 口径，#248 决定）：按会话当前已发条数重新计算 limit − sent_count（不再减本条，最小 0）；
+// 不受限制（limit ≤ 0，或对方在会话里发过消息）时为 nil。与发送接口「本条发出后还能再发几条」一致：重放的那条已经计入 sent_count。
+func replayRemaining(tx *gorm.DB, conversationID, senderID, receiverID uuid.UUID, limit int) (*int, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	state, err := readSendLimitState(tx, conversationID, senderID, receiverID)
+	if err != nil || state.PeerReplied {
+		return nil, err
+	}
+	remaining := max(limit-state.SentCount, 0)
+	return &remaining, nil
 }
 
 // GetMember 见 domain.Repository。

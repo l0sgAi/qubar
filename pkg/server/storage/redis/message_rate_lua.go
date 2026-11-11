@@ -9,7 +9,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// 私信发送频率限制（#242，设计见 docs/message-design.md 第十二节）：三个固定窗口计数，一次 EVALSHA 原子完成
+// 私信发送频率限制（#242，设计见 docs/message-design.md 第十三节）：三个固定窗口计数，一次 EVALSHA 原子完成
 // 「检查 → 占用」，多实例共享同一组 key，并发请求不会突破上限。
 //
 // 计数 +1 后若 key 没有 TTL（第一次计数，或异常残留的无 TTL key）就设 TTL，窗口从第一次计数起算；

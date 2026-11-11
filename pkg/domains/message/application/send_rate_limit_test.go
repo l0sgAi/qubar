@@ -39,8 +39,10 @@ type createdRepo struct {
 	created bool
 }
 
-func (r createdRepo) SendDirect(ctx context.Context, s, rcv uuid.UUID, t int16, c string, limit int) (*domain.SendResult, error) {
-	res, err := r.fakeRepo.SendDirect(ctx, s, rcv, t, c, limit)
+func (r createdRepo) SendDirect(
+	ctx context.Context, s, rcv uuid.UUID, t int16, c string, limit int, clientMsgID *string,
+) (*domain.SendResult, error) {
+	res, err := r.fakeRepo.SendDirect(ctx, s, rcv, t, c, limit, clientMsgID)
 	if res != nil {
 		res.Created = r.created
 	}

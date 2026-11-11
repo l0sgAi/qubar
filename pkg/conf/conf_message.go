@@ -9,7 +9,7 @@ const (
 	DefaultMessageNewConversationsPerDay = 20
 )
 
-// Message 私信配置（message 领域）。设计见 docs/message-design.md 第十二节。
+// Message 私信配置（message 领域）。设计见 docs/message-design.md 第十三节。
 type Message struct {
 	SendRate MessageSendRate `mapstructure:"send_rate" json:"send_rate" yaml:"send_rate"`
 }

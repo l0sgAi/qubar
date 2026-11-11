@@ -1,8 +1,8 @@
 # 私信（message）设计：会话与消息核心
 
 > 目标：新增 `pkg/domains/message`，落地一对一私信的数据模型、发送、会话列表、消息历史、标记已读与删除会话（issue #238，总览 #30 的第 1 步）；
-> 补充按对方用户 ID 查会话（issue #246，见第九节）、未关注发送限制（issue #239，见第十节）、私信未读总数与 SSE 实时推送（issue #241，见第十一节）、
-> 发送频率限制与内容安全（issue #242，见第十二节）。
+> 补充按对方用户 ID 查会话（issue #246，见第九节）、未关注发送限制（issue #239，见第十节）、私信未读总数与 SSE 实时推送（issue #241，见第十一节）、发送幂等 client_msg_id（issue #248，见第十二节）、
+> 发送频率限制与内容安全（issue #242，见第十三节）。
 > 后续步骤建在这一步之上：私信权限设置（#240）、群聊（#31）。
 >
 > 基线：此前没有用户间私信。表结构见 `migrations/20261111134129_add_private_message.up.sql`，字段说明见 [pgsql-ddl/message.md](pgsql-ddl/message.md)，
@@ -18,8 +18,9 @@
 | 正文 | 1–2000 个字符（按 Unicode 字符计，与 PG `varchar` 计数一致；**issue 原文 1000，维护者 2026-11-11 决策改为 2000**）；入库前过 `utils.SanitizeForPg`，清洗后不能为空或只有空白；正文按原样保存，不去首尾空白 |
 | 接收方 | 状态正常的普通用户。不能发给自己；不存在 / 已禁用 / 已删除返回 404 |
 | 未关注发送限制（#239） | 对方**没关注我**、也**没在会话里发过消息**时，我在该会话累计最多发 5 条，第 6 条 403 `dm limit reached`；对方关注我立即解除，对方回复过一次永久解除。固定 5 条，不可配置。细则见第十节 |
-| 发送频率（#242） | 按发送者计：每分钟 20 条、每天 500 条、每天最多主动开启 20 个新会话（配置 `message.send_rate`，`<=0` 兜底这些默认值），超限 429；正文含外链放行（维护者 2026-11-11 确认）。细则见第十二节 |
-| 发送方 | 账号已禁用 / 已删除时不能发送（登录态只校验 token，发送时再查账号状态），403。细则见第十二节 |
+| 发送频率（#242） | 按发送者计：每分钟 20 条、每天 500 条、每天最多主动开启 20 个新会话（配置 `message.send_rate`，`<=0` 兜底这些默认值），超限 429；正文含外链放行（维护者 2026-11-11 确认）。细则见第十三节 |
+| 发送方 | 账号已禁用 / 已删除时不能发送（登录态只校验 token，发送时再查账号状态），403。细则见第十三节 |
+| 发送幂等（#248） | 发送可带客户端生成的 `client_msg_id`（可选，1–64 位 `[A-Za-z0-9_-]`）；同一发送人同一取值只落一条，重试返回第一次的那条消息（正文不同也忽略新正文），不改任何计数、不推送。细则见第十二节 |
 | AI 机器人账号 | **不能收私信**（维护者 2026-11-11 决策）：发给机器人账号（`users.role=2`，全局 / 圈内）按「不可发送」处理，返回 403 |
 | 会话 | 首次发送自动建会话；两人之间只有一个单聊会话（`(user_low, user_high)` 唯一），并发首发不会产生两个 |
 | 会话列表 | 对方简要信息、最后一条消息摘要（前 100 个字符）与时间、我的未读数；按最后消息时间倒序，keyset 游标分页 |
@@ -42,6 +43,7 @@ pkg/domains/message/
   application/service.go            MessageService（由小接口组合）、RecipientChecker / UserBriefReader 端口、常量
   application/send.go               SendService：Send（校验 + 清洗 + 接收方判定 + 未关注发送限制）
   application/send_limit.go         未关注发送限制（#239）：UnfollowedSendLimit、FollowChecker 端口、SendVO
+  application/send_idempotent.go    发送幂等（#248）：MaxClientMsgIDLen、client_msg_id 校验
   application/conversation.go       ConversationService：会话列表（对方信息回填）/ 按对方查会话（#246）/ 标记已读 / 删除会话；
                                     列表项组装 toConversationItemVO 两处共用
   application/history.go            HistoryService：消息历史
@@ -62,7 +64,7 @@ pkg/composition/
 |---|---|---|
 | `conversation` | 会话。`type` 1=单聊 / 2=群聊（#31 预留）；单聊用 `user_low` / `user_high`（双方 UUID 按字节序排好）定位 | `uk_conversation_pair (user_low, user_high)`（群聊两列为 NULL，NULL 互不相等，不受约束） |
 | `conversation_member` | 每个会话每个成员一行：最新消息位置、已读位置、未读数、隐藏截止位置、发送统计 | `uk_conversation_member (conversation_id, user_id)`；`idx_conversation_member_list (user_id, last_message_id DESC) WHERE deleted = 0` |
-| `message` | 消息，只追加 | `idx_message_conversation (conversation_id, id DESC) WHERE deleted = 0` |
+| `message` | 消息，只追加 | `idx_message_conversation (conversation_id, id DESC) WHERE deleted = 0`；`uk_message_sender_client_msg (sender_id, client_msg_id) WHERE client_msg_id IS NOT NULL`（#248 发送幂等） |
 
 **位置一律用消息 ID 表示**：消息主键是 UUIDv7，时间序 = 字节序 = PG `uuid` 比较序，所以「最新消息」「已读到哪」「从哪开始隐藏」都存消息 ID，
 比较即先后，不需要再冗余时间列；会话列表的排序键就是成员行的 `last_message_id`（单列唯一，keyset 不需要复合键）。
@@ -77,14 +79,17 @@ POST /message/send
   handler ─ 校验 receiver_id ─▶ Send
     ├─ 自己？→ 400
     ├─ SanitizeForPg → 空 / 只有空白 → 400；> 2000 字符 → 400
+    ├─ client_msg_id（可选，#248）：> 64 位或含 [A-Za-z0-9_-] 以外的字符 → 400；空串 = 不提供
     ├─ RecipientChecker（UserService.GetByID）→ 不存在/禁用/删除 404；role=2 → 403
     ├─ FollowChecker（FollowService.GetRelations）：对方关注了我 → limit=0（不限制），否则 limit=5（#239）
-    └─ Repository.SendDirect(limit)（一个事务）
+    └─ Repository.SendDirect(limit, client_msg_id)（一个事务）
          1. INSERT conversation … ON CONFLICT (user_low, user_high) DO UPDATE SET update_time … RETURNING id
             └─ 冲突时也返回已有 ID，并锁住会话行：同一会话的发送串行
+         1''. 带 client_msg_id（#248）：锁后按 (sender_id, client_msg_id) 查原消息 → 命中即返回（Replayed，不写任何数据、不查 5 条限制）
          1'. limit > 0：锁后读 我的 sent_count、对方成员行 first_sent_time
              └─ 对方发过消息 → 不限制；sent_count ≥ limit → 403 dm limit reached（回滚）；否则剩余 = limit − sent_count − 1
          2. 在锁内生成消息 ID（NewID）→ INSERT message
+            └─ 带 client_msg_id 时 ON CONFLICT (sender_id, client_msg_id) DO NOTHING；冲突 → 查回原消息返回（Replayed，跳过 3、4）
          3. 发送方成员行 upsert：last_message_id 前移、sent_count+1、first_sent_time 首次写入
          4. 接收方成员行 upsert：last_message_id 前移、unread_count+1
          （删除过会话的成员：cleared_message_id 不动，新消息 ID 大于它 → 会话自然重现）
@@ -136,6 +141,7 @@ DELETE /message/conversations/:id        UPDATE 成员行 SET cleared = last_rea
 | 发送方自己的未读 | 发送不改发送方的未读数 / 已读位置（不默认「回复即已读」），由客户端打开会话时调标记已读 |
 | 对方被禁用 / 删除 | 会话保留，`peer=null`；再发送 404 |
 | 机器人账号 | 403；已有会话不受影响（当前不可能产生） |
+| 同一 client_msg_id 并发重复发送（#248） | 发往同一会话时被会话行锁串行，后到者锁后查到原消息；锁覆盖不到的情况（同键发往不同接收方）由唯一索引 + `ON CONFLICT DO NOTHING` 兜底并查回原消息，不会 500；集成测试 `TestIdempotent_ConcurrentSameKey`、`TestIdempotent_KeyScopeAndCrossReceiver` 覆盖 |
 | 未关注发送限制的并发（#239） | 判断与 `sent_count+1` 都在会话行锁内，同一会话的发送串行，并发发送不会突破 5 条；集成测试 `TestSendLimit_ConcurrentSendsNeverExceedLimit`、`TestMessageSendLimit_ConcurrentSendsNeverExceedLimit` 覆盖 |
 
 ## 七、给后续 issue 预留的位置
@@ -145,7 +151,7 @@ DELETE /message/conversations/:id        UPDATE 成员行 SET cleared = last_rea
 | #239 未关注发送限制 | **已实现**，见第十节 |
 | #240 私信权限设置 | 接收方判定集中在 `RecipientChecker`（`application/send.go`）；权限设置可在 `user_setting` 加列（该表注释已预告），桥接器里一并判定，或新增端口 |
 | #241 未读总数与实时推送 | **已实现，见第十一节** |
-| #242 频率限制与内容安全 | **已实现，见第十二节** |
+| #242 频率限制与内容安全 | **已实现，见第十三节** |
 | #31 群聊 | `conversation.type=2`、`user_low/high` 为 NULL；`conversation_member.peer_id` 为 NULL、`deleted` 表示退出群聊；成员行的已读 / 未读 / 隐藏机制直接复用 |
 
 ## 八、范围外 / 未做
@@ -257,12 +263,64 @@ DELETE /message/conversations/:id        UPDATE 成员行 SET cleared = last_rea
 | `interfaces/http/handler.go`、`routes.go` | `GET /message/unread-count` |
 | `pkg/composition/wire_message.go`、`message_bridges.go` | 注入缓存；`wireMessageStream`、`messageStreamNotifier` |
 
-## 十二、发送频率限制与内容安全（#242）
+## 十二、发送幂等 client_msg_id（#248）
+
+> 弱网下客户端超时重试会把同一条消息发两次、对方看到两条。维护者 2026-11-11 决定另开 #248，在前端接入发送接口前补上：
+> 发送带可选的客户端幂等键，同一发送人同一键只落一条。迁移 `migrations/20261111193813_add_message_client_msg_id.up.sql`。
+
+**请求字段**：`POST /message/send` 新增可选 `client_msg_id`（string）。
+
+| 项 | 规则 |
+|---|---|
+| 取值 | 客户端为每条**新**消息生成一次（建议 UUID），超时 / 失败重试时**原样带上**；同一个键不要用于另一条消息 |
+| 长度 / 字符集 | 1–64 个字符（`application.MaxClientMsgIDLen`，列宽 `varchar(64)`），只允许 `[A-Za-z0-9_-]`（UUID、ULID 都满足）；超长或含其他字符 400 `invalid client_msg_id: …`（`domain.ErrInvalidClientMsgID`）。白名单全是 ASCII，不需要 `SanitizeForPg`；原样比较，不做大小写归一 |
+| 不传 / 空串 | 不启用幂等，行为与 #238 / #239 完全一致（列为 NULL，不受唯一索引约束） |
+| 作用域 | **按发送人**：`(sender_id, client_msg_id)` 唯一（部分唯一索引 `uk_message_sender_client_msg … WHERE client_msg_id IS NOT NULL`）。不同用户用同一个键互不影响 |
+
+**重放语义**（维护者 2026-11-11 确认）：同一发送人再次用同一个键请求时——
+
+| 项 | 行为 |
+|---|---|
+| 响应 | 200，**第一次创建的那条消息**，结构与正常发送相同（`id` / `conversation_id` / `content` / `create_time` 都是原值）；响应里不标记是否重放（前端不需要区分） |
+| 正文不同 | 仍返回原消息，**忽略新正文** |
+| 接收方不同（客户端误用同一个键） | 同样按「同一发送人同一键」返回原消息（`conversation_id` 是原会话），不在新会话里落消息。判断只看 `(sender_id, client_msg_id)`，与唯一索引一致 |
+| 写入 | 不新增消息；不累加对方 `unread_count`、我的 `sent_count`；不移动双方 `last_message_id`（会话最后消息） |
+| 推送（#241） | 不推送：`SendResult.Replayed=true` 时应用层不调用发送后的钩子（`afterSend`），对方不会再收到 `dm-message` / `dm-unread` |
+| #239 5 条限制 | **重放判断在限制之前**：已发满 5 条后用同一个键重试（例如第 5 条超时），返回原消息而不是 403；新键仍 403 |
+| `remaining_count` | 按会话**当前**状态重新计算：限制生效时 = `5 − sent_count`（重放的那条已计入 `sent_count`，不再减 1，最小 0）；不受限制（对方关注了我 / 对方回复过）时 `null` |
+
+**`remaining_count` 口径的理由**：发送接口里它的含义是「这条发出后在该会话还能再发几条」。重放的那条已经发出并计入 `sent_count`，
+所以「现在还能发几条」= `limit − sent_count`；没有其他消息插进来时与第一次响应的值相同（第 5 条重放仍是 `0`），
+期间又发过别的消息或对方关注 / 回复过时反映的是最新状态，前端据此展示的剩余条数不会过期。返回 `null` 会被前端理解为「不受限制」，与实际不符，故不采用。
+接收方不同的误用场景按当前请求的这对用户计算。
+
+**判断位置与并发**（`infrastructure/message_repo_pg.go` 的 `SendDirect`）：
+
+1. 会话行 upsert 加锁之后、`checkSendLimit` 之前，`findByClientMsgID` 按 `(sender_id, client_msg_id)` 查（走唯一索引）；命中即返回，事务里除了会话行的 `update_time` 什么都不写（同键发往一个从没聊过的接收方时，会话 upsert 会留下一行没有成员、没有消息的会话行，不出现在任何列表里，之后两人正常发消息时复用它）。
+2. 未命中：照常检查 5 条限制 → 生成消息 ID → `INSERT … ON CONFLICT (sender_id, client_msg_id) WHERE client_msg_id IS NOT NULL DO NOTHING RETURNING create_time`。
+   没有返回行（并发的同键请求先提交了）→ 再按键查回原消息返回，跳过成员行更新。
+3. 同一会话的同键请求被会话行锁串行：后到者拿到锁时前一个已提交，第 1 步（READ COMMITTED，每条语句新快照）就能查到。
+   锁覆盖不到的情况只有「同键发往不同接收方」（锁的是不同会话行），由第 2 步唯一索引兜底：`DO NOTHING` 会等冲突事务提交，不报唯一冲突，不会 500。
+
+**应用层**：`SendService.SendWithClientMsgID(ctx, sender, receiver, content, clientMsgID)`；原 `Send` 等于 `clientMsgID=""`，签名不变。
+校验顺序：发给自己 → 正文 → `client_msg_id` 格式 → 接收方状态（#240 权限）→ 关注关系 → `SendDirect`。所以重放请求同样要先通过接收方 / 权限判定：
+原消息发出后对方被禁用或关闭了私信，重试得到的是对应的 404 / 403，而不是原消息。
+
+**与 #242 频率限制的关系**：频率限制在应用层、`SendDirect` 之前，重放请求会先经过它（本 issue 不改频率口径，是否把重放计入频率由 #242 决定）。
+#242 的口径：重放不消耗频率配额、也不会被频率限制拒绝，见第十三节 13.4 / 13.5。
+
+**迁移**：`ALTER TABLE domains.message ADD COLUMN client_msg_id varchar(64)`（可空，无默认值，不重写表）+ `CREATE UNIQUE INDEX uk_message_sender_client_msg`。
+旧版本应用插入消息时不写该列（NULL），不受索引约束，兼容先迁移后发版。索引**不用** `CONCURRENTLY`：`message` 表随 v0.9.0 首次上线，
+与建表迁移同一次发布执行，建索引时是空表，锁瞬时释放；与加列放在同一个文件里同事务执行，失败整体回滚，不会留下 INVALID 索引。
+
+**范围外**：其它接口（标记已读、删除会话）的幂等；每用户同步序号与断线补拉；消息历史 / `dm-message` 推送里不返回 `client_msg_id`（发送方用发送响应匹配本地消息即可）。
+
+## 十三、发送频率限制与内容安全（#242）
 
 > 维护者 2026-11-11 确认：每分钟 20 条、每天 500 条、每天最多主动开启 20 个新会话，做成新配置项（`<=0` 兜底默认值），超限 429；
 > 正文包含外链放行。项目没有通用限流中间件（#29 / #217 范围外），参考 auth 验证码频控（[design-rate-limit-otp-hardening.md](design/design-rate-limit-otp-hardening.md)）的 Redis 计数写法。
 
-### 12.1 规则
+### 13.1 规则
 
 | 项 | 规则 |
 |---|---|
@@ -274,7 +332,7 @@ DELETE /message/conversations/:id        UPDATE 成员行 SET cleared = last_rea
 | 发送方状态 | 发送时用 `RecipientChecker`（与接收方同一判定，`UserService.GetByID`）校验发送方：不存在 / 已禁用 / 已删除 → 403 `ErrSenderUnavailable`；AI 机器人账号不在此拦截（行为不变） |
 | 接收方状态 | 不变（#238）：不存在 / 已禁用 / 已删除 404，机器人 403 |
 
-### 12.2 配置（`pkg/conf/conf_message.go`，段名 `message`）
+### 13.2 配置（`pkg/conf/conf_message.go`，段名 `message`）
 
 | key | 默认 / 兜底 | 说明 |
 |---|---|---|
@@ -285,7 +343,7 @@ DELETE /message/conversations/:id        UPDATE 成员行 SET cleared = last_rea
 各项 `<=0` 或缺省时兜底为默认值（`PerMinuteOrDefault` 等），生产 Secret 不加这一段也能跑。每次发送时读 `conf.Config`（composition `messageSendRateLimits`），
 配置热更新即时生效；调小上限时已占用的计数不变，超出部分直到窗口到期都会被拒。
 
-### 12.3 Redis key（`pkg/server/storage/redis/keys_message.go`）
+### 13.3 Redis key（`pkg/server/storage/redis/keys_message.go`）
 
 | key | 类型 | TTL | 语义 |
 |---|---|---|---|
@@ -300,7 +358,7 @@ Lua（`message_rate_lua.go`）：
   （续期会让持续发送时窗口永不到期，见 otp 设计文档 §2.5）。一次 `EVALSHA` 完成「检查 → 占用」，多实例下并发请求不会突破上限。
 - **退还** `releaseMessageSendRateScript`：key 存在且 > 0 才 `DECR`，不改 TTL；窗口已过期时不写，避免 `DECR` 建出 -1 且没有 TTL 的 key。
 
-### 12.4 发送流程
+### 13.4 发送流程
 
 ```
 Send
@@ -315,18 +373,22 @@ Send
  │    └─ 新会话名额已用完（未预占）→ repo.GetDirectConversation(sender, receiver)
  │         ├─ 会话不存在（本次会新建）→ 退还条数额度，429 ErrNewConversationLimited
  │         └─ 会话已存在 → 继续
- ├─ repo.SendDirect（事务：会话 upsert → #239 检查 → 写消息 → 成员行）
+ ├─ 被频率限制拒绝（上面两种 429）且带 client_msg_id → repo.HasClientMsgID(sender, key)       ← #242 × #248
+ │    ├─ 已发过（幂等重放）→ 放行，不占额度，交给 SendDirect 返回原消息
+ │    └─ 没发过 / 查询出错 → 429
+ ├─ repo.SendDirect（事务：会话 upsert → #248 重放判断 → #239 检查 → 写消息 → 成员行）
  ├─ settleSendRate
  │    ├─ SendDirect 失败（含 #239 的 403）→ 退还条数额度与预占的新会话名额
+ │    ├─ res.Replayed = true（#248 重放，没写任何数据）→ 同上，全部退还
  │    └─ 成功但 res.Created = false → 退还预占的新会话名额
- └─ （#241 afterSend：未读缓存 / 推送）
+ └─ （#241 afterSend：未读缓存 / 推送；重放不触发）
 ```
 
 **「新建了会话」怎么判断（不多一次查询）**：`SendDirect` 的会话 upsert 冲突时 `RETURNING` 已有行的 ID，所以返回的 ID 等于本次生成的 ID 即为新建，
 结果追加到 `domain.SendResult.Created`（仓储签名不变）。新会话名额采用「先预占、没新建再退还」：正常路径不多查询；
 只有当天新会话额度已用完的发送者，每次发送多一次按 `uk_conversation_pair` 的会话查询（判断这次会不会新建会话），被拒时不建会话。
 
-### 12.5 一致性 / 边界 / 风险
+### 13.5 一致性 / 边界 / 风险
 
 | 场景 | 处理 |
 |---|---|
@@ -337,11 +399,11 @@ Send
 | 额度用完后的会话查询与新建之间 | 查到会话存在才放行，会话不会被删除（删除只是成员行隐藏），所以放行后的 `SendDirect` 不会新建会话 |
 | 固定窗口边界 | 窗口切换的瞬间最多可连发 2 倍每分钟上限（固定窗口的固有特性）；每天上限兜底 |
 | 发送方状态的实时性 | 与接收方同一判定（`UserService.GetByID`，`user:info` 缓存 30 分钟）：在库里禁用 / 删除账号后，缓存过期前仍按旧状态判断。项目目前没有应用内的禁用 / 删除入口（运维直接改库），改库时需同时删除 `user:info:{id}`；登录 token 也不会因禁用失效 |
-| 重放请求（#248 `client_msg_id`） | 本 issue 不处理幂等。当前口径：重放请求与普通请求一样先占用频率额度；`SendDirect` 返回原消息（成功）时不退还，即重放也计入频率。#248 合入后如需不计，可在其「命中重放」标志上退还 |
+| 幂等重放（#248 `client_msg_id`） | **不消耗频率配额，也不被频率限制拒绝**（编排会话 2026-11-11 确认口径）：占用配额后 `SendDirect` 返回 `Replayed=true` 时全部退还；已达上限时被拒的请求若带 `client_msg_id`，多一次按 `uk_message_sender_client_msg` 的查询，已发过即放行（不占额度）。只有被拒的请求才多这次查询，正常发送不额外查询。Redis 出错时不放行（仍 500）。边界：同键并发重复且恰好卡在上限时，先到的请求还没提交、后到的被拒请求查不到原消息 → 429（偏严，客户端稍后重试即返回原消息）。集成测试 `TestMessage_ReplayBypassesSendRate` 覆盖 |
 | 被 #239 拒绝（403 `dm limit reached`） | `SendDirect` 失败 → 全部退还，不占频率额度 |
 | 配置热更新调小上限 | 已有计数不变，超出部分直到窗口到期都被拒 |
 
-### 12.6 错误
+### 13.6 错误
 
 | 错误 | HTTP（信封 code） | message |
 |---|---|---|

@@ -176,7 +176,7 @@ func TestSendDirect_CreatedFlag(t *testing.T) {
 	t.Parallel()
 	e := newMsgEnv(t)
 	u := e.newUsers(t, 2)
-	first, err := e.repo.SendDirect(t.Context(), u[0], u[1], domain.MessageTypeText, "hi", 0)
+	first, err := e.repo.SendDirect(t.Context(), u[0], u[1], domain.MessageTypeText, "hi", 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,13 +184,38 @@ func TestSendDirect_CreatedFlag(t *testing.T) {
 		t.Error("first send: Created = false, want true")
 	}
 	for _, pair := range [][2]uuid.UUID{{u[0], u[1]}, {u[1], u[0]}} {
-		res, err := e.repo.SendDirect(t.Context(), pair[0], pair[1], domain.MessageTypeText, "again", 0)
+		res, err := e.repo.SendDirect(t.Context(), pair[0], pair[1], domain.MessageTypeText, "again", 0, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if res.Created || res.Message.ConversationID != first.Message.ConversationID {
 			t.Errorf("send %s→%s: Created = %v, conv %s; want false, %s",
 				pair[0], pair[1], res.Created, res.Message.ConversationID, first.Message.ConversationID)
+		}
+	}
+}
+
+// HasClientMsgID 按发送人 + client_msg_id 判断（#248 幂等键）：只认自己发过的键，别人的同名键不算。
+func TestHasClientMsgID(t *testing.T) {
+	t.Parallel()
+	e := newMsgEnv(t)
+	u := e.newUsers(t, 3)
+	key := sharedomain.NewID().String()
+	if _, err := e.repo.SendDirect(t.Context(), u[0], u[1], domain.MessageTypeText, "hi", 0, &key); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		sender uuid.UUID
+		key    string
+		want   bool
+	}{
+		{u[0], key, true},
+		{u[0], sharedomain.NewID().String(), false},
+		{u[2], key, false},
+	} {
+		got, err := e.repo.HasClientMsgID(t.Context(), tc.sender, tc.key)
+		if err != nil || got != tc.want {
+			t.Errorf("HasClientMsgID(%s, %s) = %v, %v; want %v", tc.sender, tc.key, got, err, tc.want)
 		}
 	}
 }
