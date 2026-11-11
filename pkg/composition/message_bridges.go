@@ -1,14 +1,18 @@
 // Package composition 的 message_bridges.go：注入 message（私信）领域的跨域桥接器
-// （user → message：接收方状态、对方简要信息；follow → message：未关注发送限制的关注关系）。
+// （user → message：接收方状态、对方简要信息；follow → message：未关注发送限制的关注关系；
+// message → notice StreamHub：未读与新消息推送）。
 package composition
 
 import (
 	"context"
+	"encoding/json"
 
 	followapp "interestBar/pkg/domains/follow/application"
 	followdomain "interestBar/pkg/domains/follow/domain"
 	messageapp "interestBar/pkg/domains/message/application"
+	noticeapp "interestBar/pkg/domains/notice/application"
 	userapp "interestBar/pkg/domains/user/application"
+	"interestBar/pkg/logger"
 
 	"github.com/google/uuid"
 )
@@ -84,4 +88,30 @@ func (c *messageFollowChecker) IsFollowing(ctx context.Context, followerID, foll
 		return false, err
 	}
 	return vo.Relations[followeeID.String()]&followdomain.RelationFollowing != 0, nil
+}
+
+// ===== message → notice StreamHub（私信未读与新消息实时推送，#241）=====
+
+// messageStreamNotifier 把 notice.application.StreamHub 适配为 message.application.UnreadNotifier。
+// 进程内投递、非阻塞：UnreadChanged 只标脏（hub 合并窗口内读全量、去重后推 dm-unread），
+// NewMessage 立即推 dm-message（不合并、不去重）。
+type messageStreamNotifier struct {
+	hub noticeapp.StreamHub
+}
+
+var _ messageapp.UnreadNotifier = (*messageStreamNotifier)(nil)
+
+// UnreadChanged 标记私信未读通道脏。
+func (n *messageStreamNotifier) UnreadChanged(userID uuid.UUID) {
+	n.hub.PublishChannel(noticeapp.ChannelDMUnread, userID)
+}
+
+// NewMessage 给接收方推新消息摘要（data 为 NewMessageEvent 的 JSON）。
+func (n *messageStreamNotifier) NewMessage(receiverID uuid.UUID, ev messageapp.NewMessageEvent) {
+	data, err := json.Marshal(ev)
+	if err != nil {
+		logger.Log.Error("Failed to marshal dm-message event: " + err.Error())
+		return
+	}
+	n.hub.Push(receiverID, sseEventDMMessage, data)
 }
