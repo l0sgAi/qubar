@@ -1,0 +1,73 @@
+package domain
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// 哨兵错误。
+var (
+	// ErrCannotMessageSelf 不能给自己发私信（handler 映射 400）。
+	ErrCannotMessageSelf = errors.New("cannot send message to yourself")
+	// ErrRecipientNotFound 接收方不存在、已禁用或已删除（handler 映射 404）。
+	ErrRecipientNotFound = errors.New("recipient not found")
+	// ErrRecipientUnavailable 接收方不接收私信（AI 机器人账号，handler 映射 403）。
+	ErrRecipientUnavailable = errors.New("recipient cannot receive messages")
+	// ErrEmptyContent 正文为空或只有空白（handler 映射 400）。
+	ErrEmptyContent = errors.New("message content is empty")
+	// ErrContentTooLong 正文超过字符上限（handler 映射 400）。
+	ErrContentTooLong = errors.New("message content is too long")
+	// ErrConversationNotFound 会话不存在，或当前用户不是会话成员（handler 映射 404，不区分两者，避免探测会话是否存在）。
+	ErrConversationNotFound = errors.New("conversation not found")
+	// ErrInvalidCursor 列表游标无法解析，或不属于本次请求的列表（handler 映射 400）。
+	ErrInvalidCursor = errors.New("invalid cursor")
+)
+
+// ConversationEntry 会话列表里的一行：成员状态 + 最后一条消息（由一次 JOIN 查询得到，没有 N+1）。
+type ConversationEntry struct {
+	ConversationID uuid.UUID
+	Type           int16
+	// PeerID 单聊对方；群聊为 uuid.Nil。
+	PeerID      uuid.UUID
+	UnreadCount int
+	// LastMessageID 最后一条消息 ID，也是会话列表的 keyset 键。
+	LastMessageID uuid.UUID
+	LastSenderID  uuid.UUID
+	LastMsgType   int16
+	// LastContent 最后一条消息正文的前若干个字符（摘要，长度由调用方指定）。
+	LastContent     string
+	LastMessageTime time.Time
+}
+
+// Repository 私信的写入与读取。
+//
+// 写操作（Send / MarkRead / Hide）各自在一个语句或一个事务内完成，成员行的未读数、最新消息、
+// 已读位置、隐藏截止位置始终一起变化，不存在中间状态。
+type Repository interface {
+	// SendDirect 在一个事务内发送一条单聊消息：
+	// 取得或创建 (senderID, receiverID) 的会话（并发首发只建一个，并锁住会话行串行化同一会话的发送）
+	// → 在锁内生成消息 ID 并写入消息 → 更新双方成员行（不存在则建行）：
+	// 双方 last_message_id 前移；发送方 sent_count+1、记录首次发送时间；接收方 unread_count+1。
+	// 不校验用户状态（仓储不读 users 表），content 由调用方校验与清洗。返回写入的消息（含会话 ID）。
+	SendDirect(ctx context.Context, senderID, receiverID uuid.UUID, msgType int16, content string) (*Message, error)
+	// GetMember 返回 userID 在会话里的成员行；不是成员（或会话不存在）返回 ErrConversationNotFound。
+	GetMember(ctx context.Context, conversationID, userID uuid.UUID) (*ConversationMember, error)
+	// ListConversations 按最后一条消息倒序返回 userID 可见的会话（有消息、且最后一条在隐藏截止位置之后），最多 limit 条。
+	// afterMessageID 为 nil 表示从头开始，否则只返回最后一条消息 ID 小于它的会话（keyset）。
+	// previewChars 是 LastContent 截取的字符数。
+	ListConversations(ctx context.Context, userID uuid.UUID, afterMessageID *uuid.UUID, limit, previewChars int) ([]ConversationEntry, error)
+	// ListMessages 按 ID 倒序（新 → 旧）返回会话里的消息，最多 limit 条。
+	// clearedMessageID 非 nil 时只返回 ID 大于它的消息（隐藏截止位置之后）；
+	// beforeMessageID 非 nil 时只返回 ID 小于它的消息（向上翻页的 keyset）。不校验成员身份，由调用方先 GetMember。
+	ListMessages(ctx context.Context, conversationID uuid.UUID, clearedMessageID, beforeMessageID *uuid.UUID, limit int) ([]Message, error)
+	// MarkRead 把 userID 在会话里的未读清零，最后已读位置前移到当前最新消息。
+	// 不是成员返回 ErrConversationNotFound。
+	MarkRead(ctx context.Context, conversationID, userID uuid.UUID) error
+	// Hide 删除会话（只对 userID 自己）：隐藏截止位置与已读位置都置为当前最新消息，未读清零。
+	// 之后对方再发消息，会话重新出现在 userID 的列表里，只显示截止位置之后的消息。
+	// 不是成员返回 ErrConversationNotFound。
+	Hide(ctx context.Context, conversationID, userID uuid.UUID) error
+}
