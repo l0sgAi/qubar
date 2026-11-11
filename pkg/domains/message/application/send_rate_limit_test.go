@@ -205,3 +205,24 @@ func equalReleases(got, want [][2]bool) bool {
 	}
 	return true
 }
+
+// 被频率限制拒绝的发送不改未读缓存、不推送（#241 钩子只在 SendDirect 成功后）。
+func TestSend_RateLimitedDoesNotNotify(t *testing.T) {
+	me, other := sharedomain.NewID(), sharedomain.NewID()
+	for _, d := range []domain.SendRateDecision{
+		{Exceeded: domain.SendRatePerMinute},
+		{Exceeded: domain.SendRateOK, NewConversationReserved: false},
+	} {
+		repo := &fakeRepo{directErr: domain.ErrConversationNotFound}
+		svc := newRateLimitedService(repo, &fakeRateLimiter{decision: d})
+		cache, n := newFakeCache(), &fakeNotifier{}
+		svc.SetUnreadCache(cache)
+		svc.SetUnreadNotifier(n)
+		if _, err := svc.Send(t.Context(), me, other, "hi"); err == nil {
+			t.Fatalf("decision %+v: send succeeded, want 429", d)
+		}
+		if len(cache.incrs) != 0 || len(n.changed) != 0 || len(n.msgTo) != 0 {
+			t.Errorf("decision %+v: incrs %v / changed %v / pushed %v, want none", d, cache.incrs, n.changed, n.msgTo)
+		}
+	}
+}
