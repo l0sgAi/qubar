@@ -28,6 +28,12 @@ type fakeRepo struct {
 	gotBefore   *uuid.UUID
 	markReadErr error
 	hideErr     error
+	writeCalls  int
+	direct      *domain.ConversationEntry
+	directErr   error
+	directCalls int
+	gotPeer     uuid.UUID
+	gotPreview  int
 }
 
 func (f *fakeRepo) SendDirect(_ context.Context, sender, _ uuid.UUID, msgType int16, content string) (*domain.Message, error) {
@@ -59,8 +65,21 @@ func (f *fakeRepo) ListMessages(_ context.Context, _ uuid.UUID, cleared, before 
 	return f.msgs, nil
 }
 
-func (f *fakeRepo) MarkRead(context.Context, uuid.UUID, uuid.UUID) error { return f.markReadErr }
-func (f *fakeRepo) Hide(context.Context, uuid.UUID, uuid.UUID) error     { return f.hideErr }
+func (f *fakeRepo) GetDirectConversation(_ context.Context, _, peer uuid.UUID, preview int) (*domain.ConversationEntry, error) {
+	f.directCalls++
+	f.gotPeer, f.gotPreview = peer, preview
+	return f.direct, f.directErr
+}
+
+func (f *fakeRepo) MarkRead(context.Context, uuid.UUID, uuid.UUID) error {
+	f.writeCalls++
+	return f.markReadErr
+}
+
+func (f *fakeRepo) Hide(context.Context, uuid.UUID, uuid.UUID) error {
+	f.writeCalls++
+	return f.hideErr
+}
 
 type fakeRecipients struct {
 	status RecipientStatus
@@ -74,9 +93,11 @@ func (f fakeRecipients) CheckRecipient(context.Context, uuid.UUID) (RecipientSta
 type fakeUsers struct {
 	briefs map[uuid.UUID]UserBrief
 	gotIDs []uuid.UUID
+	calls  int
 }
 
 func (f *fakeUsers) GetBriefs(_ context.Context, ids []uuid.UUID) (map[uuid.UUID]UserBrief, error) {
+	f.calls++
 	f.gotIDs = ids
 	return f.briefs, nil
 }
@@ -216,6 +237,80 @@ func TestListMessages_MembershipClearedAndCursor(t *testing.T) {
 	// 其他会话的游标无效。
 	if _, err := svc.ListMessages(t.Context(), me, sharedomain.NewID(), vo.NextCursor, 2); !errors.Is(err, domain.ErrInvalidCursor) {
 		t.Errorf("foreign cursor err = %v", err)
+	}
+}
+
+func TestGetConversationWithUser(t *testing.T) {
+	me, peer := sharedomain.NewID(), sharedomain.NewID()
+	conv, last := sharedomain.NewID(), sharedomain.NewID()
+	visible := domain.ConversationEntry{
+		ConversationID: conv, Type: domain.ConversationTypeDirect, PeerID: peer, UnreadCount: 3,
+		LastMessageID: last, LastSenderID: peer, LastMsgType: domain.MessageTypeText, LastContent: "hello", LastMessageTime: time.Now(),
+	}
+	// 我删除过会话、之后没有新消息：仓储不返回最后一条消息，未读已在删除时清零。
+	hidden := domain.ConversationEntry{ConversationID: conv, Type: domain.ConversationTypeDirect, PeerID: peer}
+	alice := map[uuid.UUID]UserBrief{peer: {ID: peer.String(), Username: "alice"}}
+	boom := errors.New("boom")
+
+	for _, tc := range []struct {
+		name      string
+		peer      uuid.UUID
+		repo      *fakeRepo
+		briefs    map[uuid.UUID]UserBrief
+		wantErr   error
+		wantConv  bool
+		wantLast  bool
+		wantPeer  bool
+		wantRepo  int
+		wantUsers int
+	}{
+		{name: "has conversation", peer: peer, repo: &fakeRepo{direct: &visible}, briefs: alice,
+			wantConv: true, wantLast: true, wantPeer: true, wantRepo: 1, wantUsers: 1},
+		{name: "no conversation", peer: peer, repo: &fakeRepo{directErr: domain.ErrConversationNotFound}, briefs: alice,
+			wantRepo: 1},
+		{name: "self", peer: me, repo: &fakeRepo{direct: &visible}, wantErr: domain.ErrConversationWithSelf},
+		{name: "hidden", peer: peer, repo: &fakeRepo{direct: &hidden}, briefs: alice,
+			wantConv: true, wantPeer: true, wantRepo: 1, wantUsers: 1},
+		{name: "peer gone", peer: peer, repo: &fakeRepo{direct: &visible},
+			wantConv: true, wantLast: true, wantRepo: 1, wantUsers: 1},
+		{name: "repo error", peer: peer, repo: &fakeRepo{directErr: boom}, wantErr: boom, wantRepo: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			users := &fakeUsers{briefs: tc.briefs}
+			vo, err := NewMessageService(tc.repo, fakeRecipients{}, users).GetConversationWithUser(t.Context(), me, tc.peer)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("err = %v, want %v", err, tc.wantErr)
+			}
+			if tc.repo.directCalls != tc.wantRepo || users.calls != tc.wantUsers || tc.repo.writeCalls != 0 {
+				t.Errorf("repo calls=%d users calls=%d writes=%d, want %d / %d / 0",
+					tc.repo.directCalls, users.calls, tc.repo.writeCalls, tc.wantRepo, tc.wantUsers)
+			}
+			if tc.wantRepo > 0 && (tc.repo.gotPeer != tc.peer || tc.repo.gotPreview != PreviewChars) {
+				t.Errorf("repo got peer=%s preview=%d", tc.repo.gotPeer, tc.repo.gotPreview)
+			}
+			if tc.wantErr != nil {
+				return
+			}
+			item := vo.Conversation
+			if (item != nil) != tc.wantConv {
+				t.Fatalf("conversation = %+v, want present=%v", item, tc.wantConv)
+			}
+			if item == nil {
+				return
+			}
+			if item.ConversationID != conv.String() || item.PeerID != peer.String() || item.Type != domain.ConversationTypeDirect {
+				t.Errorf("item = %+v", item)
+			}
+			if (item.Peer != nil) != tc.wantPeer || (item.LastMessage != nil) != tc.wantLast {
+				t.Errorf("peer = %+v last = %+v, want peer=%v last=%v", item.Peer, item.LastMessage, tc.wantPeer, tc.wantLast)
+			}
+			if tc.wantLast && (item.LastMessage.ID != last.String() || item.LastMessage.Content != "hello" || item.UnreadCount != 3) {
+				t.Errorf("last = %+v unread = %d", item.LastMessage, item.UnreadCount)
+			}
+			if !tc.wantLast && item.UnreadCount != 0 {
+				t.Errorf("hidden unread = %d, want 0", item.UnreadCount)
+			}
+		})
 	}
 }
 

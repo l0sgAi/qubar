@@ -1,9 +1,9 @@
 # 私信 API 对接文档（前端）
 
 > **功能**：一对一文本私信：发送、会话列表、消息历史、标记已读、删除会话。
-> **对应实现**：`pkg/domains/message/`（`application/send.go`、`conversation.go`、`history.go`，`interfaces/http/handler.go`），issue #238。
+> **对应实现**：`pkg/domains/message/`（`application/send.go`、`conversation.go`、`history.go`，`interfaces/http/handler.go`），issue #238；按对方查会话 #246。
 > 设计见 [message-design.md](../message-design.md)。
-> **状态**：已交付私信核心（#238）。未关注发送限制（#239）、私信权限设置（#240）、未读总数与实时推送（#241）、频率限制（#242）后续提供。
+> **状态**：已交付私信核心（#238）、按对方用户 ID 查会话（#246）。未关注发送限制（#239）、私信权限设置（#240）、未读总数与实时推送（#241）、频率限制（#242）后续提供。
 
 ---
 
@@ -11,12 +11,14 @@
 
 1. **发私信**：`POST /message/send`，带 `receiver_id` 和 `content`。第一次给某人发消息时自动建会话，响应里有 `conversation_id`。
 2. **私信列表页**：`GET /message/conversations`，游标分页，按最后一条消息时间倒序；每项带对方信息、最后一条消息摘要、我的未读数。
-3. **聊天页**：`GET /message/conversations/:conversation_id/messages`，第一页是最新的消息，`next_cursor` 往更旧的消息翻（上滑加载）。
+3. **从用户主页进私信**：`GET /message/conversations/with/:user_id` 拿 `conversation_id`；`conversation` 为 `null` 表示还没聊过，
+   聊天页显示空白，用户发出第一条消息后从 `POST /message/send` 的响应里拿 `conversation_id`。
+4. **聊天页**：`GET /message/conversations/:conversation_id/messages`，第一页是最新的消息，`next_cursor` 往更旧的消息翻（上滑加载）。
    **返回顺序是新 → 旧**，渲染时请反转。
-4. **进入聊天页 / 收到新消息时**：调 `POST /message/conversations/:conversation_id/read` 清零未读。
-5. **删除会话**：`DELETE /message/conversations/:conversation_id`，只对自己隐藏。对方再发消息时会话会重新出现，只能看到删除之后的消息。
-6. AI 机器人账号不能收私信（403），机器人主页不要显示「私信」按钮。
-7. 当前没有实时推送：新消息需要前端轮询会话列表或进入页面时刷新（#241 会提供）。
+5. **进入聊天页 / 收到新消息时**：调 `POST /message/conversations/:conversation_id/read` 清零未读。
+6. **删除会话**：`DELETE /message/conversations/:conversation_id`，只对自己隐藏。对方再发消息时会话会重新出现，只能看到删除之后的消息。
+7. AI 机器人账号不能收私信（403），机器人主页不要显示「私信」按钮。
+8. 当前没有实时推送：新消息需要前端轮询会话列表或进入页面时刷新（#241 会提供）。
 
 ---
 
@@ -141,6 +143,66 @@
 翻页过程中某个会话来了新消息，它会被顶到第一页，本轮往后翻不会再出现；下拉刷新即可看到。
 
 **错误**：400 `Invalid cursor`、401。
+
+### 2.2.1 GET /message/conversations/with/:user_id — 按对方用户 ID 查会话
+
+从用户主页点「私信」时用：返回我与该用户的单聊会话。**只读**，不会创建会话，也不会清未读或取消删除。
+
+**路径参数**：`user_id` 对方用户 ID。
+
+**响应 `data`**
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `conversation` | object \| null | 与 §2.2 会话列表项**字段完全相同**；两人还没有会话时为 `null` |
+
+```json
+{
+  "code": 200,
+  "message": "Success",
+  "data": {
+    "conversation": {
+      "conversation_id": "019a7b10-2c3a-7d11-9e22-3f4a5b6c7d8e",
+      "type": 1,
+      "peer_id": "019a5d2e-7c41-7b0e-9f3a-2f6c1d8e4b10",
+      "peer": { "id": "019a5d2e-7c41-7b0e-9f3a-2f6c1d8e4b10", "username": "alice", "avatar_url": "https://..." },
+      "last_message": {
+        "id": "019a7b10-2c3d-7e4f-8a9b-0c1d2e3f4a5b",
+        "sender_id": "019a5d2e-7c41-7b0e-9f3a-2f6c1d8e4b10",
+        "msg_type": 1,
+        "content": "你好",
+        "create_time": "2026-11-11T14:30:00.123456+08:00"
+      },
+      "unread_count": 1
+    }
+  }
+}
+```
+
+没有会话：
+
+```json
+{ "code": 200, "message": "Success", "data": { "conversation": null } }
+```
+
+几种情况：
+
+| 情况 | 返回 |
+|---|---|
+| 还没有会话 | `conversation: null`。进入空白聊天页，发第一条消息后用 `POST /message/send` 响应里的 `conversation_id` |
+| 我删除过这个会话，之后没有新消息 | 返回会话，`conversation_id` 可用，但 **`last_message` 为 `null`**、`unread_count` 为 `0`；用它拉历史只能看到删除之后的消息（此时为空）。这个会话在会话列表里仍然看不到，发消息后会重新出现 |
+| 对方已被禁用 / 删除，但以前聊过 | 返回会话，`peer` 为 `null`（同会话列表）；不能再发消息 |
+| 对方不存在 / 是 AI 机器人，且没有会话 | `conversation: null`（本接口不校验对方状态；能否发送以 `POST /message/send` 的结果为准） |
+
+注意：会话列表（§2.2）里的 `last_message` 一定不为 `null`；只有本接口在「删除后没有新消息」时为 `null`。
+
+**错误**
+
+| HTTP | message | 场景 |
+|---|---|---|
+| 400 | `Invalid user id` | `:user_id` 不是合法 UUID |
+| 400 | `Cannot have a conversation with yourself` | `user_id` 是自己 |
+| 401 | `Token not found` | 未登录 |
 
 ### 2.3 GET /message/conversations/:conversation_id/messages — 消息历史
 
