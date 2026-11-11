@@ -26,7 +26,8 @@ type Post struct {
 	CommentCount  int            `json:"comment_count" gorm:"column:comment_count;default:0"`
 	LikeCount     int            `json:"like_count" gorm:"column:like_count;default:0"`
 	CollectCount  int            `json:"collect_count" gorm:"column:collect_count;default:0"`
-	Hot           int            `json:"hot" gorm:"column:hot;default:0"` // 热度分（互动事件加权累积，CDC 同步 ES 排序）
+	ShareCount    int            `json:"share_count" gorm:"column:share_count;default:0"` // 分享数（帖子统计消费者按 post_share 重算落库，读路径以 Redis post:sharecnt 为准，#232/#233）
+	Hot           int            `json:"hot" gorm:"column:hot;default:0"`                 // 热度分（互动事件加权累积，CDC 同步 ES 排序）
 	IsPinned      int16          `json:"is_pinned" gorm:"column:is_pinned;type:smallint;default:0"`
 	IsEssence     int16          `json:"is_essence" gorm:"column:is_essence;type:smallint;default:0"`
 	IsLock        int16          `json:"is_lock" gorm:"column:is_lock;type:smallint;default:0"`

@@ -54,13 +54,15 @@ type UserFacade interface {
 	SearchBriefs(ctx context.Context, keyword string, limit int) ([]UserBrief, int64, error)
 }
 
-// PostMediaFetcher 帖子媒体批量查询接口（由 composition 注入 post 领域实现）。
+// PostMediaFetcher 帖子媒体 / 分享数批量查询接口（由 composition 注入 post 领域实现）。
 //
-// circle 领域的 GetCirclePosts 需要批量查询帖子图片列表，
+// circle 领域的 GetCirclePosts 需要批量查询帖子图片列表与分享数，
 // 但帖子实体属于 post 领域。通过此接口解耦。
 type PostMediaFetcher interface {
 	// GetMediaByPostIDs 批量获取帖子的图片 URL 列表。
 	GetMediaByPostIDs(ctx context.Context, postIDs []string) (map[string][]string, error)
+	// BatchGetShareCounts 批量取帖子分享数（口径同帖子详情 / 其他列表，#233）；best-effort，取不到的按 0。
+	BatchGetShareCounts(ctx context.Context, postIDs []uuid.UUID) map[uuid.UUID]int
 }
 
 // ===== 搜索结果 DTO =====
@@ -149,6 +151,7 @@ type CirclePostListItem struct {
 	CommentCount int       `json:"comment_count"`
 	LikeCount    int       `json:"like_count"`
 	CollectCount int       `json:"collect_count"`
+	ShareCount   int       `json:"share_count"` // 分享数（经 post 域读 Redis post:sharecnt，口径同帖子详情，#233）
 	IsPinned     int16     `json:"is_pinned"`
 	IsEssence    int16     `json:"is_essence"`
 	IsLock       int16     `json:"is_lock"`
@@ -1107,6 +1110,12 @@ func (s *circleServiceImpl) GetCirclePosts(ctx context.Context, viewerID, circle
 		}
 	}
 
+	// 批量查询帖子分享数（ES 文档不含 share_count，#233）
+	var shareCounts map[uuid.UUID]int
+	if s.postFetcher != nil && len(postIDs) > 0 {
+		shareCounts = s.postFetcher.BatchGetShareCounts(ctx, postIDs)
+	}
+
 	// 组装帖子列表
 	posts := make([]CirclePostListItem, 0, len(result.Posts))
 	for _, doc := range result.Posts {
@@ -1131,7 +1140,7 @@ func (s *circleServiceImpl) GetCirclePosts(ctx context.Context, viewerID, circle
 			ID: postID, CircleID: cid, UserID: uid, Type: doc.Type,
 			Title: doc.Title, Summary: doc.Summary, Content: doc.Content,
 			ViewCount: doc.ViewCount, CommentCount: doc.CommentCount,
-			LikeCount: doc.LikeCount, CollectCount: doc.CollectCount,
+			LikeCount: doc.LikeCount, CollectCount: doc.CollectCount, ShareCount: shareCounts[postID],
 			IsPinned: doc.IsPinned, IsEssence: doc.IsEssence, IsLock: doc.IsLock,
 			Status: doc.Status, CreateTime: createTime,
 			AuthorName: authorName, AuthorAvatar: authorAvatar,

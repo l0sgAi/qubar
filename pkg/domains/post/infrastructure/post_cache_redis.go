@@ -122,6 +122,22 @@ func (c *postCollectCacheRedis) LoadAll(ctx context.Context, userID uuid.UUID, e
 	return redispkg.LoadPostCollects(ctx, userID, toRedisEntries(entries), complete)
 }
 
+// postShareCountCacheRedis 基于 Redis String 的 PostShareCountCache 实现（读 + 冷 key 回种，#233）。
+type postShareCountCacheRedis struct{}
+
+// NewPostShareCountCache 构造 PostShareCountCache。
+func NewPostShareCountCache() domain.PostShareCountCache {
+	return &postShareCountCacheRedis{}
+}
+
+func (c *postShareCountCacheRedis) BatchGet(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]int64, error) {
+	return redispkg.GetPostShareCounts(ctx, postIDs)
+}
+
+func (c *postShareCountCacheRedis) SeedIfAbsent(ctx context.Context, counts map[uuid.UUID]int64) error {
+	return redispkg.SeedPostShareCounts(ctx, counts)
+}
+
 func toInteractionCheck(r redispkg.InteractionCheck) domain.InteractionCheck {
 	return domain.InteractionCheck{Hits: r.Hits, Missed: r.Missed, Loadable: r.State == redispkg.InteractionUnloaded}
 }

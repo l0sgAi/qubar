@@ -81,7 +81,7 @@ satoken: <登录成功后返回的 token 字符串>
 | 接口 | 方法 | 匿名时降级的字段 | 登录时的额外副作用 |
 |---|---|---|---|
 | `/circle/detail/:id` | GET | `is_joined`、`member_role`、`member_status` 等成员字段 → `false`/零值 | — |
-| `/post/detail/:id` | GET | `is_liked`、`is_collected` → `false` | 登录用户会记录浏览历史、增加浏览量 |
+| `/post/detail/:id` | GET | `is_liked`、`is_collected`、`is_shared` → `false` | 登录用户会记录浏览历史、增加浏览量 |
 | `/comment/list` | GET | 每条评论的 `is_liked` → `false` | — |
 | `/comment/replies` | GET | 每条回复的 `is_liked` → `false` | — |
 | `/comment/detail/:id` | GET | `is_liked` → `false` | — |
@@ -309,6 +309,7 @@ satoken: eyJhbGciOi...
 |---|---|---|---|---|
 | `/post/detail/:id` | `is_liked` | 真实状态 | `false` | |
 | `/post/detail/:id` | `is_collected` | 真实状态 | `false` | |
+| `/post/detail/:id` | `is_shared` | 真实状态 | `false` | #233 |
 | `/post/detail/:id` | view_count 计数 | 会 +1 | 不变 | 后端跳过异步计数 |
 | `/post/detail/:id` | 浏览历史 | 会记录 | 不记录 | |
 | `/circle/detail/:id` | `is_joined` | 真实状态 | `false` | |

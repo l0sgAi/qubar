@@ -83,6 +83,7 @@ GET /post/home
 | `comment_count` | int | 评论数（实时） |
 | `like_count` | int | 点赞数（实时） |
 | `collect_count` | int | 收藏数（实时） |
+| `share_count` | int | 分享数（实时，去重后的分享人数；口径同帖子详情，见 [post-share-api.md](post-share-api.md) 第 4 节） |
 | `is_pinned` | int | 是否置顶：0/1 |
 | `is_essence` | int | 是否加精：0/1 |
 | `is_lock` | int | 是否锁定（禁评）：0/1 |
@@ -95,6 +96,7 @@ GET /post/home
 | `images` | string[] | 帖子图片 URL 列表 |
 | `is_liked` | bool | **当前用户是否已点赞** |
 | `is_collected` | bool | **当前用户是否已收藏** |
+| `is_shared` | bool | **当前用户是否分享过**（访客恒为 `false`） |
 
 ---
 
@@ -163,6 +165,7 @@ satoken: <token>
         "comment_count": 56,
         "like_count": 210,
         "collect_count": 33,
+        "share_count": 4,
         "is_pinned": 0,
         "is_essence": 1,
         "is_lock": 0,
@@ -174,7 +177,8 @@ satoken: <token>
         "circle_avatar": "https://cdn/.../c1.jpg",
         "images": ["https://cdn/.../img1.jpg"],
         "is_liked": true,
-        "is_collected": false
+        "is_collected": false,
+        "is_shared": false
       }
     ],
     "pool_token": "9f3a1c2b-...",

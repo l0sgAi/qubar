@@ -106,9 +106,9 @@ type PostHydrator interface {
 	Hydrate(ctx context.Context, viewerID uuid.UUID, postIDs []uuid.UUID) ([]recommenddomain.FeedPostItem, error)
 }
 
-// InteractionChecker 批量回填 is_liked/is_collected（基于 user:like/collect ZSET）。
+// InteractionChecker 批量回填 is_liked/is_collected（基于 user:like/collect ZSET）与 is_shared（查 post_share）。
 type InteractionChecker interface {
-	BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (liked, collected map[uuid.UUID]bool, err error)
+	BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (liked, collected, shared map[uuid.UUID]bool, err error)
 }
 
 // CircleLookup 批量取圈子实体（桥接 circle.domain.CircleRepository.GetByIDs）。

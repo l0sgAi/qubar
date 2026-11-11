@@ -313,3 +313,53 @@ func (r *postRepoPG) GetCircleIDsByIDs(ctx context.Context, postIDs []uuid.UUID)
 	}
 	return out, nil
 }
+
+// GetShareCounts 批量取 帖子ID → share_count（主键 IN，一次查询，#233 分享数缓存 miss 回源）。
+// 不过滤删除 / 状态：调用方只对已经通过可见性过滤的帖子取计数。
+func (r *postRepoPG) GetShareCounts(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]int64, error) {
+	out := make(map[uuid.UUID]int64, len(postIDs))
+	if len(postIDs) == 0 {
+		return out, nil
+	}
+	var rows []struct {
+		ID         uuid.UUID
+		ShareCount int64
+	}
+	if err := r.db.WithContext(ctx).Model(&domain.Post{}).Select("id, share_count").
+		Where("id IN ?", postIDs).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		out[row.ID] = row.ShareCount
+	}
+	return out, nil
+}
+
+// IsShared 用户是否分享过该帖（走 uk_post_share_user_post 唯一索引）。
+// post_share 表属 share 领域，按表名查询，避免跨领域 import 实体；分享不可撤销，没有 deleted 列。
+func (r *postRepoPG) IsShared(ctx context.Context, userID, postID uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Table("domains.post_share").
+		Where("user_id = ? AND post_id = ?", userID, postID).
+		Count(&count).Error
+	return count > 0, err
+}
+
+// BatchIsShared 批量查用户分享过哪些帖子（走 uk_post_share_user_post 唯一索引）。
+func (r *postRepoPG) BatchIsShared(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
+	result := make(map[uuid.UUID]bool)
+	if len(postIDs) == 0 {
+		return result, nil
+	}
+	var ids []uuid.UUID
+	err := r.db.WithContext(ctx).Table("domains.post_share").
+		Where("user_id = ? AND post_id IN ?", userID, postIDs).
+		Pluck("post_id", &ids).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range ids {
+		result[id] = true
+	}
+	return result, nil
+}

@@ -1,4 +1,4 @@
-// Package composition 的 feed_interaction_bridge.go：recommend / trending / discover 共用的交互态桥接器（post → 信息流 is_liked / is_collected）。
+// Package composition 的 feed_interaction_bridge.go：recommend / trending / discover 共用的交互态桥接器（post → 信息流 is_liked / is_collected / is_shared）。
 package composition
 
 import (
@@ -18,6 +18,11 @@ type postInteractionChecker struct {
 	delegate postapp.PostService
 }
 
-func (c *postInteractionChecker) BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (liked, collected map[uuid.UUID]bool, err error) {
-	return c.delegate.BatchCheckInteractions(ctx, userID, postIDs)
+// is_shared（#233）没有用户维度缓存，直接查 post_share 唯一索引（一次批量查询，best-effort）。
+func (c *postInteractionChecker) BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (liked, collected, shared map[uuid.UUID]bool, err error) {
+	liked, collected, err = c.delegate.BatchCheckInteractions(ctx, userID, postIDs)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return liked, collected, c.delegate.BatchCheckShared(ctx, userID, postIDs), nil
 }

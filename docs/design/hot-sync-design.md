@@ -188,7 +188,7 @@ hot:
 |---|---|
 | 分享去重模型 | ~~per-user ZSET~~ → **PG `post_share` 唯一索引**（#232，维护者 2026-11-11 确认） |
 | 分享热度同步 | ~~延后~~ → #232 实现：首次分享 `ApplyHotDelta(post_share, +1)` + `PublishPostHot`，与点赞 / 收藏同一写法 |
-| 分享数 | `post.share_count` 只在 PG + Redis 读路径，**不进 ES**（不登记 `es_sinks`）；列表 / 详情展示留给 #233 |
+| 分享数 | `post.share_count` 只在 PG + Redis 读路径，**不进 ES**（不登记 `es_sinks`）；列表 / 详情展示 #233 已实现：都读 Redis `post:sharecnt`（列表一页一次 `MGET`），miss 回源 PG `post.share_count` 并 `SET NX` 回种 |
 | post_hot topic | **独立 topic**（`post_hot`），独立 producer/aggregator/consumer，13min/500 条节奏 |
 | hot_decay 衰减排序 | **延后 P5**。先用原始公式 `hot/(age+2)^0.8`（ES 已实现） |
 | 帖子→ES 同步 | **CDC 链路自动同步**（已搭建）。Go 只更新 PG `domains.post.hot`，无需写 ES |
