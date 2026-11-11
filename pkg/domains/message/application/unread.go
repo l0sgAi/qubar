@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// UnreadService 私信未读总数与实时推送（#241，设计见 docs/message-design.md 第十节）。
+// UnreadService 私信未读总数与实时推送（#241，设计见 docs/message-design.md 第十一节）。
 type UnreadService interface {
 	// GetUnreadTotal 返回 userID 的私信未读总数（各会话我的未读之和）。Redis 缓存优先，miss 回源 DB 并回填。
 	// 也是 SSE dm-unread 通道的计数读取器（推送值与本接口同源）。

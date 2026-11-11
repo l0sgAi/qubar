@@ -47,8 +47,8 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	noticeSvc := newNoticeService(deps)
 	// follow 只读依赖 user（目标用户校验、列表项简要信息、列表隐私开关），构造时直接注入。
 	followSvc := newFollowService(deps, userFacade, userSettingSvc)
-	// message（私信）只读依赖 user（接收方状态校验、会话列表对方简要信息），构造时直接注入。
-	messageSvc := newMessageService(deps, userSvc, userFacade)
+	// message（私信）只读依赖 user（接收方状态校验、会话列表对方简要信息）与 follow（未关注发送限制），构造时直接注入。
+	messageSvc := newMessageService(deps, userSvc, userFacade, followSvc)
 
 	// 互注跨领域 Facade
 	// circle 需要 user Facade + post 媒体查询器

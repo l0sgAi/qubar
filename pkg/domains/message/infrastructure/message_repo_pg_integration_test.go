@@ -43,6 +43,11 @@ func (echoUsers) GetBriefs(_ context.Context, ids []uuid.UUID) (map[uuid.UUID]ap
 	return out, nil
 }
 
+// followAll 任何人都关注了任何人：#238 的用例不受未关注发送限制影响（限制本身见 send_limit_integration_test.go）。
+type followAll struct{}
+
+func (followAll) IsFollowing(context.Context, uuid.UUID, uuid.UUID) (bool, error) { return true, nil }
+
 type msgEnv struct {
 	db   *gorm.DB
 	repo domain.Repository
@@ -53,7 +58,7 @@ func newMsgEnv(t *testing.T) *msgEnv {
 	t.Helper()
 	db := testkit.PG(t)
 	repo := infrastructure.NewRepository(db)
-	return &msgEnv{db: db, repo: repo, svc: application.NewMessageService(repo, okRecipients{}, echoUsers{})}
+	return &msgEnv{db: db, repo: repo, svc: application.NewMessageService(repo, okRecipients{}, echoUsers{}, followAll{})}
 }
 
 // newUsers 生成 n 个随机用户 ID，并注册清理它们的会话、成员行与消息。
@@ -78,7 +83,7 @@ func (e *msgEnv) send(t *testing.T, from, to uuid.UUID, content string) *applica
 	if err != nil {
 		t.Fatalf("send %s -> %s: %v", from, to, err)
 	}
-	return vo
+	return &vo.MessageVO
 }
 
 func (e *msgEnv) member(t *testing.T, conv string, user uuid.UUID) *domain.ConversationMember {

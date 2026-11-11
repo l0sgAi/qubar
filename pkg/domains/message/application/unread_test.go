@@ -97,7 +97,7 @@ func (n *fakeNotifier) NewMessage(to uuid.UUID, ev NewMessageEvent) {
 func TestGetUnreadTotal_CacheFirstThenDB(t *testing.T) {
 	me := sharedomain.NewID()
 	repo := &unreadRepo{sum: 5}
-	svc := NewMessageService(repo, fakeRecipients{}, &fakeUsers{})
+	svc := NewMessageService(repo, fakeRecipients{}, &fakeUsers{}, fakeFollows{})
 
 	// 未注入缓存：直接查 DB。
 	if got, err := svc.GetUnreadTotal(t.Context(), me); err != nil || got != 5 || repo.sumCalls != 1 {
@@ -133,7 +133,7 @@ func TestSend_IncrsReceiverUnreadAndPushes(t *testing.T) {
 	me, peer := sharedomain.NewID(), sharedomain.NewID()
 	repo := &unreadRepo{}
 	users := &fakeUsers{briefs: map[uuid.UUID]UserBrief{me: {ID: me.String(), Username: "alice"}}}
-	svc := NewMessageService(repo, fakeRecipients{}, users)
+	svc := NewMessageService(repo, fakeRecipients{}, users, fakeFollows{})
 
 	// 未注入缓存 / 推送端口：发送照常成功。
 	if _, err := svc.Send(t.Context(), me, peer, "hi"); err != nil {
@@ -204,7 +204,7 @@ func TestMarkReadAndDelete_InvalidateAndPush(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			repo := &unreadRepo{}
-			svc := NewMessageService(repo, fakeRecipients{}, &fakeUsers{})
+			svc := NewMessageService(repo, fakeRecipients{}, &fakeUsers{}, fakeFollows{})
 			cache, n := newFakeCache(), &fakeNotifier{}
 			cache.vals[me] = 4
 			svc.SetUnreadCache(cache)

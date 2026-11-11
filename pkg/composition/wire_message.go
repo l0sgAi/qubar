@@ -2,6 +2,7 @@
 package composition
 
 import (
+	followapp "interestBar/pkg/domains/follow/application"
 	messageapp "interestBar/pkg/domains/message/application"
 	messageinfra "interestBar/pkg/domains/message/infrastructure"
 	messagehttp "interestBar/pkg/domains/message/interfaces/http"
@@ -12,12 +13,16 @@ import (
 
 // newMessageService 构造 MessageService。
 //
-// user 是只读跨域依赖（接收方状态校验、会话列表对方简要信息），构造时直接注入。
-func newMessageService(deps *Deps, userSvc userapp.UserService, userFacade userapp.UserFacade) messageapp.MessageService {
+// user 是只读跨域依赖（接收方状态校验、会话列表对方简要信息），follow 是只读跨域依赖（#239 未关注发送限制），
+// 都在构造时直接注入。私信未读缓存（#241）由 setter 注入；推送端口在 hub 构造后由 wireMessageStream 注入。
+func newMessageService(
+	deps *Deps, userSvc userapp.UserService, userFacade userapp.UserFacade, followSvc followapp.FollowService,
+) messageapp.MessageService {
 	svc := messageapp.NewMessageService(
 		messageinfra.NewRepository(deps.DB.Get()),
 		&messageRecipientChecker{delegate: userSvc},
 		&messageUserBriefReader{delegate: userFacade},
+		&messageFollowChecker{delegate: followSvc},
 	)
 	// 私信未读总数 Redis 缓存（#241）。
 	svc.SetUnreadCache(messageinfra.NewUnreadCache())

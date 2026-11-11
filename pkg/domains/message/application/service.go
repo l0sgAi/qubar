@@ -1,6 +1,6 @@
 // Package application 是 message（私信）领域的应用层：发送、会话列表、按对方查会话、消息历史、标记已读、删除会话。
 //
-// 文件按职责拆分：send.go（发送）、conversation.go（会话列表 / 按对方查会话 / 已读 / 删除）、history.go（消息历史）、
+// 文件按职责拆分：send.go（发送）、send_limit.go（未关注发送限制）、conversation.go（会话列表 / 按对方查会话 / 已读 / 删除）、history.go（消息历史）、
 // cursor.go（两种列表的 keyset 游标）、unread.go（未读总数与实时推送，#241）。MessageService 由各文件里的小接口组合而成。
 // 设计见 docs/message-design.md。
 package application
@@ -67,14 +67,16 @@ type messageServiceImpl struct {
 	repo       domain.Repository
 	recipients RecipientChecker
 	users      UserBriefReader
+	// follows 关注关系查询（#239 未关注发送限制，见 send_limit.go）。
+	follows FollowChecker
 	// unreadCache / notifier 由 setter 注入（#241，见 unread.go），nil 时只读 DB、不推送。
 	unreadCache domain.UnreadCache
 	notifier    UnreadNotifier
 }
 
 // NewMessageService 构造 MessageService。
-func NewMessageService(repo domain.Repository, recipients RecipientChecker, users UserBriefReader) MessageService {
-	return &messageServiceImpl{repo: repo, recipients: recipients, users: users}
+func NewMessageService(repo domain.Repository, recipients RecipientChecker, users UserBriefReader, follows FollowChecker) MessageService {
+	return &messageServiceImpl{repo: repo, recipients: recipients, users: users, follows: follows}
 }
 
 // normalizePageSize ≤0 取默认值，超过上限按上限。

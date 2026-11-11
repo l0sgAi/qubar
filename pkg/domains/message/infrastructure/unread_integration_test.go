@@ -121,7 +121,7 @@ func TestGetUnreadTotal_ConsistentWithDB(t *testing.T) {
 	t.Parallel()
 	e := newMsgEnv(t)
 	testkit.Redis(t)
-	svc := application.NewMessageService(e.repo, okRecipients{}, echoUsers{})
+	svc := application.NewMessageService(e.repo, okRecipients{}, echoUsers{}, followAll{})
 	svc.SetUnreadCache(infrastructure.NewUnreadCache())
 	u := e.newUsers(t, 3)
 	me, a, b := u[0], u[1], u[2]

@@ -1,8 +1,8 @@
 # 私信（message）设计：会话与消息核心
 
 > 目标：新增 `pkg/domains/message`，落地一对一私信的数据模型、发送、会话列表、消息历史、标记已读与删除会话（issue #238，总览 #30 的第 1 步）；
-> 补充按对方用户 ID 查会话（issue #246，见第九节）；私信未读总数与 SSE 实时推送（issue #241，见第十节）。
-> 后续步骤建在这一步之上：未关注发送限制（#239）、私信权限设置（#240）、未读总数与实时推送（#241）、频率限制与内容安全（#242）、群聊（#31）。
+> 补充按对方用户 ID 查会话（issue #246，见第九节）、未关注发送限制（issue #239，见第十节）、私信未读总数与 SSE 实时推送（issue #241，见第十一节）。
+> 后续步骤建在这一步之上：私信权限设置（#240）、频率限制与内容安全（#242）、群聊（#31）。
 >
 > 基线：此前没有用户间私信。表结构见 `migrations/20261111134129_add_private_message.up.sql`，字段说明见 [pgsql-ddl/message.md](pgsql-ddl/message.md)，
 > 前端对接见 [api/message-api.md](api/message-api.md)。
@@ -16,6 +16,7 @@
 | 消息类型 | 只有文本（`msg_type=1`）；图片 / 文件、撤回、引用回复、搜索、拉黑不在本期 |
 | 正文 | 1–2000 个字符（按 Unicode 字符计，与 PG `varchar` 计数一致；**issue 原文 1000，维护者 2026-11-11 决策改为 2000**）；入库前过 `utils.SanitizeForPg`，清洗后不能为空或只有空白；正文按原样保存，不去首尾空白 |
 | 接收方 | 状态正常的普通用户。不能发给自己；不存在 / 已禁用 / 已删除返回 404 |
+| 未关注发送限制（#239） | 对方**没关注我**、也**没在会话里发过消息**时，我在该会话累计最多发 5 条，第 6 条 403 `dm limit reached`；对方关注我立即解除，对方回复过一次永久解除。固定 5 条，不可配置。细则见第十节 |
 | AI 机器人账号 | **不能收私信**（维护者 2026-11-11 决策）：发给机器人账号（`users.role=2`，全局 / 圈内）按「不可发送」处理，返回 403 |
 | 会话 | 首次发送自动建会话；两人之间只有一个单聊会话（`(user_low, user_high)` 唯一），并发首发不会产生两个 |
 | 会话列表 | 对方简要信息、最后一条消息摘要（前 100 个字符）与时间、我的未读数；按最后消息时间倒序，keyset 游标分页 |
@@ -36,7 +37,8 @@ pkg/domains/message/
   domain/message.go                 实体 Conversation / ConversationMember / Message、类型常量、OrderPair
   domain/repository.go              端口 Repository、ConversationEntry、哨兵错误
   application/service.go            MessageService（由小接口组合）、RecipientChecker / UserBriefReader 端口、常量
-  application/send.go               SendService：Send（校验 + 清洗 + 接收方判定）
+  application/send.go               SendService：Send（校验 + 清洗 + 接收方判定 + 未关注发送限制）
+  application/send_limit.go         未关注发送限制（#239）：UnfollowedSendLimit、FollowChecker 端口、SendVO
   application/conversation.go       ConversationService：会话列表（对方信息回填）/ 按对方查会话（#246）/ 标记已读 / 删除会话；
                                     列表项组装 toConversationItemVO 两处共用
   application/history.go            HistoryService：消息历史
@@ -46,7 +48,7 @@ pkg/domains/message/
   interfaces/http/routes.go         路由（全部需登录）
 pkg/composition/
   wire_message.go                   构造 + 路由注册
-  message_bridges.go                user → message 桥接（接收方状态、对方简要信息）
+  message_bridges.go                user → message 桥接（接收方状态、对方简要信息）；follow → message 桥接（关注关系，#239）
 ```
 
 ## 三、数据模型
@@ -73,9 +75,12 @@ POST /message/send
     ├─ 自己？→ 400
     ├─ SanitizeForPg → 空 / 只有空白 → 400；> 2000 字符 → 400
     ├─ RecipientChecker（UserService.GetByID）→ 不存在/禁用/删除 404；role=2 → 403
-    └─ Repository.SendDirect（一个事务）
+    ├─ FollowChecker（FollowService.GetRelations）：对方关注了我 → limit=0（不限制），否则 limit=5（#239）
+    └─ Repository.SendDirect(limit)（一个事务）
          1. INSERT conversation … ON CONFLICT (user_low, user_high) DO UPDATE SET update_time … RETURNING id
             └─ 冲突时也返回已有 ID，并锁住会话行：同一会话的发送串行
+         1'. limit > 0：锁后读 我的 sent_count、对方成员行 first_sent_time
+             └─ 对方发过消息 → 不限制；sent_count ≥ limit → 403 dm limit reached（回滚）；否则剩余 = limit − sent_count − 1
          2. 在锁内生成消息 ID（NewID）→ INSERT message
          3. 发送方成员行 upsert：last_message_id 前移、sent_count+1、first_sent_time 首次写入
          4. 接收方成员行 upsert：last_message_id 前移、unread_count+1
@@ -128,23 +133,25 @@ DELETE /message/conversations/:id        UPDATE 成员行 SET cleared = last_rea
 | 发送方自己的未读 | 发送不改发送方的未读数 / 已读位置（不默认「回复即已读」），由客户端打开会话时调标记已读 |
 | 对方被禁用 / 删除 | 会话保留，`peer=null`；再发送 404 |
 | 机器人账号 | 403；已有会话不受影响（当前不可能产生） |
+| 未关注发送限制的并发（#239） | 判断与 `sent_count+1` 都在会话行锁内，同一会话的发送串行，并发发送不会突破 5 条；集成测试 `TestSendLimit_ConcurrentSendsNeverExceedLimit`、`TestMessageSendLimit_ConcurrentSendsNeverExceedLimit` 覆盖 |
 
 ## 七、给后续 issue 预留的位置
 
 | issue | 预留 |
 |---|---|
-| #239 未关注发送限制 | `conversation_member.sent_count`（本成员在该会话累计发送条数）、`first_sent_time`（本成员首次发送时间）。「对方首条消息时间」= **对方成员行**的 `first_sent_time`（NULL 表示对方还没回复过）。两行都在发送事务里更新，限制判断可以在同一事务内锁会话行后读取 |
+| #239 未关注发送限制 | **已实现**，见第十节 |
 | #240 私信权限设置 | 接收方判定集中在 `RecipientChecker`（`application/send.go`）；权限设置可在 `user_setting` 加列（该表注释已预告），桥接器里一并判定，或新增端口 |
-| #241 未读总数与实时推送 | **已实现，见第十节** |
+| #241 未读总数与实时推送 | **已实现，见第十一节** |
 | #242 频率限制与内容安全 | 发送入口只有 `MessageService.Send`；内容校验集中在 `normalizeContent` |
 | #31 群聊 | `conversation.type=2`、`user_low/high` 为 NULL；`conversation_member.peer_id` 为 NULL、`deleted` 表示退出群聊；成员行的已读 / 未读 / 隐藏机制直接复用 |
 
 ## 八、范围外 / 未做
 
-- 未关注发送限制、权限设置、频率限制与内容安全（#239、#240、#242）。未读总数与实时推送（#241）见第十节。
+- 权限设置、频率限制与内容安全（#240、#242）。未读总数与实时推送（#241）见第十一节。
 - 图片 / 文件消息、撤回、引用回复、消息搜索、拉黑、群聊（#31）。
 - 进入会话时自动创建空会话（会话仍只在首次发送时创建，#246 范围外）。
-- 「能否给对方发私信」的判定与置灰原因（`can_send`）：由 #239 / #240 各自负责，#246 的接口不返回。
+- 「能否给对方发私信」的判定与置灰原因（`can_send`）：#246 的接口不返回；#239 只在发送时判定（发送响应带 `remaining_count`，满额时 403），
+  进入会话前预先展示「还能发几条」不在 #239 范围内。
 
 ## 九、按对方用户 ID 查会话（#246）
 
@@ -167,19 +174,48 @@ DELETE /message/conversations/:id        UPDATE 成员行 SET cleared = last_rea
 - 查询：`conversation` 按 `(user_low, user_high)` 命中 `uk_conversation_pair`，成员行按 `uk_conversation_member`，最后一条消息按主键；不需要新索引或迁移。
 - 群聊（#31）不走本接口。
 
-## 十、私信未读总数与实时推送（#241）
+## 十、未关注发送限制（#239）
+
+> 防骚扰：对方没关注我、也没回复过我时，我在这个会话里最多发 5 条。维护者 2026-11-11 决策：**对方关注我，或对方在会话里回复过我**，都解除限制；
+> 回复过一次后永久解除；固定 5 条，不做成配置（`application.UnfollowedSendLimit`）。不需要迁移：用 #238 预留的成员行字段。
+
+| 场景 | 行为 |
+|---|---|
+| 对方没关注我，且对方从未在该会话发过消息 | 我在该会话累计最多 5 条；第 6 条 403 `dm limit reached`（`domain.ErrSendLimitReached`），不写消息、不改任何计数 |
+| 对方关注了我 | 立即解除（每次发送实时查关注关系，不缓存） |
+| 对方在会话里发过消息（对方成员行 `first_sent_time` 非 NULL） | 永久解除：之后对方取关、删除会话都不再限制 |
+| 对方取关我，且从未回复 | 恢复限制，按我在该会话的**累计**已发条数（`sent_count`，包括关注期间发的）计算；已满 5 条则直接拒绝 |
+| 对方先给我发消息 | 我天然不受限制（对方发过消息）；对方在我回复前同样受 5 条限制 |
+| 我关注了对方 | 不影响（看的是对方是否关注我） |
+| 删除会话（隐藏） | 不影响 `sent_count` 与 `first_sent_time` |
+
+**判断时机与并发**：关注关系在应用层查（`FollowChecker`，桥接 `FollowService.GetRelations`，直接读关系行），决定传给仓储的 `limit`
+（关注了 → 0 不限制，否则 5）；「对方是否回复过」和「我已发几条」在 `SendDirect` 事务里**锁住会话行之后**读（`sqlSendLimitState`），
+判断与 `sent_count+1` 在同一把锁内，同一会话的并发发送串行，不会突破 5 条。关注关系在事务外读：发送与关注 / 取关并发时，结果按其中任一先后顺序都合理，不需要加锁。
+
+**发送响应**：`POST /message/send` 的 `data` 在原有消息字段（平铺，与 #238 一致）之外新增 `remaining_count`：
+
+- 限制生效时：本条发出后还能再发的条数（`4, 3, 2, 1, 0`；`0` 表示下一条会被拒绝）；
+- 不受限制（对方关注了我，或对方回复过）时：`null`。
+
+旧客户端忽略该字段即可，不受影响。被拒时 HTTP 403，`message` 固定为 `dm limit reached`，前端据此展示「对方关注你或回复后可继续发送」
+（与机器人账号的 403 `This user cannot receive private messages` 通过 `message` 区分）。
+
+**与 #240 叠加**：#240 的私信权限设置在本限制之前判定（先看权限，再看 5 条），建议放在 `Send` 里 `RecipientChecker` 之后、`sendLimitFor` 之前。
+
+## 十一、私信未读总数与实时推送（#241）
 
 > 维护者 2026-11-11 决策：实时推送复用 `/notice/stream`（SSE），不引入 WebSocket；新消息到达时同时推摘要（发送人、会话 ID、摘要），
 > 多端与断线重连后以拉取为准。推送通道侧的设计见 [design/sse-notification-design.md](design/sse-notification-design.md) 第八节，
 > 前端对接见 [api/message-api.md](api/message-api.md) §2.6、§3 与 [notice-stream-frontend-api.md](notice-stream-frontend-api.md)。
 
-### 10.1 未读总数
+### 11.1 未读总数
 
 - 口径：`SUM(conversation_member.unread_count) WHERE user_id = 我 AND deleted = 0`（`Repository.SumUnread`，走 `idx_conversation_member_list` 前缀）。
   删除（隐藏）会话时未读已清零，对方再发消息时会话重现、未读照常累加，所以不需要再按隐藏截止位置过滤；与会话列表各项 `unread_count` 之和一致。
 - 接口：`GET /message/unread-count`（需登录）→ `{"unread_count": N}`；`MessageService.GetUnreadTotal` 同时是 SSE `dm-unread` 通道的读取器（同源同值）。
 
-### 10.2 Redis 缓存
+### 11.2 Redis 缓存
 
 | key | 类型 | TTL | 写 | 读 |
 |---|---|---|---|---|
@@ -190,7 +226,7 @@ DELETE /message/conversations/:id        UPDATE 成员行 SET cleared = last_rea
 - 已知竞态（软信号，接受）：读 miss 回源与并发写交错时，回填值可能少 / 多一次写的影响，直到下一次已读 / 删除（`DEL`）或 TTL 到期。
   缓存读失败降级查 DB；DB 失败返回 500。
 
-### 10.3 推送
+### 11.3 推送
 
 写路径都在 #238 的事务 / 单条 UPDATE **提交之后**调用，尽力而为（失败只记日志，不影响接口结果）：
 
@@ -206,7 +242,7 @@ DELETE /message/conversations/:id        UPDATE 成员行 SET cleared = last_rea
   `content` 截取前 `PushPreviewChars = 100` 个字符（同会话列表摘要），超出时 `truncated=true`；`sender` 经 `UserBriefReader` 读取，失败为 `null`。
   只推给接收方；发送方自己的未读不变，不推。
 
-### 10.4 文件
+### 11.4 文件
 
 | 文件 | 内容 |
 |---|---|

@@ -224,6 +224,9 @@ func writeMessageError(c appctx.AppContext, err error) {
 		httputil.NotFound(c, "No such user")
 	case errors.Is(err, domain.ErrRecipientUnavailable):
 		httputil.Forbidden(c, "This user cannot receive private messages")
+	case errors.Is(err, domain.ErrSendLimitReached):
+		// 固定文案，前端据此提示「对方关注你或回复后可继续发送」（#239）。
+		httputil.Forbidden(c, "dm limit reached")
 	case errors.Is(err, domain.ErrConversationNotFound):
 		httputil.NotFound(c, "No such conversation")
 	default:
