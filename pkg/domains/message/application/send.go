@@ -19,8 +19,9 @@ type SendService interface {
 	//
 	// 错误：发给自己 domain.ErrCannotMessageSelf；正文为空 / 只有空白 domain.ErrEmptyContent；
 	// 正文超过 MaxContentChars 个字符 包装了 domain.ErrContentTooLong 的错误（message 带上限值）；
-	// 接收方不存在 / 已禁用 / 已删除 domain.ErrRecipientNotFound；接收方是 AI 机器人账号 domain.ErrRecipientUnavailable。
-	Send(ctx context.Context, senderID, receiverID uuid.UUID, content string) (*MessageVO, error)
+	// 接收方不存在 / 已禁用 / 已删除 domain.ErrRecipientNotFound；接收方是 AI 机器人账号 domain.ErrRecipientUnavailable；
+	// 接收方没关注发送方、也没在会话里发过消息，且发送方在该会话已发满 UnfollowedSendLimit 条 domain.ErrSendLimitReached（#239）。
+	Send(ctx context.Context, senderID, receiverID uuid.UUID, content string) (*SendVO, error)
 }
 
 // MessageVO 一条消息。
@@ -44,7 +45,7 @@ func toMessageVO(m *domain.Message) MessageVO {
 	}
 }
 
-func (s *messageServiceImpl) Send(ctx context.Context, senderID, receiverID uuid.UUID, content string) (*MessageVO, error) {
+func (s *messageServiceImpl) Send(ctx context.Context, senderID, receiverID uuid.UUID, content string) (*SendVO, error) {
 	if senderID == receiverID {
 		return nil, domain.ErrCannotMessageSelf
 	}
@@ -63,12 +64,17 @@ func (s *messageServiceImpl) Send(ctx context.Context, senderID, receiverID uuid
 	default:
 		return nil, domain.ErrRecipientNotFound
 	}
-	msg, err := s.repo.SendDirect(ctx, senderID, receiverID, domain.MessageTypeText, content)
+	limit, err := s.sendLimitFor(ctx, senderID, receiverID)
 	if err != nil {
 		return nil, err
 	}
-	vo := toMessageVO(msg)
-	return &vo, nil
+	res, err := s.repo.SendDirect(ctx, senderID, receiverID, domain.MessageTypeText, content, limit)
+	if err != nil {
+		return nil, err
+	}
+	msg := res.Message
+	vo := &SendVO{MessageVO: toMessageVO(msg), RemainingCount: res.Remaining}
+	return vo, nil
 }
 
 // normalizeContent 清洗正文（SanitizeForPg 去掉 PG 不接受的字节）后校验长度：

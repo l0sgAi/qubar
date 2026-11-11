@@ -26,7 +26,18 @@ var (
 	ErrConversationNotFound = errors.New("conversation not found")
 	// ErrInvalidCursor 列表游标无法解析，或不属于本次请求的列表（handler 映射 400）。
 	ErrInvalidCursor = errors.New("invalid cursor")
+	// ErrSendLimitReached 未关注发送限制（#239）：对方没关注我、也没在会话里回复过我，我在该会话已发满上限条数（handler 映射 403）。
+	ErrSendLimitReached = errors.New("dm limit reached")
 )
+
+// SendResult SendDirect 的结果。
+type SendResult struct {
+	// Message 写入的消息（含会话 ID）。
+	Message *Message
+	// Remaining 发送限制生效时，本条发出后发送方在该会话还能再发的条数（0 = 已到上限，下一条会被拒绝）；
+	// 不受限制（limit ≤ 0，或对方在会话里发过消息）时为 nil。
+	Remaining *int
+}
 
 // ConversationEntry 会话列表里的一行：成员状态 + 最后一条消息（由一次 JOIN 查询得到，没有 N+1）。
 type ConversationEntry struct {
@@ -56,7 +67,11 @@ type Repository interface {
 	// → 在锁内生成消息 ID 并写入消息 → 更新双方成员行（不存在则建行）：
 	// 双方 last_message_id 前移；发送方 sent_count+1、记录首次发送时间；接收方 unread_count+1。
 	// 不校验用户状态（仓储不读 users 表），content 由调用方校验与清洗。返回写入的消息（含会话 ID）。
-	SendDirect(ctx context.Context, senderID, receiverID uuid.UUID, msgType int16, content string) (*Message, error)
+	//
+	// limit > 0 时启用未关注发送限制（#239）：锁住会话行之后、写消息之前，若接收方在会话里从未发过消息
+	// （接收方成员行不存在或 first_sent_time 为 NULL）且发送方 sent_count ≥ limit，返回 ErrSendLimitReached，事务回滚。
+	// 判断与 sent_count+1 都在会话行锁内，同一会话的并发发送不会突破上限。limit ≤ 0 表示不限制（调用方已确认对方关注了发送方）。
+	SendDirect(ctx context.Context, senderID, receiverID uuid.UUID, msgType int16, content string, limit int) (*SendResult, error)
 	// GetMember 返回 userID 在会话里的成员行；不是成员（或会话不存在）返回 ErrConversationNotFound。
 	GetMember(ctx context.Context, conversationID, userID uuid.UUID) (*ConversationMember, error)
 	// ListConversations 按最后一条消息倒序返回 userID 可见的会话（有消息、且最后一条在隐藏截止位置之后），最多 limit 条。

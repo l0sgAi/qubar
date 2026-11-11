@@ -43,13 +43,17 @@ type fakeSvc struct {
 	gotSize    int
 }
 
-func (f *fakeSvc) Send(_ context.Context, sender, receiver uuid.UUID, content string) (*application.MessageVO, error) {
+func (f *fakeSvc) Send(_ context.Context, sender, receiver uuid.UUID, content string) (*application.SendVO, error) {
 	f.calls++
 	f.gotUser, f.gotTarget, f.gotContent = sender, receiver, content
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &application.MessageVO{ID: "m1", ConversationID: testConv, Content: content}, nil
+	remaining := 4
+	return &application.SendVO{
+		MessageVO:      application.MessageVO{ID: "m1", ConversationID: testConv, Content: content},
+		RemainingCount: &remaining,
+	}, nil
 }
 
 func (f *fakeSvc) ListConversations(_ context.Context, user uuid.UUID, cursor string, size int) (*application.ConversationListVO, error) {
@@ -136,11 +140,13 @@ func TestSend_AuthBodyAndErrors(t *testing.T) {
 		body string
 	}{
 		{nil, http.StatusOK, `"conversation_id":"` + testConv},
+		{nil, http.StatusOK, `"remaining_count":4`},
 		{domain.ErrCannotMessageSelf, http.StatusBadRequest, "Cannot send message to yourself"},
 		{domain.ErrEmptyContent, http.StatusBadRequest, "empty"},
 		{tooLong, http.StatusBadRequest, "at most 2000 characters"},
 		{domain.ErrRecipientNotFound, http.StatusNotFound, "No such user"},
 		{domain.ErrRecipientUnavailable, http.StatusForbidden, "cannot receive private messages"},
+		{domain.ErrSendLimitReached, http.StatusForbidden, `"message":"dm limit reached"`},
 		{errors.New("boom"), http.StatusInternalServerError, ""},
 	} {
 		svc = &fakeSvc{err: tc.err}
