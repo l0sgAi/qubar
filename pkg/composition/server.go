@@ -47,6 +47,8 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	noticeSvc := newNoticeService(deps)
 	// follow 只读依赖 user（目标用户校验、列表项简要信息、列表隐私开关），构造时直接注入。
 	followSvc := newFollowService(deps, userFacade, userSettingSvc)
+	// message（私信）只读依赖 user（接收方状态校验、会话列表对方简要信息），构造时直接注入。
+	messageSvc := newMessageService(deps, userSvc, userFacade)
 
 	// 互注跨领域 Facade
 	// circle 需要 user Facade + post 媒体查询器
@@ -96,7 +98,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	// 跨领域 Facade 注入完成。如遗漏注入，相关领域会在请求时表现为空数据/校验失败，
 	// 这里打一条启动日志便于排查（强类型断言成本过高，用日志替代 panic，见 review P2-2）。
 	if logger.Log != nil {
-		logger.Log.Info("cross-domain facades injected: circle<-user/post, post<-user/circle, comment<-user/post, like<-post/comment, collect<-post, share<-post, history<-post, notice<-user/post, follow<-user")
+		logger.Log.Info("cross-domain facades injected: circle<-user/post, post<-user/circle, comment<-user/post, like<-post/comment, collect<-post, share<-post, history<-post, notice<-user/post, follow<-user, message<-user")
 	}
 
 	// recommend 需要 post（hydrate + circle_id 反查）+ circle（joined IDs）+ follow（关注的用户 ID），均为只读消费者，无反向注入。
@@ -158,6 +160,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	registerHistory(root, historySvc, authCheck)
 	registerNotice(root, noticeSvc, authCheck)
 	registerFollow(root, followSvc, authCheck, OptionalLoginFn)
+	registerMessage(root, messageSvc, authCheck)
 	registerRecommend(root, recommendSvc, authCheck, OptionalLoginFn)
 	registerTrending(root, trendingSvc, authCheck, OptionalLoginFn)
 	registerDiscover(root, discoverSvc, authCheck)

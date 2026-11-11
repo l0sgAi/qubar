@@ -27,6 +27,7 @@
 | [ai-agent.md](ai-agent.md) | AI 回复机器人 | `ai_agent`、`ai_agent_reply_log` |
 | [notice.md](notice.md) | 消息中心 | `notification` |
 | [follow.md](follow.md) | 用户关注 | `user_follow`、`user_follow_stat` |
+| [message.md](message.md) | 私信 | `conversation`、`conversation_member`、`message` |
 
 > 约定:无 FK/CHECK 约束(引用有效性、状态枚举合法性由应用层保证);
 > 逻辑删除 `deleted SMALLINT`(0=正常,1=已删除);状态列 `status SMALLINT`,枚举含义见各表注释。
