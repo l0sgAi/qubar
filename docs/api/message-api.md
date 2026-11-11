@@ -1,15 +1,16 @@
 # 私信 API 对接文档（前端）
 
 > **功能**：一对一文本私信：发送、会话列表、消息历史、标记已读、删除会话。
-> **对应实现**：`pkg/domains/message/`（`application/send.go`、`conversation.go`、`history.go`，`interfaces/http/handler.go`），issue #238；按对方查会话 #246；未关注发送限制 #239（`application/send_limit.go`）。
+> **对应实现**：`pkg/domains/message/`（`application/send.go`、`conversation.go`、`history.go`，`interfaces/http/handler.go`），issue #238；按对方查会话 #246；未关注发送限制 #239（`application/send_limit.go`）；发送幂等 #248（`application/send_idempotent.go`）。
 > 设计见 [message-design.md](../message-design.md)。
-> **状态**：已交付私信核心（#238）、按对方用户 ID 查会话（#246）、未关注发送限制（#239）、未读总数与实时推送（#241）。私信权限设置（#240）、频率限制（#242）后续提供。
+> **状态**：已交付私信核心（#238）、按对方用户 ID 查会话（#246）、未关注发送限制（#239）、未读总数与实时推送（#241）、发送幂等（#248）。私信权限设置（#240）、频率限制（#242）后续提供。
 
 ---
 
 ## 0. TL;DR — 前端要做的事
 
 1. **发私信**：`POST /message/send`，带 `receiver_id` 和 `content`。第一次给某人发消息时自动建会话，响应里有 `conversation_id`。
+   **建议同时带 `client_msg_id`**（#248）：每条新消息生成一个 UUID，超时 / 网络错误重试时原样带上，服务端保证只发一条（见 §2.1）。
 2. **私信列表页**：`GET /message/conversations`，游标分页，按最后一条消息时间倒序；每项带对方信息、最后一条消息摘要、我的未读数。
 3. **从用户主页进私信**：`GET /message/conversations/with/:user_id` 拿 `conversation_id`；`conversation` 为 `null` 表示还没聊过，
    聊天页显示空白，用户发出第一条消息后从 `POST /message/send` 的响应里拿 `conversation_id`。
@@ -57,10 +58,20 @@
 |---|---|---|---|
 | `receiver_id` | string | 是 | 接收方用户 ID |
 | `content` | string | 是 | 正文：1–2000 个字符（按字符计，中文一个字算 1），不能只有空白 |
+| `client_msg_id` | string | 否 | 发送幂等键（#248）：1–64 个字符，只能是字母、数字、`-`、`_`（建议 UUID）。不传或空串表示不启用 |
 
 ```json
-{ "receiver_id": "019a5d2e-7c41-7b0e-9f3a-2f6c1d8e4b10", "content": "你好" }
+{ "receiver_id": "019a5d2e-7c41-7b0e-9f3a-2f6c1d8e4b10", "content": "你好", "client_msg_id": "4f6c2a1e-8d7b-4c3a-9e2f-1b0a9c8d7e6f" }
 ```
+
+**发送幂等（#248）**
+
+- 每条**新**消息生成一个新的 `client_msg_id`；请求超时、网络错误、5xx 时**用同一个 `client_msg_id` 重试**。不要把同一个键用于另一条消息。
+- 同一个账号用同一个 `client_msg_id` 再次请求：返回**第一次发出的那条消息**（同样的响应结构，`id` / `create_time` / `content` 都是原值），
+  不会多发一条，对方的未读数、你的发送计数都不会重复增加，也不会重复推送给对方。
+- 重试时正文不同也一样：服务端忽略新正文，返回原消息。
+- 已达未关注 5 条上限时，用同一个键重试第 5 条仍返回原消息（不是 403）；`remaining_count` 按当前状态重新计算（此时为 `0`）。
+- 响应不区分「新发送」与「重放」；用响应里的 `id` 去重本地消息即可。
 
 **响应 `data`**：`MessageVO`（见 §1）的全部字段，外加 `remaining_count`（#239）：
 
@@ -99,6 +110,7 @@
 | 400 | `Cannot send message to yourself` | 发给自己 |
 | 400 | `Message content is empty` | 正文为空或只有空白 |
 | 400 | `message content is too long: at most 2000 characters` | 正文超过上限（数字为当前上限） |
+| 400 | `invalid client_msg_id: at most 64 characters` / `invalid client_msg_id: only letters, digits, '-' and '_' are allowed` | `client_msg_id` 超长或含不允许的字符 |
 | 401 | `Token not found` | 未登录 |
 | 403 | `This user cannot receive private messages` | 接收方是 AI 机器人账号 |
 | 403 | `dm limit reached` | 未关注发送限制：对方没关注你也没回复过你，你在该会话已发满 5 条。提示「对方关注你或回复后可继续发送」 |

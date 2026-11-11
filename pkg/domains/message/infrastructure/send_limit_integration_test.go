@@ -21,7 +21,7 @@ const testLimit = 5
 
 func (e *msgEnv) sendLimited(t *testing.T, from, to uuid.UUID, limit int) (*domain.SendResult, error) {
 	t.Helper()
-	return e.repo.SendDirect(t.Context(), from, to, domain.MessageTypeText, "hi", limit)
+	return e.repo.SendDirect(t.Context(), from, to, domain.MessageTypeText, "hi", limit, nil)
 }
 
 func (e *msgEnv) countMessages(t *testing.T, conv uuid.UUID, sender uuid.UUID) int64 {
@@ -128,7 +128,7 @@ func TestSendLimit_ConcurrentSendsNeverExceedLimit(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			res, err := e.repo.SendDirect(context.Background(), a, b, domain.MessageTypeText, fmt.Sprintf("msg %d", i), testLimit)
+			res, err := e.repo.SendDirect(context.Background(), a, b, domain.MessageTypeText, fmt.Sprintf("msg %d", i), testLimit, nil)
 			mu.Lock()
 			defer mu.Unlock()
 			switch {

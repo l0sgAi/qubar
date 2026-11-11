@@ -1,7 +1,7 @@
 # 私信（message）设计：会话与消息核心
 
 > 目标：新增 `pkg/domains/message`，落地一对一私信的数据模型、发送、会话列表、消息历史、标记已读与删除会话（issue #238，总览 #30 的第 1 步）；
-> 补充按对方用户 ID 查会话（issue #246，见第九节）、未关注发送限制（issue #239，见第十节）、私信未读总数与 SSE 实时推送（issue #241，见第十一节）。
+> 补充按对方用户 ID 查会话（issue #246，见第九节）、未关注发送限制（issue #239，见第十节）、私信未读总数与 SSE 实时推送（issue #241，见第十一节）、发送幂等 client_msg_id（issue #248，见第十二节）。
 > 后续步骤建在这一步之上：私信权限设置（#240）、频率限制与内容安全（#242）、群聊（#31）。
 >
 > 基线：此前没有用户间私信。表结构见 `migrations/20261111134129_add_private_message.up.sql`，字段说明见 [pgsql-ddl/message.md](pgsql-ddl/message.md)，
@@ -17,6 +17,7 @@
 | 正文 | 1–2000 个字符（按 Unicode 字符计，与 PG `varchar` 计数一致；**issue 原文 1000，维护者 2026-11-11 决策改为 2000**）；入库前过 `utils.SanitizeForPg`，清洗后不能为空或只有空白；正文按原样保存，不去首尾空白 |
 | 接收方 | 状态正常的普通用户。不能发给自己；不存在 / 已禁用 / 已删除返回 404 |
 | 未关注发送限制（#239） | 对方**没关注我**、也**没在会话里发过消息**时，我在该会话累计最多发 5 条，第 6 条 403 `dm limit reached`；对方关注我立即解除，对方回复过一次永久解除。固定 5 条，不可配置。细则见第十节 |
+| 发送幂等（#248） | 发送可带客户端生成的 `client_msg_id`（可选，1–64 位 `[A-Za-z0-9_-]`）；同一发送人同一取值只落一条，重试返回第一次的那条消息（正文不同也忽略新正文），不改任何计数、不推送。细则见第十二节 |
 | AI 机器人账号 | **不能收私信**（维护者 2026-11-11 决策）：发给机器人账号（`users.role=2`，全局 / 圈内）按「不可发送」处理，返回 403 |
 | 会话 | 首次发送自动建会话；两人之间只有一个单聊会话（`(user_low, user_high)` 唯一），并发首发不会产生两个 |
 | 会话列表 | 对方简要信息、最后一条消息摘要（前 100 个字符）与时间、我的未读数；按最后消息时间倒序，keyset 游标分页 |
@@ -39,6 +40,7 @@ pkg/domains/message/
   application/service.go            MessageService（由小接口组合）、RecipientChecker / UserBriefReader 端口、常量
   application/send.go               SendService：Send（校验 + 清洗 + 接收方判定 + 未关注发送限制）
   application/send_limit.go         未关注发送限制（#239）：UnfollowedSendLimit、FollowChecker 端口、SendVO
+  application/send_idempotent.go    发送幂等（#248）：MaxClientMsgIDLen、client_msg_id 校验
   application/conversation.go       ConversationService：会话列表（对方信息回填）/ 按对方查会话（#246）/ 标记已读 / 删除会话；
                                     列表项组装 toConversationItemVO 两处共用
   application/history.go            HistoryService：消息历史
@@ -59,7 +61,7 @@ pkg/composition/
 |---|---|---|
 | `conversation` | 会话。`type` 1=单聊 / 2=群聊（#31 预留）；单聊用 `user_low` / `user_high`（双方 UUID 按字节序排好）定位 | `uk_conversation_pair (user_low, user_high)`（群聊两列为 NULL，NULL 互不相等，不受约束） |
 | `conversation_member` | 每个会话每个成员一行：最新消息位置、已读位置、未读数、隐藏截止位置、发送统计 | `uk_conversation_member (conversation_id, user_id)`；`idx_conversation_member_list (user_id, last_message_id DESC) WHERE deleted = 0` |
-| `message` | 消息，只追加 | `idx_message_conversation (conversation_id, id DESC) WHERE deleted = 0` |
+| `message` | 消息，只追加 | `idx_message_conversation (conversation_id, id DESC) WHERE deleted = 0`；`uk_message_sender_client_msg (sender_id, client_msg_id) WHERE client_msg_id IS NOT NULL`（#248 发送幂等） |
 
 **位置一律用消息 ID 表示**：消息主键是 UUIDv7，时间序 = 字节序 = PG `uuid` 比较序，所以「最新消息」「已读到哪」「从哪开始隐藏」都存消息 ID，
 比较即先后，不需要再冗余时间列；会话列表的排序键就是成员行的 `last_message_id`（单列唯一，keyset 不需要复合键）。
@@ -74,14 +76,17 @@ POST /message/send
   handler ─ 校验 receiver_id ─▶ Send
     ├─ 自己？→ 400
     ├─ SanitizeForPg → 空 / 只有空白 → 400；> 2000 字符 → 400
+    ├─ client_msg_id（可选，#248）：> 64 位或含 [A-Za-z0-9_-] 以外的字符 → 400；空串 = 不提供
     ├─ RecipientChecker（UserService.GetByID）→ 不存在/禁用/删除 404；role=2 → 403
     ├─ FollowChecker（FollowService.GetRelations）：对方关注了我 → limit=0（不限制），否则 limit=5（#239）
-    └─ Repository.SendDirect(limit)（一个事务）
+    └─ Repository.SendDirect(limit, client_msg_id)（一个事务）
          1. INSERT conversation … ON CONFLICT (user_low, user_high) DO UPDATE SET update_time … RETURNING id
             └─ 冲突时也返回已有 ID，并锁住会话行：同一会话的发送串行
+         1''. 带 client_msg_id（#248）：锁后按 (sender_id, client_msg_id) 查原消息 → 命中即返回（Replayed，不写任何数据、不查 5 条限制）
          1'. limit > 0：锁后读 我的 sent_count、对方成员行 first_sent_time
              └─ 对方发过消息 → 不限制；sent_count ≥ limit → 403 dm limit reached（回滚）；否则剩余 = limit − sent_count − 1
          2. 在锁内生成消息 ID（NewID）→ INSERT message
+            └─ 带 client_msg_id 时 ON CONFLICT (sender_id, client_msg_id) DO NOTHING；冲突 → 查回原消息返回（Replayed，跳过 3、4）
          3. 发送方成员行 upsert：last_message_id 前移、sent_count+1、first_sent_time 首次写入
          4. 接收方成员行 upsert：last_message_id 前移、unread_count+1
          （删除过会话的成员：cleared_message_id 不动，新消息 ID 大于它 → 会话自然重现）
@@ -133,6 +138,7 @@ DELETE /message/conversations/:id        UPDATE 成员行 SET cleared = last_rea
 | 发送方自己的未读 | 发送不改发送方的未读数 / 已读位置（不默认「回复即已读」），由客户端打开会话时调标记已读 |
 | 对方被禁用 / 删除 | 会话保留，`peer=null`；再发送 404 |
 | 机器人账号 | 403；已有会话不受影响（当前不可能产生） |
+| 同一 client_msg_id 并发重复发送（#248） | 发往同一会话时被会话行锁串行，后到者锁后查到原消息；锁覆盖不到的情况（同键发往不同接收方）由唯一索引 + `ON CONFLICT DO NOTHING` 兜底并查回原消息，不会 500；集成测试 `TestIdempotent_ConcurrentSameKey`、`TestIdempotent_KeyScopeAndCrossReceiver` 覆盖 |
 | 未关注发送限制的并发（#239） | 判断与 `sent_count+1` 都在会话行锁内，同一会话的发送串行，并发发送不会突破 5 条；集成测试 `TestSendLimit_ConcurrentSendsNeverExceedLimit`、`TestMessageSendLimit_ConcurrentSendsNeverExceedLimit` 覆盖 |
 
 ## 七、给后续 issue 预留的位置
@@ -253,3 +259,54 @@ DELETE /message/conversations/:id        UPDATE 成员行 SET cleared = last_rea
 | `infrastructure/unread_cache_redis.go`、`message_repo_pg.go` | Redis 缓存、`SumUnread` |
 | `interfaces/http/handler.go`、`routes.go` | `GET /message/unread-count` |
 | `pkg/composition/wire_message.go`、`message_bridges.go` | 注入缓存；`wireMessageStream`、`messageStreamNotifier` |
+
+## 十二、发送幂等 client_msg_id（#248）
+
+> 弱网下客户端超时重试会把同一条消息发两次、对方看到两条。维护者 2026-11-11 决定另开 #248，在前端接入发送接口前补上：
+> 发送带可选的客户端幂等键，同一发送人同一键只落一条。迁移 `migrations/20261111193813_add_message_client_msg_id.up.sql`。
+
+**请求字段**：`POST /message/send` 新增可选 `client_msg_id`（string）。
+
+| 项 | 规则 |
+|---|---|
+| 取值 | 客户端为每条**新**消息生成一次（建议 UUID），超时 / 失败重试时**原样带上**；同一个键不要用于另一条消息 |
+| 长度 / 字符集 | 1–64 个字符（`application.MaxClientMsgIDLen`，列宽 `varchar(64)`），只允许 `[A-Za-z0-9_-]`（UUID、ULID 都满足）；超长或含其他字符 400 `invalid client_msg_id: …`（`domain.ErrInvalidClientMsgID`）。白名单全是 ASCII，不需要 `SanitizeForPg`；原样比较，不做大小写归一 |
+| 不传 / 空串 | 不启用幂等，行为与 #238 / #239 完全一致（列为 NULL，不受唯一索引约束） |
+| 作用域 | **按发送人**：`(sender_id, client_msg_id)` 唯一（部分唯一索引 `uk_message_sender_client_msg … WHERE client_msg_id IS NOT NULL`）。不同用户用同一个键互不影响 |
+
+**重放语义**（维护者 2026-11-11 确认）：同一发送人再次用同一个键请求时——
+
+| 项 | 行为 |
+|---|---|
+| 响应 | 200，**第一次创建的那条消息**，结构与正常发送相同（`id` / `conversation_id` / `content` / `create_time` 都是原值）；响应里不标记是否重放（前端不需要区分） |
+| 正文不同 | 仍返回原消息，**忽略新正文** |
+| 接收方不同（客户端误用同一个键） | 同样按「同一发送人同一键」返回原消息（`conversation_id` 是原会话），不在新会话里落消息。判断只看 `(sender_id, client_msg_id)`，与唯一索引一致 |
+| 写入 | 不新增消息；不累加对方 `unread_count`、我的 `sent_count`；不移动双方 `last_message_id`（会话最后消息） |
+| 推送（#241） | 不推送：`SendResult.Replayed=true` 时应用层不调用发送后的钩子（`afterSend`），对方不会再收到 `dm-message` / `dm-unread` |
+| #239 5 条限制 | **重放判断在限制之前**：已发满 5 条后用同一个键重试（例如第 5 条超时），返回原消息而不是 403；新键仍 403 |
+| `remaining_count` | 按会话**当前**状态重新计算：限制生效时 = `5 − sent_count`（重放的那条已计入 `sent_count`，不再减 1，最小 0）；不受限制（对方关注了我 / 对方回复过）时 `null` |
+
+**`remaining_count` 口径的理由**：发送接口里它的含义是「这条发出后在该会话还能再发几条」。重放的那条已经发出并计入 `sent_count`，
+所以「现在还能发几条」= `limit − sent_count`；没有其他消息插进来时与第一次响应的值相同（第 5 条重放仍是 `0`），
+期间又发过别的消息或对方关注 / 回复过时反映的是最新状态，前端据此展示的剩余条数不会过期。返回 `null` 会被前端理解为「不受限制」，与实际不符，故不采用。
+接收方不同的误用场景按当前请求的这对用户计算。
+
+**判断位置与并发**（`infrastructure/message_repo_pg.go` 的 `SendDirect`）：
+
+1. 会话行 upsert 加锁之后、`checkSendLimit` 之前，`findByClientMsgID` 按 `(sender_id, client_msg_id)` 查（走唯一索引）；命中即返回，事务里除了会话行的 `update_time` 什么都不写（同键发往一个从没聊过的接收方时，会话 upsert 会留下一行没有成员、没有消息的会话行，不出现在任何列表里，之后两人正常发消息时复用它）。
+2. 未命中：照常检查 5 条限制 → 生成消息 ID → `INSERT … ON CONFLICT (sender_id, client_msg_id) WHERE client_msg_id IS NOT NULL DO NOTHING RETURNING create_time`。
+   没有返回行（并发的同键请求先提交了）→ 再按键查回原消息返回，跳过成员行更新。
+3. 同一会话的同键请求被会话行锁串行：后到者拿到锁时前一个已提交，第 1 步（READ COMMITTED，每条语句新快照）就能查到。
+   锁覆盖不到的情况只有「同键发往不同接收方」（锁的是不同会话行），由第 2 步唯一索引兜底：`DO NOTHING` 会等冲突事务提交，不报唯一冲突，不会 500。
+
+**应用层**：`SendService.SendWithClientMsgID(ctx, sender, receiver, content, clientMsgID)`；原 `Send` 等于 `clientMsgID=""`，签名不变。
+校验顺序：发给自己 → 正文 → `client_msg_id` 格式 → 接收方状态（#240 权限）→ 关注关系 → `SendDirect`。所以重放请求同样要先通过接收方 / 权限判定：
+原消息发出后对方被禁用或关闭了私信，重试得到的是对应的 404 / 403，而不是原消息。
+
+**与 #242 频率限制的关系**：频率限制在应用层、`SendDirect` 之前，重放请求会先经过它（本 issue 不改频率口径，是否把重放计入频率由 #242 决定）。
+
+**迁移**：`ALTER TABLE domains.message ADD COLUMN client_msg_id varchar(64)`（可空，无默认值，不重写表）+ `CREATE UNIQUE INDEX uk_message_sender_client_msg`。
+旧版本应用插入消息时不写该列（NULL），不受索引约束，兼容先迁移后发版。索引**不用** `CONCURRENTLY`：`message` 表随 v0.9.0 首次上线，
+与建表迁移同一次发布执行，建索引时是空表，锁瞬时释放；与加列放在同一个文件里同事务执行，失败整体回滚，不会留下 INVALID 索引。
+
+**范围外**：其它接口（标记已读、删除会话）的幂等；每用户同步序号与断线补拉；消息历史 / `dm-message` 推送里不返回 `client_msg_id`（发送方用发送响应匹配本地消息即可）。

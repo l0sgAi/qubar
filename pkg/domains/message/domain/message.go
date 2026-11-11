@@ -75,9 +75,11 @@ type Message struct {
 	SenderID       uuid.UUID `json:"sender_id" gorm:"column:sender_id;type:uuid;not null"`
 	MsgType        int16     `json:"msg_type" gorm:"column:msg_type;type:smallint;default:1"`
 	Content        string    `json:"content" gorm:"column:content"`
-	CreateTime     time.Time `json:"create_time" gorm:"column:create_time;autoCreateTime"`
-	UpdateTime     time.Time `json:"update_time" gorm:"column:update_time;autoUpdateTime"`
-	Deleted        int16     `json:"deleted" gorm:"column:deleted;type:smallint;default:0"`
+	// ClientMsgID 客户端生成的发送幂等键（#248）；未提供为 nil。同一发送人内唯一（uk_message_sender_client_msg）。
+	ClientMsgID *string   `json:"client_msg_id" gorm:"column:client_msg_id"`
+	CreateTime  time.Time `json:"create_time" gorm:"column:create_time;autoCreateTime"`
+	UpdateTime  time.Time `json:"update_time" gorm:"column:update_time;autoUpdateTime"`
+	Deleted     int16     `json:"deleted" gorm:"column:deleted;type:smallint;default:0"`
 }
 
 // TableName 指定表名。

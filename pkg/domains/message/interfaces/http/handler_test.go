@@ -39,13 +39,18 @@ type fakeSvc struct {
 	gotUser    uuid.UUID
 	gotTarget  uuid.UUID
 	gotContent string
+	gotClient  string
 	gotCursor  string
 	gotSize    int
 }
 
-func (f *fakeSvc) Send(_ context.Context, sender, receiver uuid.UUID, content string) (*application.SendVO, error) {
+func (f *fakeSvc) Send(ctx context.Context, sender, receiver uuid.UUID, content string) (*application.SendVO, error) {
+	return f.SendWithClientMsgID(ctx, sender, receiver, content, "")
+}
+
+func (f *fakeSvc) SendWithClientMsgID(_ context.Context, sender, receiver uuid.UUID, content, clientMsgID string) (*application.SendVO, error) {
 	f.calls++
-	f.gotUser, f.gotTarget, f.gotContent = sender, receiver, content
+	f.gotUser, f.gotTarget, f.gotContent, f.gotClient = sender, receiver, content, clientMsgID
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -147,6 +152,7 @@ func TestSend_AuthBodyAndErrors(t *testing.T) {
 	}
 
 	tooLong := fmt.Errorf("%w: at most 2000 characters", domain.ErrContentTooLong)
+	badClientID := fmt.Errorf("%w: at most 64 characters", domain.ErrInvalidClientMsgID)
 	for _, tc := range []struct {
 		err  error
 		want int
@@ -160,15 +166,31 @@ func TestSend_AuthBodyAndErrors(t *testing.T) {
 		{domain.ErrRecipientNotFound, http.StatusNotFound, "No such user"},
 		{domain.ErrRecipientUnavailable, http.StatusForbidden, "cannot receive private messages"},
 		{domain.ErrSendLimitReached, http.StatusForbidden, `"message":"dm limit reached"`},
+		{badClientID, http.StatusBadRequest, "invalid client_msg_id: at most 64 characters"},
 		{errors.New("boom"), http.StatusInternalServerError, ""},
 	} {
 		svc = &fakeSvc{err: tc.err}
 		ac, rc = newCtx(testUser, "", "", okBody)
 		NewHandler(svc).Send(ac)
 		assertStatus(t, rc, tc.want, tc.body)
-		if svc.gotUser.String() != testUser || svc.gotTarget.String() != testPeer || svc.gotContent != "hi" {
-			t.Errorf("service got user=%s receiver=%s content=%q", svc.gotUser, svc.gotTarget, svc.gotContent)
+		if svc.gotUser.String() != testUser || svc.gotTarget.String() != testPeer || svc.gotContent != "hi" || svc.gotClient != "" {
+			t.Errorf("service got user=%s receiver=%s content=%q client=%q", svc.gotUser, svc.gotTarget, svc.gotContent, svc.gotClient)
 		}
+	}
+}
+
+// client_msg_id（#248）原样透传给 service（校验在 application 层），响应结构不变。
+func TestSend_ClientMsgIDPassthrough(t *testing.T) {
+	svc := &fakeSvc{}
+	body := fmt.Sprintf(`{"receiver_id":%q,"content":"hi","client_msg_id":"c-1_A"}`, testPeer)
+	ac, rc := newCtx(testUser, "", "", body)
+	NewHandler(svc).Send(ac)
+	assertStatus(t, rc, http.StatusOK, `"remaining_count":4`)
+	if svc.gotClient != "c-1_A" {
+		t.Errorf("client_msg_id = %q, want c-1_A", svc.gotClient)
+	}
+	if strings.Contains(string(rc.Response.Body()), "client_msg_id") {
+		t.Errorf("response should not echo client_msg_id: %s", rc.Response.Body())
 	}
 }
 
