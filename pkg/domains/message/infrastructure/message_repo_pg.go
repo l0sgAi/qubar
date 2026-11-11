@@ -23,7 +23,7 @@ func NewRepository(db *gorm.DB) domain.Repository {
 	return &messageRepoPG{db: db}
 }
 
-// 发送：会话行 upsert → 写消息 → 双方成员行 upsert，同一事务。
+// 发送：会话行 upsert →（启用时）未关注发送限制检查 → 写消息 → 双方成员行 upsert，同一事务。
 //
 // 会话行用 DO UPDATE（而不是 DO NOTHING）：冲突时也返回已有行的 ID，并对会话行加行锁，
 // 同一会话的发送因此串行执行——消息 ID 在锁内生成，同一会话内 ID 顺序与提交顺序一致，
@@ -59,14 +59,46 @@ ON CONFLICT (conversation_id, user_id) DO UPDATE
 SET last_message_id = GREATEST(m.last_message_id, EXCLUDED.last_message_id),
     unread_count = m.unread_count + 1,
     update_time = CURRENT_TIMESTAMP`
+
+	// 未关注发送限制（#239）：在会话行锁之后读发送方已发条数与「接收方是否在会话里发过消息」。
+	// READ COMMITTED 下每条语句取新快照，锁之后的这条读能看到之前持锁事务已提交的 sent_count。
+	sqlSendLimitState = `
+SELECT
+  COALESCE((SELECT sent_count FROM domains.conversation_member
+            WHERE conversation_id = @conv AND user_id = @sender), 0) AS sent_count,
+  EXISTS (SELECT 1 FROM domains.conversation_member
+          WHERE conversation_id = @conv AND user_id = @receiver AND first_sent_time IS NOT NULL) AS peer_replied`
 )
+
+// checkSendLimit 在会话行锁内检查未关注发送限制（limit > 0 时调用）。
+// 对方发过消息返回 nil（永久解除）；已发满 limit 条返回 ErrSendLimitReached；否则返回本条发出后的剩余条数。
+func checkSendLimit(tx *gorm.DB, conversationID, senderID, receiverID uuid.UUID, limit int) (*int, error) {
+	var state struct {
+		SentCount   int
+		PeerReplied bool
+	}
+	if err := tx.Raw(sqlSendLimitState, map[string]any{
+		"conv": conversationID, "sender": senderID, "receiver": receiverID,
+	}).Scan(&state).Error; err != nil {
+		return nil, err
+	}
+	if state.PeerReplied {
+		return nil, nil
+	}
+	if state.SentCount >= limit {
+		return nil, domain.ErrSendLimitReached
+	}
+	remaining := limit - state.SentCount - 1
+	return &remaining, nil
+}
 
 // SendDirect 见 domain.Repository。
 func (r *messageRepoPG) SendDirect(
-	ctx context.Context, senderID, receiverID uuid.UUID, msgType int16, content string,
-) (*domain.Message, error) {
+	ctx context.Context, senderID, receiverID uuid.UUID, msgType int16, content string, limit int,
+) (*domain.SendResult, error) {
 	low, high := domain.OrderPair(senderID, receiverID)
 	msg := &domain.Message{SenderID: senderID, MsgType: msgType, Content: content}
+	var remaining *int
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var conv struct{ ID uuid.UUID }
 		if err := tx.Raw(sqlUpsertDirectConversation,
@@ -77,6 +109,12 @@ func (r *messageRepoPG) SendDirect(
 			return errors.New("message: upsert conversation returned no id")
 		}
 		msg.ConversationID = conv.ID
+		if limit > 0 {
+			var err error
+			if remaining, err = checkSendLimit(tx, conv.ID, senderID, receiverID, limit); err != nil {
+				return err
+			}
+		}
 		// 在会话行锁内生成消息 ID（见上方说明）。
 		msg.ID = sharedomain.NewID()
 		var created struct{ CreateTime time.Time }
@@ -96,7 +134,7 @@ func (r *messageRepoPG) SendDirect(
 		return nil, err
 	}
 	msg.UpdateTime = msg.CreateTime
-	return msg, nil
+	return &domain.SendResult{Message: msg, Remaining: remaining}, nil
 }
 
 // GetMember 见 domain.Repository。
