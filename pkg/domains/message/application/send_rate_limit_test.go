@@ -7,11 +7,9 @@ import (
 	"testing"
 
 	"interestBar/pkg/domains/message/domain"
-	"interestBar/pkg/logger"
 	sharedomain "interestBar/pkg/shared/domain"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
 )
 
 // fakeRateLimiter 频率计数桩：按预置结果返回，记录占用与退还。
@@ -161,9 +159,6 @@ func TestSend_RateLimiterError(t *testing.T) {
 }
 
 func TestSend_ReleaseErrorDoesNotFailSend(t *testing.T) {
-	if logger.Log == nil { // 退还失败会记日志；包里没有 TestMain 初始化 logger 时用空实现
-		logger.Log = zap.NewNop()
-	}
 	limiter := &fakeRateLimiter{decision: domain.SendRateDecision{NewConversationReserved: true}, releaseErr: errors.New("redis down")}
 	vo, err := newRateLimitedService(createdRepo{&fakeRepo{}, false}, limiter).
 		Send(t.Context(), sharedomain.NewID(), sharedomain.NewID(), "hi")

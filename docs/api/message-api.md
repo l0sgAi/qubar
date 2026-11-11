@@ -3,7 +3,7 @@
 > **功能**：一对一文本私信：发送、会话列表、消息历史、标记已读、删除会话。
 > **对应实现**：`pkg/domains/message/`（`application/send.go`、`conversation.go`、`history.go`，`interfaces/http/handler.go`），issue #238；按对方查会话 #246；未关注发送限制 #239（`application/send_limit.go`）。
 > 设计见 [message-design.md](../message-design.md)。
-> **状态**：已交付私信核心（#238）、按对方用户 ID 查会话（#246）、未关注发送限制（#239）。私信权限设置（#240）、未读总数与实时推送（#241）、频率限制（#242）后续提供。
+> **状态**：已交付私信核心（#238）、按对方用户 ID 查会话（#246）、未关注发送限制（#239）、未读总数与实时推送（#241）。私信权限设置（#240）、频率限制（#242）后续提供。
 
 ---
 
@@ -20,8 +20,9 @@
 7. AI 机器人账号不能收私信（403），机器人主页不要显示「私信」按钮。
 8. **未关注发送限制（#239）**：对方没关注你、也没回复过你时，你在这个会话最多发 5 条。发送响应的 `remaining_count` 是还能发几条
    （`null` = 不受限制）；第 6 条返回 403 `dm limit reached`，请提示「对方关注你或回复后可继续发送」。
-9. 当前没有实时推送：新消息需要前端轮询会话列表或进入页面时刷新（#241 会提供）。
-10. **发送频率限制（#242）**：每个账号每分钟最多发 20 条、每天 500 条，每天最多主动开启 20 个新会话（给已有会话发消息不算）。
+9. **私信角标**：`GET /message/unread-count` 拿未读总数；实时更新走已有的 `/notice/stream`（SSE）连接上的 `dm-unread` 事件（见 §3）。
+10. **新消息实时上屏**：同一 SSE 连接上的 `dm-message` 事件带新消息摘要（只推给接收方），见 §3。多端与断线重连后以拉取为准。
+11. **发送频率限制（#242）**：每个账号每分钟最多发 20 条、每天 500 条，每天最多主动开启 20 个新会话（给已有会话发消息不算）。
    超限返回 HTTP 429（信封 `code` 208），`message` 写明是哪一项和上限，请提示「发送太频繁，请稍后再试」，不要自动重试。
    账号被禁用 / 删除后发送返回 403 `Your account cannot send private messages`。
 
@@ -271,3 +272,74 @@
 重复调用无副作用。响应 `data` 为 `null`。
 
 **错误**：400 `Invalid conversation id`、401、404 `No such conversation`。
+
+### 2.6 GET /message/unread-count — 私信未读总数
+
+我的各会话未读数之和（= 会话列表各项 `unread_count` 之和），用于私信入口角标。与 SSE `dm-unread` 事件同源同值；
+SSE 连接正常时不需要轮询本接口，连接不可用时按与消息中心相同的 30s 间隔轮询。
+
+**响应 `data`**
+
+```json
+{ "code": 200, "message": "Success", "data": { "unread_count": 3 } }
+```
+
+**错误**：401。
+
+---
+
+## 3. 实时推送（#241）
+
+私信**不单独建连接**，复用消息中心的 `GET /notice/stream`（SSE）。建连、鉴权、心跳、`auth-expired` / `conn-evicted`、降级策略
+全部见 [notice-stream-frontend-api.md](../notice-stream-frontend-api.md)；同一条连接上新增两个事件：
+
+### 3.1 `dm-unread` — 私信未读总数（全量）
+
+```text
+event: dm-unread
+id: 1762843800123-8
+data: {"unread_count":2}
+```
+
+- 连接建立时首包紧跟 `unread-count` 下发一条当前全量。
+- 收到新私信、标记已读、删除会话后推新值；1s 窗口内多次变化只推最终值，值没变不推。
+- 与消息中心的 `unread-count` **是两个独立的数**，互不覆盖：消息中心角标只认 `unread-count`，私信角标只认 `dm-unread`。
+
+### 3.2 `dm-message` — 新私信摘要（只推给接收方）
+
+```text
+event: dm-message
+id: 1762843800050-7
+data: {"id":"019a7b10-...","conversation_id":"019a7b10-...","sender_id":"019a5d2e-...","sender":{"id":"019a5d2e-...","username":"alice","avatar_url":"https://..."},"msg_type":1,"content":"你好","truncated":false,"create_time":"2026-11-11T14:30:00.123456+08:00"}
+```
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` / `conversation_id` / `sender_id` / `msg_type` / `create_time` | 同 `MessageVO` | |
+| `sender` | object \| null | 发送人 `{id, username, avatar_url}`；读取失败时为 `null`，用 `sender_id` 兜底 |
+| `content` | string | 正文的**前 100 个字符** |
+| `truncated` | bool | 正文超过 100 个字符被截断时为 `true`：需要拉消息历史（§2.3 第一页）拿全文 |
+
+前端建议：
+
+- **正在看这个会话**（`conversation_id` 相同）：`truncated=false` 时直接把它当 `MessageVO` 追加到消息列表底部（按 `id` 去重，
+  可能与拉取结果重复），然后调 §2.4 标记已读；`truncated=true` 时重新拉第一页。
+- **在会话列表页**：把对应会话顶到最前、更新 `last_message` 摘要，或直接下拉刷新列表。
+- **其他页面**：可用 `sender.username` + `content` 弹提示；角标以 `dm-unread` 为准，不要自己 +1。
+- 只推给接收方：我自己在别的端发出的消息**不会**推过来，其他端需要拉取。
+- 不保证送达：断线期间、多端、或连接很慢时可能收不到某条；重连后（首包 `dm-unread`）以拉取会话列表 / 历史为准。
+
+```js
+es.addEventListener('dm-unread', (e) => {
+  updateDmBadge(JSON.parse(e.data).unread_count) // 全量替换
+})
+es.addEventListener('dm-message', (e) => {
+  const msg = JSON.parse(e.data)
+  if (currentConversationId === msg.conversation_id) {
+    msg.truncated ? reloadLatestMessages() : appendMessage(msg)
+    markConversationRead(msg.conversation_id)
+  } else {
+    bumpConversation(msg) // 或刷新会话列表
+  }
+})
+```

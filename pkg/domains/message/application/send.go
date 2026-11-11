@@ -84,6 +84,8 @@ func (s *messageServiceImpl) Send(ctx context.Context, senderID, receiverID uuid
 		return nil, err
 	}
 	msg := res.Message
+	// 事务已提交：接收方未读缓存与实时推送（#241，尽力而为）。
+	s.afterSend(ctx, msg, receiverID)
 	vo := &SendVO{MessageVO: toMessageVO(msg), RemainingCount: res.Remaining}
 	return vo, nil
 }
