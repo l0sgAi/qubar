@@ -2,7 +2,7 @@
 //
 // 文件按职责拆分：relation.go（关注 / 取关）、stats.go（计数与关系查询）、
 // list.go + list_cursor.go（关注 / 粉丝 / 互关列表、批量关系查询、列表可见性）、
-// followee_ids.go（导出关注 ID 列表，供首页关注 tab 用）。
+// followee_ids.go（导出关注 ID 列表，供首页关注 tab 用）、notify.go（被关注通知事件）。
 // FollowService 由各文件里的小接口组合而成；新增能力 = 新增文件 + 在 FollowService 里加一行。
 // 设计见 docs/follow-design.md。
 package application
@@ -38,6 +38,8 @@ type followServiceImpl struct {
 	followees    domain.FolloweeIDRepository
 	// lists 列表能力的依赖（list.go）。
 	lists ListDeps
+	// events 被关注通知事件发布器（#219，见 notify.go）。
+	events domain.FollowEventPublisher
 }
 
 // NewFollowService 构造 FollowService。maxFollowing 返回当前生效的关注上限（≥ 1）。
@@ -48,10 +50,11 @@ func NewFollowService(
 	maxFollowing func() int,
 	followees domain.FolloweeIDRepository,
 	lists ListDeps,
+	events domain.FollowEventPublisher,
 ) FollowService {
 	return &followServiceImpl{
 		relations: relations, stats: stats, users: users, maxFollowing: maxFollowing,
-		followees: followees, lists: lists,
+		followees: followees, lists: lists, events: events,
 	}
 }
 

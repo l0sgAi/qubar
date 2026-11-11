@@ -32,7 +32,8 @@ func setupFollowList(t *testing.T) *followListEnv {
 	testkit.Redis(t)
 	deps := NewDeps()
 	settings := newUserSettingService(deps)
-	svc := newFollowService(deps, userapp.NewUserFacade(newUserService(deps)), settings)
+	// 不关心通知：发布器用空实现，原因见 setupFollow（follow_integration_test.go）。
+	svc := newFollowServiceWithEvents(deps, userapp.NewUserFacade(newUserService(deps)), settings, noFollowEvents{})
 	return &followListEnv{followEnv: &followEnv{db: db, svc: svc}, settings: settings}
 }
 

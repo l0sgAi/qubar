@@ -34,11 +34,16 @@ func (s *followServiceImpl) Follow(ctx context.Context, followerID, followeeID u
 		return nil, err
 	}
 	limit := s.maxFollowing()
-	if _, err := s.relations.Follow(ctx, followerID, followeeID, limit); err != nil {
+	changed, err := s.relations.Follow(ctx, followerID, followeeID, limit)
+	if err != nil {
 		if errors.Is(err, domain.ErrFollowLimitReached) {
 			return nil, fmt.Errorf("%w: you can follow at most %d users", domain.ErrFollowLimitReached, limit)
 		}
 		return nil, err
+	}
+	// 关系这次真的从「未关注」变为「已关注」（事务已提交）才通知对方；重复关注不通知。
+	if changed {
+		s.notifyFollowed(ctx, followerID, followeeID)
 	}
 	return s.relationAfter(ctx, followerID, followeeID)
 }

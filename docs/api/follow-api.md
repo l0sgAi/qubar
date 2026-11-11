@@ -1,9 +1,9 @@
 # 用户关注 API 对接文档（前端）
 
-> **功能**：用户间关注 / 取关，用户主页展示关注数、粉丝数和「我与对方」的关系状态；关注 / 粉丝 / 互关列表、批量关系查询、列表公开 / 私密开关。
-> **对应实现**：`pkg/domains/follow/`（`application/relation.go`、`stats.go`、`list.go`，`interfaces/http/handler.go`、`list_handler.go`）与
-> `pkg/domains/user/`（`application/setting.go`、`interfaces/http/setting_handler.go`），issue #217 / #218。设计见 [follow-design.md](../follow-design.md)。
-> **状态**：已交付关注 / 取关 / 统计（#217），列表 / 批量关系 / 隐私开关（#218）。首页关注 tab（#220）见 [home-feed-api.md](home-feed-api.md)；被关注通知在后续 issue（#219）。
+> **功能**：用户间关注 / 取关，用户主页展示关注数、粉丝数和「我与对方」的关系状态；关注 / 粉丝 / 互关列表、批量关系查询、列表公开 / 私密开关；被关注通知。
+> **对应实现**：`pkg/domains/follow/`（`application/relation.go`、`stats.go`、`list.go`、`notify.go`，`interfaces/http/handler.go`、`list_handler.go`）与
+> `pkg/domains/user/`（`application/setting.go`、`interfaces/http/setting_handler.go`），issue #217 / #218 / #219。设计见 [follow-design.md](../follow-design.md)。
+> **状态**：已交付关注 / 取关 / 统计（#217），列表 / 批量关系 / 隐私开关（#218），被关注通知（#219，前端对接见 [notice-frontend-api.md](../notice-frontend-api.md)）。首页关注 tab（#220）见 [home-feed-api.md](home-feed-api.md)。
 
 ---
 
@@ -280,3 +280,5 @@ Query 与响应结构同 §2.4（`cursor` / `size`；`items` / `has_more` / `nex
 - 列表隐私开关修改后立即生效。设为私密只隐藏两个列表的名单：关注数、粉丝数、`relation`、批量关系查询都不受影响；本人始终能看自己的列表。
 - 翻页过程中列表发生变化（有人取关 / 新关注）不会出现重复项；新关注的人排在最前，需要刷新（不带 `cursor` 重新请求）才能看到。
 - 关注后，对方（含 AI 机器人账号）发的帖子会出现在首页 `GET /post/home?tab=following`，与已加入圈子的帖子合并显示（#220，见 [home-feed-api.md](home-feed-api.md) 第 3 节）；取关后重新从第一页请求即不再出现。
+- 关注成功（关系从「未关注」变为「已关注」）后，对方会在消息中心收到「XX 关注了你」（`notice_type = 12`，约 5 秒延迟，#219）；
+  重复关注不会再通知，取关不通知也不撤回，取关后再关注复用同一条并重新变成未读。前端对接见 [notice-frontend-api.md](../notice-frontend-api.md)。

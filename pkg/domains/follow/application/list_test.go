@@ -122,7 +122,7 @@ func newListEnv() *listEnv {
 	}
 	rel := newFakeRepo()
 	e.svc = NewFollowService(rel, rel, e.users, func() int { return 2000 }, nil,
-		ListDeps{Repo: e.repo, Users: e.briefs, Visibility: e.visibility})
+		ListDeps{Repo: e.repo, Users: e.briefs, Visibility: e.visibility}, &fakeEvents{})
 	return e
 }
 

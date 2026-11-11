@@ -2,7 +2,7 @@
 
 > 目标：新增 `pkg/domains/follow`，落地用户间关注 / 取关、四种关系状态、关注数 / 粉丝数与关注上限（issue #217，总览 #29 的第 1 步）；
 > 在其上提供关注 / 粉丝 / 互关列表、批量关系查询与列表隐私开关（issue #218，见第八节）。
-> 被关注通知（#219）在后续 issue，建在本文的表和仓储之上；首页关注 tab（#220）见第九节。
+> 首页关注 tab（#220）见第九节；被关注通知（#219）见第十节。
 >
 > 基线：此前没有用户间关注关系；首页 `following` tab 把「关注」映射成「已加入的圈子」（`recommend` 域的 `getFollowing`，#220 起改为合并流）。
 
@@ -33,15 +33,18 @@ pkg/domains/follow/
   domain/follow.go                  实体 UserFollow / UserFollowStat、Relation 常量与 RelationOf
   domain/repository.go              端口 RelationRepository / StatRepository + 哨兵错误
   domain/list.go                    端口 ListRepository、ListKind、FollowEdge + 列表相关哨兵错误（#218）
+  domain/event_publisher.go         端口 FollowEventPublisher（被关注通知事件，#219）
   application/service.go            FollowService（由小接口组合）、UserChecker 端口、构造器
   application/relation.go           RelationService：Follow / Unfollow
   application/stats.go              StatsService：GetStats
   application/list.go               ListService：三个列表 + 批量关系；UserBriefReader / ListVisibilityReader 端口（#218）
   application/list_cursor.go        列表游标编解码与作用域校验（#218）
+  application/notify.go             关注成功（changed）后发布被关注通知事件，失败只记日志（#219）
   infrastructure/follow_repo_pg.go            followRepoPG + 两个构造器
   infrastructure/follow_relation_repo_pg.go   Follow / Unfollow / GetRelation（事务、锁顺序）
   infrastructure/follow_stat_repo_pg.go       GetStat / RecountStat
   infrastructure/follow_list_repo_pg.go       ListEdges / GetRelations + NewListRepository（#218）
+  infrastructure/follow_event_publisher.go    FollowEventPublisher 的 Redpanda 实现（notification_events）
   interfaces/http/handler.go, list_handler.go, routes.go
 pkg/composition/wire_follow.go      newFollowService / registerFollow
 pkg/composition/follow_bridges.go   followUserChecker / followUserBriefReader / followListVisibilityReader（user → follow）
@@ -176,7 +179,7 @@ follow:
 | 达到上限后的关注尝试 | 每次尝试会写入关系行再回滚，产生少量死元组；关注接口暂无限流（项目没有通用限流中间件，见 #217 范围外） |
 | 热点用户 | 关注同一个大 V 的事务在其计数行上串行，单行更新耗时很短；真成为瓶颈时再考虑把粉丝数改成异步聚合 |
 | 机器人关注别人 | 机器人账号不登录，不会走到关注接口，未做额外限制 |
-| 通知 / 事件 | 本期不发任何事件；`RelationRepository.Follow` 返回的 `changed` 是 #219 判断「是否真的新关注」的依据 |
+| 通知 / 事件 | `RelationRepository.Follow` 返回 `changed == true`（这次真的新关注 / 重新关注）时发一条被关注通知事件（#219，`notice_type = 12`）；重复关注与取关不发，发布失败只记日志。见第十节 |
 
 ## 八、列表、批量关系与隐私开关（#218）
 
@@ -335,11 +338,32 @@ recommend 域只依赖自己声明的 `FolloweeLookup` 端口（`recommend/domai
 | ES 真实检索（开发栈临时索引） | `elasticsearch/following_feed_integration_test.go` | 并集不重复、私密圈、未发布 / 已删除、同一发帖时间的翻页、2000 个关注 ID 的 `terms` |
 | follow 仓储（开发栈 PG） | `follow/infrastructure/follow_followee_ids_repo_pg_integration_test.go` | 只返回有效关系、关注时间倒序、limit、取关 / 再关注、走部分索引 |
 
-## 十、分阶段交付
+## 十、被关注通知（#219）
+
+关注成功后在消息中心给被关注的人发「XX 关注了你」（`notice_type = 12`）。规则与点赞通知一致：每个关注者对同一接收人一条，
+取关后再关注复用同一条并重新置为未读，取关不撤回。通知的事件格式、消费端落库与读侧行为见 [notice-design.md](notice-design.md) 第九节，
+前端对接见 [notice-frontend-api.md](notice-frontend-api.md)。本节只记 follow 域这一侧：
+
+| 项 | 实现 |
+|---|---|
+| 触发点 | `application/relation.go` 的 `Follow`：仓储 `RelationRepository.Follow` 返回 `changed == true`（关系这次真的从「未关注」变为「已关注」，事务已提交）才调用 `notifyFollowed` |
+| 不发的情况 | 重复关注（`changed == false`）、取关、关注被拒绝（关注自己 / 目标不存在 / 达到上限）或写库失败 |
+| 端口与实现 | `domain/event_publisher.go` 的 `FollowEventPublisher.PublishFollowed` → `infrastructure/follow_event_publisher.go`（`redpanda.PublishNotificationEvent`，事件自带 `recipient_id`） |
+| 装配 | `NewFollowService` 的最后一个参数；`composition/wire_follow.go` 的 `newFollowService` 传 Redpanda 实现，`newFollowServiceWithEvents` 供集成测试传空实现 |
+| 失败语义 | best-effort：`application/notify.go` 只记日志，关注接口照常返回（与点赞通知一样没有 outbox） |
+| 机器人账号 | 被关注的是 AI 机器人时照常发、照常落库（通知链路对所有类型都不过滤机器人接收人） |
+| 表结构 / 配置 | 不改。`domains.notification` 的去重索引对没有帖子 / 评论的通知天然是「每个关注者一行」；列注释补 12 见 #229 |
+
+测试：`application/notify_test.go`（只在 `changed` 时发布、发布失败不影响返回、取关不发布）；
+`composition/follow_notice_integration_test.go`（真实 PG / Redis / Redpanda + 通知 consumer：首次关注 1 行未读、取关再关注仍 1 行并重新未读、重复关注不新增、SSE 推送、机器人接收人）。
+`composition` 里其他调用 `Follow` 但不关心通知的集成测试用 `newFollowServiceWithEvents(..., noFollowEvents{})`：
+同进程的通知 consumer 会在用例清理之后才把事件落库，真发事件会在共享开发库留下通知行。
+
+## 十一、分阶段交付
 
 | 阶段 | issue | 内容 |
 |---|---|---|
 | P0 | #217（本文 §一 ~ §七） | 关注 / 取关、关系状态、计数、上限、重算方法 |
 | P1 | #218（本文 §八） | 关注 / 粉丝 / 互关列表、批量关系查询、列表隐私开关 |
-| P1 | #219 | 被关注通知 |
+| P1 | #219 | 被关注通知（第十节） |
 | P1 | #220 | 首页关注 tab 合并关注用户的帖子（第九节） |
