@@ -23,7 +23,7 @@
 | [circle.md](circle.md) | 圈子 | `category`、`circle`、`circle_member`、`circle_invite_link`、`circle_invite_email` |
 | [post.md](post.md) | 帖子 | `post` |
 | [comment.md](comment.md) | 评论 | `comment`、`comment_like` |
-| [interaction.md](interaction.md) | 帖子互动/流水 | `post_like`、`post_collect`、`post_view_history`、`post_interaction` |
+| [interaction.md](interaction.md) | 帖子互动/流水 | `post_like`、`post_collect`、`post_share`、`post_view_history`、`post_interaction` |
 | [ai-agent.md](ai-agent.md) | AI 回复机器人 | `ai_agent`、`ai_agent_reply_log` |
 | [notice.md](notice.md) | 消息中心 | `notification` |
 | [follow.md](follow.md) | 用户关注 | `user_follow`、`user_follow_stat` |

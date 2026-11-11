@@ -31,6 +31,7 @@ CREATE TABLE domains.post (
     comment_count INT NOT NULL DEFAULT 0, -- 评论数
     like_count INT NOT NULL DEFAULT 0,    -- 点赞数
     collect_count INT NOT NULL DEFAULT 0, -- 收藏数
+    share_count INT NOT NULL DEFAULT 0,   -- 分享数(#232,迁移 20261111134224 追加)
     hot INT NOT NULL DEFAULT 0,   -- 热度分
 
     -- 5. 运营与状态标记
@@ -60,6 +61,7 @@ COMMENT ON COLUMN domains.post.summary IS '纯文本摘要';
 COMMENT ON COLUMN domains.post.content IS '正文内容(Text)';
 COMMENT ON COLUMN domains.post.media_extra IS '媒体扩展信息(JSONB存储图片/视频)';
 COMMENT ON COLUMN domains.post.view_count IS '浏览数';
+COMMENT ON COLUMN domains.post.share_count IS '分享数(去重后的分享人数;Redis post:sharecnt 为读路径真值,本列由帖子统计消费者按 post_share 批量重算,不进 ES)';
 COMMENT ON COLUMN domains.post.is_pinned IS '是否置顶';
 COMMENT ON COLUMN domains.post.is_essence IS '是否加精';
 COMMENT ON COLUMN domains.post.status IS '状态:1=正常,2=审核中,3=驳回,4=屏蔽';

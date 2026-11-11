@@ -148,11 +148,13 @@ func StartStatisticsConsumerWithRetry() {
 //
 // 评论数不累加增量（#130）：CommentDirty 只标记「该帖评论有变化」，落库时按 domains.comment 明细重算。
 // 重算与消息条数、重投次数无关，flush 失败重试、提交 offset 前进程被杀导致的重投都不会重复计数。
+// 分享数同理（#232）：ShareDirty 只标记「该帖有新分享」，落库时按 domains.post_share 行数重算。
 type postStatDelta struct {
 	ViewCount    int64
 	CommentDirty bool
 	LikeCount    int64
 	CollectCount int64
+	ShareDirty   bool
 }
 
 func (d *postStatDelta) addDelta(o *postStatDelta) {
@@ -160,10 +162,11 @@ func (d *postStatDelta) addDelta(o *postStatDelta) {
 	d.CommentDirty = d.CommentDirty || o.CommentDirty
 	d.LikeCount += o.LikeCount
 	d.CollectCount += o.CollectCount
+	d.ShareDirty = d.ShareDirty || o.ShareDirty
 }
 
 func (d *postStatDelta) empty() bool {
-	return d.ViewCount == 0 && !d.CommentDirty && d.LikeCount == 0 && d.CollectCount == 0
+	return d.ViewCount == 0 && !d.CommentDirty && d.LikeCount == 0 && d.CollectCount == 0 && !d.ShareDirty
 }
 
 // postStatsBuf post_id -> 累计变化量
@@ -188,6 +191,8 @@ func (b postStatsBuf) add(msg PostStatisticsMessage) {
 		b.get(msg.PostID).LikeCount += msg.Value
 	case StatisticsTypePostCollect:
 		b.get(msg.PostID).CollectCount += msg.Value
+	case StatisticsTypePostShare:
+		b.get(msg.PostID).ShareDirty = true
 	default:
 		logger.Log.Warn(fmt.Sprintf("Unknown post statistics type: %s", msg.Type))
 	}
@@ -223,50 +228,66 @@ type postStatsRow struct {
 	CommentDirty bool      `json:"comment_dirty"`
 	LikeDelta    int64     `json:"like_delta"`
 	CollectDelta int64     `json:"collect_delta"`
+	ShareDirty   bool      `json:"share_dirty"`
 }
 
 // postStatsApplySQL 批量更新帖子统计：view / like / collect 累加增量，comment_count 对标记过的帖子按明细重算
 // （可见评论 + 回复行数，谓词复用 commentdomain.VisibleCondition，与评论列表口径一致，#208）。
 // 按行计数：根评论不可见时其下可见回复仍计入（与根评论删除的既有口径一致）。
 // 子查询里的 deleted / status 不带别名，按最内层作用域解析到 domains.comment（v 没有这两列）。
+// share_count 对标记过的帖子按 domains.post_share 行数重算（#232，分享不可撤销，行数即去重后的分享人数）。
 // 重算结果与当前值相同且没有其他增量的行不写：不产生新的行版本，也就不产生 WAL / CDC 事件（#130）。
 const postStatsApplySQL = `
 WITH v AS (
 	SELECT * FROM jsonb_to_recordset(?::jsonb)
-	AS v(post_id uuid, view_delta BIGINT, comment_dirty BOOLEAN, like_delta BIGINT, collect_delta BIGINT)
+	AS v(post_id uuid, view_delta BIGINT, comment_dirty BOOLEAN, like_delta BIGINT, collect_delta BIGINT, share_dirty BOOLEAN)
 ),
 cc AS (
 	SELECT v.post_id,
 	       (SELECT count(*) FROM domains.comment c WHERE c.post_id = v.post_id AND ` + commentdomain.VisibleCondition + `) AS cnt
 	FROM v WHERE v.comment_dirty
+),
+sc AS (
+	SELECT v.post_id,
+	       (SELECT count(*) FROM domains.post_share s WHERE s.post_id = v.post_id) AS cnt
+	FROM v WHERE v.share_dirty
 )
 UPDATE domains.post p
 SET view_count = LEAST(GREATEST(p.view_count + v.view_delta, 0), 1000000000),
     comment_count = COALESCE(cc.cnt, p.comment_count),
     like_count = GREATEST(p.like_count + v.like_delta, 0),
     collect_count = GREATEST(p.collect_count + v.collect_delta, 0),
+    share_count = COALESCE(sc.cnt, p.share_count),
     update_time = CURRENT_TIMESTAMP
-FROM v LEFT JOIN cc ON cc.post_id = v.post_id
+FROM v LEFT JOIN cc ON cc.post_id = v.post_id LEFT JOIN sc ON sc.post_id = v.post_id
 WHERE p.id = v.post_id AND p.deleted = 0
   AND (v.view_delta <> 0 OR v.like_delta <> 0 OR v.collect_delta <> 0
-       OR p.comment_count <> COALESCE(cc.cnt, p.comment_count))`
+       OR p.comment_count <> COALESCE(cc.cnt, p.comment_count)
+       OR p.share_count <> COALESCE(sc.cnt, p.share_count))`
 
-// persistPostStats 落库帖子统计，成功后校准 Redis 中的评论数缓存。
+// persistPostStats 落库帖子统计，成功后校准 Redis 中的评论数 / 分享数缓存。
 func persistPostStats(deltas postStatsBuf) error {
-	commentIDs, err := batchUpdatePostStats(deltas)
+	recount, err := batchUpdatePostStats(deltas)
 	if err != nil {
 		return err
 	}
-	reconcilePostCommentCounts(commentIDs)
+	reconcilePostCommentCounts(recount.comment)
+	reconcilePostShareCounts(recount.share)
 	return nil
 }
 
+// postStatsRecount 本批按明细重算过的帖子 ID（落库后校准缓存用）。
+type postStatsRecount struct {
+	comment []uuid.UUID
+	share   []uuid.UUID
+}
+
 // batchUpdatePostStats 批量更新帖子统计计数到数据库（按 id 升序取锁，见 batch_lock.go）。
-// 返回本批重算了 comment_count 的帖子 ID（供落库后校准缓存）。
-func batchUpdatePostStats(deltas postStatsBuf) ([]uuid.UUID, error) {
+// 返回本批重算了 comment_count / share_count 的帖子 ID（供落库后校准缓存）。
+func batchUpdatePostStats(deltas postStatsBuf) (postStatsRecount, error) {
 	rows := make([]postStatsRow, 0, len(deltas))
 	ids := make([]uuid.UUID, 0, len(deltas))
-	var commentIDs []uuid.UUID
+	var recount postStatsRecount
 	for postID, delta := range deltas {
 		if delta.empty() {
 			continue
@@ -277,20 +298,24 @@ func batchUpdatePostStats(deltas postStatsBuf) ([]uuid.UUID, error) {
 			CommentDirty: delta.CommentDirty,
 			LikeDelta:    delta.LikeCount,
 			CollectDelta: delta.CollectCount,
+			ShareDirty:   delta.ShareDirty,
 		})
 		ids = append(ids, postID)
 		if delta.CommentDirty {
-			commentIDs = append(commentIDs, postID)
+			recount.comment = append(recount.comment, postID)
+		}
+		if delta.ShareDirty {
+			recount.share = append(recount.share, postID)
 		}
 	}
 	if len(rows) == 0 {
-		return nil, nil
+		return recount, nil
 	}
 	sortByID(rows, func(r postStatsRow) uuid.UUID { return r.PostID })
 
 	jsonBytes, err := json.Marshal(rows)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal post stats update rows: %w", err)
+		return postStatsRecount{}, fmt.Errorf("failed to marshal post stats update rows: %w", err)
 	}
 
 	err = pgsql.DB.Transaction(func(tx *gorm.DB) error {
@@ -305,9 +330,9 @@ func batchUpdatePostStats(deltas postStatsBuf) ([]uuid.UUID, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return postStatsRecount{}, err
 	}
-	return commentIDs, nil
+	return recount, nil
 }
 
 // reconcilePostCommentCounts 落库提交后把 Redis post:stats 中低于 PG 的 comment_count 抬回 PG 值。
@@ -337,6 +362,35 @@ func reconcilePostCommentCounts(postIDs []uuid.UUID) {
 	}
 	if fixed > 0 {
 		logger.Log.Info(fmt.Sprintf("Reconciled comment_count of %d cached post stats", fixed))
+	}
+}
+
+// reconcilePostShareCounts 落库提交后把 Redis post:sharecnt 中低于 PG 的分享数抬回 PG 值（#232，口径同上）：
+// 分享数缓存冷启动按 post_share 行数 SET NX 回种，与并发首次分享交错时可能少记，这里补回。best-effort。
+func reconcilePostShareCounts(postIDs []uuid.UUID) {
+	ids := sortedIDs(postIDs)
+	if len(ids) == 0 {
+		return
+	}
+	var rows []struct {
+		ID         uuid.UUID
+		ShareCount int64
+	}
+	if err := pgsql.DB.Table("domains.post").Select("id, share_count").
+		Where("id IN ? AND deleted = 0", ids).Scan(&rows).Error; err != nil {
+		logger.Log.Warn("Failed to load post share_count for cache reconcile: " + err.Error())
+		return
+	}
+	counts := make(map[uuid.UUID]int64, len(rows))
+	for _, r := range rows {
+		counts[r.ID] = r.ShareCount
+	}
+	fixed, err := redispkg.ReconcilePostShareCounts(counts)
+	if err != nil {
+		logger.Log.Warn("Failed to reconcile post share_count: " + err.Error())
+	}
+	if fixed > 0 {
+		logger.Log.Info(fmt.Sprintf("Reconciled share_count of %d cached posts", fixed))
 	}
 }
 
