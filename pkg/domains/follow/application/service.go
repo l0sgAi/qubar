@@ -1,6 +1,7 @@
 // Package application 是 follow 领域的应用层：关注 / 取关、关系状态、关注数 / 粉丝数。
 //
 // 文件按职责拆分：relation.go（关注 / 取关）、stats.go（计数与关系查询）、
+// list.go + list_cursor.go（关注 / 粉丝 / 互关列表、批量关系查询、列表可见性）、
 // followee_ids.go（导出关注 ID 列表，供首页关注 tab 用）。
 // FollowService 由各文件里的小接口组合而成；新增能力 = 新增文件 + 在 FollowService 里加一行。
 // 设计见 docs/follow-design.md。
@@ -25,6 +26,7 @@ type FollowService interface {
 	RelationService
 	StatsService
 	FolloweeIDsService
+	ListService
 }
 
 type followServiceImpl struct {
@@ -34,6 +36,8 @@ type followServiceImpl struct {
 	// maxFollowing 每次关注时读取关注上限（配置可热更新，所以是函数而不是固定值）。
 	maxFollowing func() int
 	followees    domain.FolloweeIDRepository
+	// lists 列表能力的依赖（list.go）。
+	lists ListDeps
 }
 
 // NewFollowService 构造 FollowService。maxFollowing 返回当前生效的关注上限（≥ 1）。
@@ -43,8 +47,12 @@ func NewFollowService(
 	users UserChecker,
 	maxFollowing func() int,
 	followees domain.FolloweeIDRepository,
+	lists ListDeps,
 ) FollowService {
-	return &followServiceImpl{relations: relations, stats: stats, users: users, maxFollowing: maxFollowing, followees: followees}
+	return &followServiceImpl{
+		relations: relations, stats: stats, users: users, maxFollowing: maxFollowing,
+		followees: followees, lists: lists,
+	}
 }
 
 // requireUser 目标用户不存在 / 已禁用 / 已删除时返回 domain.ErrUserNotFound。

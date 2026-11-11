@@ -36,6 +36,10 @@ type fakeSvc struct {
 	err                  error
 	gotViewer, gotTarget uuid.UUID
 	calls                int
+	// 列表 / 批量关系接口的入参（list_handler_test.go）
+	gotCursor  string
+	gotSize    int
+	gotTargets []uuid.UUID
 }
 
 func (f *fakeSvc) record(viewer, target uuid.UUID) {

@@ -25,7 +25,7 @@ func (r *fakeFolloweeIDs) ListFolloweeIDs(_ context.Context, followerID uuid.UUI
 }
 
 func newFolloweeSvc(repo *fakeFolloweeIDs, limit int) FollowService {
-	return NewFollowService(nil, nil, nil, func() int { return limit }, repo)
+	return NewFollowService(nil, nil, nil, func() int { return limit }, repo, ListDeps{})
 }
 
 // 上限取当前生效的 follow.max_following，结果原样返回（顺序由仓储决定）。

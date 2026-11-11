@@ -31,7 +31,7 @@ func setupFollow(t *testing.T) *followEnv {
 	db := testkit.PG(t)
 	testkit.Redis(t)
 	deps := NewDeps()
-	return &followEnv{db: db, svc: newFollowService(deps, userapp.NewUserFacade(newUserService(deps)))}
+	return &followEnv{db: db, svc: newFollowService(deps, userapp.NewUserFacade(newUserService(deps)), newUserSettingService(deps))}
 }
 
 // insertUser 插入一个用户（role 0=普通 / 2=AI 机器人；status 1=正常；deleted 0=未删除），注册行、缓存与关注数据的清理。

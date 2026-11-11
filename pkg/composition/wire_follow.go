@@ -12,9 +12,9 @@ import (
 
 // newFollowService 构造 FollowService。
 //
-// user 是只读跨域依赖（校验目标用户存在且正常），直接构造注入；
+// user 是只读跨域依赖（校验目标用户存在且正常、列表项的简要信息、列表隐私开关），直接构造注入；
 // 关注上限每次从 conf.Config 读取，配置热更新后立即生效。
-func newFollowService(deps *Deps, userFacade userapp.UserFacade) followapp.FollowService {
+func newFollowService(deps *Deps, userFacade userapp.UserFacade, userSettings userapp.SettingService) followapp.FollowService {
 	db := deps.DB.Get()
 	return followapp.NewFollowService(
 		followinfra.NewRelationRepository(db),
@@ -22,6 +22,11 @@ func newFollowService(deps *Deps, userFacade userapp.UserFacade) followapp.Follo
 		&followUserChecker{delegate: userFacade},
 		func() int { return conf.Config.Follow.MaxFollowingOrDefault() },
 		followinfra.NewFolloweeIDRepository(db),
+		followapp.ListDeps{
+			Repo:       followinfra.NewListRepository(db),
+			Users:      &followUserBriefReader{delegate: userFacade},
+			Visibility: &followListVisibilityReader{delegate: userSettings},
+		},
 	)
 }
 

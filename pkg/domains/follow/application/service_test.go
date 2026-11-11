@@ -103,7 +103,7 @@ func (u *fakeUsers) Exists(_ context.Context, id uuid.UUID) (bool, error) {
 func newSvc(limit int) (FollowService, *fakeRepo, *fakeUsers) {
 	repo := newFakeRepo()
 	users := &fakeUsers{missing: map[uuid.UUID]bool{}}
-	return NewFollowService(repo, repo, users, func() int { return limit }, nil), repo, users
+	return NewFollowService(repo, repo, users, func() int { return limit }, nil, ListDeps{Visibility: &fakeVisibility{}}), repo, users
 }
 
 var errBoom = errors.New("boom")
