@@ -10,6 +10,7 @@ import (
 	"errors"
 	"testing"
 
+	followapp "interestBar/pkg/domains/follow/application"
 	messageapp "interestBar/pkg/domains/message/application"
 	messagedomain "interestBar/pkg/domains/message/domain"
 	userapp "interestBar/pkg/domains/user/application"
@@ -22,8 +23,9 @@ import (
 )
 
 type messageEnv struct {
-	db  *gorm.DB
-	svc messageapp.MessageService
+	db     *gorm.DB
+	svc    messageapp.MessageService
+	follow followapp.FollowService
 }
 
 func setupMessage(t *testing.T) *messageEnv {
@@ -32,7 +34,10 @@ func setupMessage(t *testing.T) *messageEnv {
 	testkit.Redis(t)
 	deps := NewDeps()
 	userSvc := newUserService(deps)
-	return &messageEnv{db: db, svc: newMessageService(deps, userSvc, userapp.NewUserFacade(userSvc))}
+	userFacade := userapp.NewUserFacade(userSvc)
+	// 关注通知不在这里验证，发布器用空实现（原因见 follow_integration_test.go 的 setupFollow）。
+	followSvc := newFollowServiceWithEvents(deps, userFacade, newUserSettingService(deps), noFollowEvents{})
+	return &messageEnv{db: db, svc: newMessageService(deps, userSvc, userFacade, followSvc), follow: followSvc}
 }
 
 // insertUser 插入一个用户（role 0=普通 / 2=AI 机器人；status 1=正常；deleted 0=未删除），注册行、缓存与私信数据的清理。
@@ -47,6 +52,8 @@ func (e *messageEnv) insertUser(t *testing.T, name string, role, status, deleted
 	testkit.CleanupRows(t, "domains.conversation", "user_low", id)
 	testkit.CleanupRows(t, "domains.conversation_member", "user_id", id)
 	testkit.CleanupRows(t, "domains.message", "sender_id", id)
+	testkit.CleanupRows(t, "domains.user_follow", "follower_id", id)
+	testkit.CleanupRows(t, "domains.user_follow_stat", "user_id", id)
 	testkit.CleanupKeys(t, redispkg.GetUserInfoKey(id))
 	return id
 }

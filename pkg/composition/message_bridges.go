@@ -1,9 +1,12 @@
-// Package composition 的 message_bridges.go：注入 message（私信）领域的跨域桥接器（user → message：接收方状态、对方简要信息）。
+// Package composition 的 message_bridges.go：注入 message（私信）领域的跨域桥接器
+// （user → message：接收方状态、对方简要信息；follow → message：未关注发送限制的关注关系）。
 package composition
 
 import (
 	"context"
 
+	followapp "interestBar/pkg/domains/follow/application"
+	followdomain "interestBar/pkg/domains/follow/domain"
 	messageapp "interestBar/pkg/domains/message/application"
 	userapp "interestBar/pkg/domains/user/application"
 
@@ -62,4 +65,23 @@ func (r *messageUserBriefReader) GetBriefs(ctx context.Context, userIDs []uuid.U
 		}
 	}
 	return out, nil
+}
+
+// ===== follow → message（未关注发送限制，#239）=====
+
+// messageFollowChecker 把 follow.application.FollowService 适配为 message.application.FollowChecker。
+type messageFollowChecker struct {
+	delegate followapp.FollowService
+}
+
+var _ messageapp.FollowChecker = (*messageFollowChecker)(nil)
+
+// IsFollowing 复用 FollowService.GetRelations（以 followerID 为查看者查 followeeID，直接读关系行，不走缓存）：
+// 关系值的「我关注了对方」位即 followerID 关注了 followeeID。
+func (c *messageFollowChecker) IsFollowing(ctx context.Context, followerID, followeeID uuid.UUID) (bool, error) {
+	vo, err := c.delegate.GetRelations(ctx, followerID, []uuid.UUID{followeeID})
+	if err != nil {
+		return false, err
+	}
+	return vo.Relations[followeeID.String()]&followdomain.RelationFollowing != 0, nil
 }

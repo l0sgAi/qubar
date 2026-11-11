@@ -34,15 +34,19 @@ type fakeRepo struct {
 	directCalls int
 	gotPeer     uuid.UUID
 	gotPreview  int
+	gotSendLim  int
+	remaining   *int
 }
 
-func (f *fakeRepo) SendDirect(_ context.Context, sender, _ uuid.UUID, msgType int16, content string) (*domain.Message, error) {
+func (f *fakeRepo) SendDirect(_ context.Context, sender, _ uuid.UUID, msgType int16, content string, limit int) (*domain.SendResult, error) {
 	f.sendCalls++
 	f.gotContent = content
+	f.gotSendLim = limit
 	if f.sendErr != nil {
 		return nil, f.sendErr
 	}
-	return &domain.Message{ID: sharedomain.NewID(), ConversationID: sharedomain.NewID(), SenderID: sender, MsgType: msgType, Content: content}, nil
+	msg := &domain.Message{ID: sharedomain.NewID(), ConversationID: sharedomain.NewID(), SenderID: sender, MsgType: msgType, Content: content}
+	return &domain.SendResult{Message: msg, Remaining: f.remaining}, nil
 }
 
 func (f *fakeRepo) GetMember(context.Context, uuid.UUID, uuid.UUID) (*domain.ConversationMember, error) {
@@ -90,6 +94,20 @@ func (f fakeRecipients) CheckRecipient(context.Context, uuid.UUID) (RecipientSta
 	return f.status, f.err
 }
 
+// fakeFollows 关注关系桩：followed 为 true 时任何人都关注了任何人。
+type fakeFollows struct {
+	followed bool
+	err      error
+	gotPair  *[2]uuid.UUID
+}
+
+func (f fakeFollows) IsFollowing(_ context.Context, follower, followee uuid.UUID) (bool, error) {
+	if f.gotPair != nil {
+		*f.gotPair = [2]uuid.UUID{follower, followee}
+	}
+	return f.followed, f.err
+}
+
 type fakeUsers struct {
 	briefs map[uuid.UUID]UserBrief
 	gotIDs []uuid.UUID
@@ -126,7 +144,7 @@ func TestSend_ValidationAndRecipient(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := &fakeRepo{}
-			svc := NewMessageService(repo, tc.recipient, &fakeUsers{})
+			svc := NewMessageService(repo, tc.recipient, &fakeUsers{}, fakeFollows{})
 			vo, err := svc.Send(t.Context(), me, tc.receiver, tc.content)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("err = %v, want %v", err, tc.wantErr)
@@ -158,7 +176,7 @@ func TestListConversations_PeerBackfillAndCursor(t *testing.T) {
 	entries[1].PeerID = gone
 	repo := &fakeRepo{entries: entries}
 	users := &fakeUsers{briefs: map[uuid.UUID]UserBrief{active: {ID: active.String(), Username: "alice"}}}
-	svc := NewMessageService(repo, fakeRecipients{}, users)
+	svc := NewMessageService(repo, fakeRecipients{}, users, fakeFollows{})
 
 	vo, err := svc.ListConversations(t.Context(), me, "", 2)
 	if err != nil {
@@ -206,7 +224,7 @@ func TestListMessages_MembershipClearedAndCursor(t *testing.T) {
 	me, conv := sharedomain.NewID(), sharedomain.NewID()
 
 	repo := &fakeRepo{memberErr: domain.ErrConversationNotFound}
-	svc := NewMessageService(repo, fakeRecipients{}, &fakeUsers{})
+	svc := NewMessageService(repo, fakeRecipients{}, &fakeUsers{}, fakeFollows{})
 	if _, err := svc.ListMessages(t.Context(), me, conv, "", 10); !errors.Is(err, domain.ErrConversationNotFound) {
 		t.Fatalf("non-member err = %v", err)
 	}
@@ -217,7 +235,7 @@ func TestListMessages_MembershipClearedAndCursor(t *testing.T) {
 		msgs[len(msgs)-1-i] = domain.Message{ID: sharedomain.NewID(), ConversationID: conv, SenderID: me, Content: "m"}
 	}
 	repo = &fakeRepo{member: &domain.ConversationMember{ClearedMessageID: &cleared, LastReadMessageID: &lastRead}, msgs: msgs}
-	svc = NewMessageService(repo, fakeRecipients{}, &fakeUsers{})
+	svc = NewMessageService(repo, fakeRecipients{}, &fakeUsers{}, fakeFollows{})
 	vo, err := svc.ListMessages(t.Context(), me, conv, "", 2)
 	if err != nil {
 		t.Fatal(err)
@@ -277,7 +295,7 @@ func TestGetConversationWithUser(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			users := &fakeUsers{briefs: tc.briefs}
-			vo, err := NewMessageService(tc.repo, fakeRecipients{}, users).GetConversationWithUser(t.Context(), me, tc.peer)
+			vo, err := NewMessageService(tc.repo, fakeRecipients{}, users, fakeFollows{}).GetConversationWithUser(t.Context(), me, tc.peer)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("err = %v, want %v", err, tc.wantErr)
 			}

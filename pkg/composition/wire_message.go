@@ -2,6 +2,7 @@
 package composition
 
 import (
+	followapp "interestBar/pkg/domains/follow/application"
 	messageapp "interestBar/pkg/domains/message/application"
 	messageinfra "interestBar/pkg/domains/message/infrastructure"
 	messagehttp "interestBar/pkg/domains/message/interfaces/http"
@@ -11,12 +12,16 @@ import (
 
 // newMessageService 构造 MessageService。
 //
-// user 是只读跨域依赖（接收方状态校验、会话列表对方简要信息），构造时直接注入。
-func newMessageService(deps *Deps, userSvc userapp.UserService, userFacade userapp.UserFacade) messageapp.MessageService {
+// user 是只读跨域依赖（接收方状态校验、会话列表对方简要信息），follow 是只读跨域依赖（#239 未关注发送限制），
+// 都在构造时直接注入。
+func newMessageService(
+	deps *Deps, userSvc userapp.UserService, userFacade userapp.UserFacade, followSvc followapp.FollowService,
+) messageapp.MessageService {
 	return messageapp.NewMessageService(
 		messageinfra.NewRepository(deps.DB.Get()),
 		&messageRecipientChecker{delegate: userSvc},
 		&messageUserBriefReader{delegate: userFacade},
+		&messageFollowChecker{delegate: followSvc},
 	)
 }
 

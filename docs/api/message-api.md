@@ -1,9 +1,9 @@
 # 私信 API 对接文档（前端）
 
 > **功能**：一对一文本私信：发送、会话列表、消息历史、标记已读、删除会话。
-> **对应实现**：`pkg/domains/message/`（`application/send.go`、`conversation.go`、`history.go`，`interfaces/http/handler.go`），issue #238；按对方查会话 #246。
+> **对应实现**：`pkg/domains/message/`（`application/send.go`、`conversation.go`、`history.go`，`interfaces/http/handler.go`），issue #238；按对方查会话 #246；未关注发送限制 #239（`application/send_limit.go`）。
 > 设计见 [message-design.md](../message-design.md)。
-> **状态**：已交付私信核心（#238）、按对方用户 ID 查会话（#246）。未关注发送限制（#239）、私信权限设置（#240）、未读总数与实时推送（#241）、频率限制（#242）后续提供。
+> **状态**：已交付私信核心（#238）、按对方用户 ID 查会话（#246）、未关注发送限制（#239）。私信权限设置（#240）、未读总数与实时推送（#241）、频率限制（#242）后续提供。
 
 ---
 
@@ -18,7 +18,9 @@
 5. **进入聊天页 / 收到新消息时**：调 `POST /message/conversations/:conversation_id/read` 清零未读。
 6. **删除会话**：`DELETE /message/conversations/:conversation_id`，只对自己隐藏。对方再发消息时会话会重新出现，只能看到删除之后的消息。
 7. AI 机器人账号不能收私信（403），机器人主页不要显示「私信」按钮。
-8. 当前没有实时推送：新消息需要前端轮询会话列表或进入页面时刷新（#241 会提供）。
+8. **未关注发送限制（#239）**：对方没关注你、也没回复过你时，你在这个会话最多发 5 条。发送响应的 `remaining_count` 是还能发几条
+   （`null` = 不受限制）；第 6 条返回 403 `dm limit reached`，请提示「对方关注你或回复后可继续发送」。
+9. 当前没有实时推送：新消息需要前端轮询会话列表或进入页面时刷新（#241 会提供）。
 
 ---
 
@@ -59,7 +61,11 @@
 { "receiver_id": "019a5d2e-7c41-7b0e-9f3a-2f6c1d8e4b10", "content": "你好" }
 ```
 
-**响应 `data`**：`MessageVO`（见 §1）。
+**响应 `data`**：`MessageVO`（见 §1）的全部字段，外加 `remaining_count`（#239）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `remaining_count` | int \| null | 未关注发送限制生效时，这条发出后在该会话**还能再发**的条数（`4`→`0`；`0` 表示再发会被拒绝）；**不受限制时为 `null`**（对方关注了你，或对方在会话里发过消息） |
 
 ```json
 {
@@ -71,10 +77,18 @@
     "sender_id": "019a5d2e-7c41-7b0e-9f3a-2f6c1d8e4b11",
     "msg_type": 1,
     "content": "你好",
-    "create_time": "2026-11-11T14:30:00.123456+08:00"
+    "create_time": "2026-11-11T14:30:00.123456+08:00",
+    "remaining_count": 4
   }
 }
 ```
+
+**未关注发送限制规则（#239）**
+
+- 对方**没关注你**，且对方**从未在这个会话里发过消息**：你在这个会话累计最多发 5 条。
+- 对方关注你后立即解除；对方回复过一次后**永久**解除（之后取关也不再限制）。
+- 对方取关你且从未回复：恢复限制，按你在该会话累计已发的条数算（已发满 5 条就不能再发）。
+- 消息字段仍平铺在 `data` 顶层，旧客户端忽略 `remaining_count` 即可。
 
 **错误**
 
@@ -86,6 +100,7 @@
 | 400 | `message content is too long: at most 2000 characters` | 正文超过上限（数字为当前上限） |
 | 401 | `Token not found` | 未登录 |
 | 403 | `This user cannot receive private messages` | 接收方是 AI 机器人账号 |
+| 403 | `dm limit reached` | 未关注发送限制：对方没关注你也没回复过你，你在该会话已发满 5 条。提示「对方关注你或回复后可继续发送」 |
 | 404 | `No such user` | 接收方不存在、已禁用或已删除 |
 
 ### 2.2 GET /message/conversations — 会话列表

@@ -59,7 +59,7 @@ CREATE INDEX idx_conversation_member_list ON domains.conversation_member (user_i
 | `last_read_message_id` | 标记已读 / 删除会话时置为 `last_message_id`。NULL = 从未读过 |
 | `unread_count` | 对方每发一条 +1，标记已读 / 删除会话清零。自己发消息不改自己的未读 |
 | `cleared_message_id` | 删除会话时置为当时的 `last_message_id`。本成员只能看到 ID 大于它的消息；`last_message_id` 不大于它时会话不在列表里，对方再发消息即重现 |
-| `sent_count` / `first_sent_time` | 本成员在该会话的发送统计。「对方首条消息时间」= 对方成员行的 `first_sent_time` |
+| `sent_count` / `first_sent_time` | 本成员在该会话的发送统计。「对方首条消息时间」= 对方成员行的 `first_sent_time`。#239 未关注发送限制在发送事务内锁会话行后读取：对方 `first_sent_time` 非 NULL（回复过）永久解除，否则 `sent_count ≥ 5` 拒绝（见 [message-design.md](../message-design.md) 第十节） |
 | `deleted` | 单聊恒为 0；删除会话用 `cleared_message_id`，不改本列 |
 
 ## 消息表
