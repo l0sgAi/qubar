@@ -333,3 +333,27 @@ func (r *messageRepoPG) updateMember(ctx context.Context, sql string, conversati
 	}
 	return nil
 }
+
+// 只读的未关注发送限制状态（#240 的 can_send）：与 sqlSendLimitState 同一口径，但按双方 ID 命中 uk_conversation_pair、不加锁。
+// 没有会话时无行。
+const sqlGetSendLimitState = `
+SELECT COALESCE(s.sent_count, 0) AS sent_count, (r.first_sent_time IS NOT NULL) AS peer_replied
+FROM domains.conversation c
+LEFT JOIN domains.conversation_member s ON s.conversation_id = c.id AND s.user_id = @sender
+LEFT JOIN domains.conversation_member r ON r.conversation_id = c.id AND r.user_id = @receiver
+WHERE c.user_low = @low AND c.user_high = @high`
+
+// GetSendLimitState 见 domain.Repository。
+func (r *messageRepoPG) GetSendLimitState(ctx context.Context, senderID, receiverID uuid.UUID) (*domain.SendLimitState, error) {
+	low, high := domain.OrderPair(senderID, receiverID)
+	var rows []domain.SendLimitState
+	if err := r.db.WithContext(ctx).Raw(sqlGetSendLimitState, map[string]any{
+		"sender": senderID, "receiver": receiverID, "low": low, "high": high,
+	}).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return &domain.SendLimitState{}, nil
+	}
+	return &rows[0], nil
+}

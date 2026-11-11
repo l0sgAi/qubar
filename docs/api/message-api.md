@@ -1,9 +1,9 @@
 # 私信 API 对接文档（前端）
 
 > **功能**：一对一文本私信：发送、会话列表、消息历史、标记已读、删除会话。
-> **对应实现**：`pkg/domains/message/`（`application/send.go`、`conversation.go`、`history.go`，`interfaces/http/handler.go`），issue #238；按对方查会话 #246；未关注发送限制 #239（`application/send_limit.go`）。
+> **对应实现**：`pkg/domains/message/`（`application/send.go`、`conversation.go`、`history.go`，`interfaces/http/handler.go`），issue #238；按对方查会话 #246；未关注发送限制 #239（`application/send_limit.go`）；私信权限设置 #240（`application/permission.go`）。
 > 设计见 [message-design.md](../message-design.md)。
-> **状态**：已交付私信核心（#238）、按对方用户 ID 查会话（#246）、未关注发送限制（#239）。私信权限设置（#240）、未读总数与实时推送（#241）、频率限制（#242）后续提供。
+> **状态**：已交付私信核心（#238）、按对方用户 ID 查会话（#246）、未关注发送限制（#239）、私信权限设置（#240）。未读总数与实时推送（#241）、频率限制（#242）后续提供。
 
 ---
 
@@ -20,7 +20,10 @@
 7. AI 机器人账号不能收私信（403），机器人主页不要显示「私信」按钮。
 8. **未关注发送限制（#239）**：对方没关注你、也没回复过你时，你在这个会话最多发 5 条。发送响应的 `remaining_count` 是还能发几条
    （`null` = 不受限制）；第 6 条返回 403 `dm limit reached`，请提示「对方关注你或回复后可继续发送」。
-9. 当前没有实时推送：新消息需要前端轮询会话列表或进入页面时刷新（#241 会提供）。
+9. **私信权限设置（#240）**：用户在 `PUT /user/settings` 的 `dm_permission` 里设置谁可以给自己发私信。进入用户主页 / 聊天页时
+   看 `GET /message/conversations/with/:user_id` 的 `can_send`：`false` 时置灰输入框并按 `cannot_send_reason` 提示（枚举见 §2.2.1），不要等发送失败才提示。
+   发送时被拒同样返回 403（见 §2.1 错误表）。
+10. 当前没有实时推送：新消息需要前端轮询会话列表或进入页面时刷新（#241 会提供）。
 
 ---
 
@@ -90,6 +93,21 @@
 - 对方取关你且从未回复：恢复限制，按你在该会话累计已发的条数算（已发满 5 条就不能再发）。
 - 消息字段仍平铺在 `data` 顶层，旧客户端忽略 `remaining_count` 即可。
 
+**私信权限规则（#240）**
+
+接收方在 `PUT /user/settings` 里设置 `dm_permission`（谁可以给我发私信）：
+
+| 值 | 含义 | 谁能发 |
+|---|---|---|
+| `0` | 所有人（默认） | 所有人；仍受上面的未关注 5 条限制 |
+| `1` | 仅我关注的人 | 接收方关注了的人 |
+| `2` | 仅互相关注 | 接收方关注了你，且你也关注了接收方 |
+| `3` | 关闭 | 没有人 |
+
+- **已有会话同样受约束**，对方回复过你也**不豁免**：设置优先。设置只约束发给设置者的消息，设置者自己仍能给别人发。
+- 判断顺序：接收方状态（不存在 / 机器人）→ 私信权限设置 → 未关注 5 条限制。权限拒绝时不再看 5 条限制。
+- 设置为 `1` / `2` 时能发消息的人一定被接收方关注了，所以不会再受 5 条限制（`remaining_count` 为 `null`）。
+
 **错误**
 
 | HTTP | message | 场景 |
@@ -101,6 +119,11 @@
 | 401 | `Token not found` | 未登录 |
 | 403 | `This user cannot receive private messages` | 接收方是 AI 机器人账号 |
 | 403 | `dm limit reached` | 未关注发送限制：对方没关注你也没回复过你，你在该会话已发满 5 条。提示「对方关注你或回复后可继续发送」 |
+| 403 | `This user only accepts private messages from people they follow` | 私信权限（#240）：对方设置了「仅我关注的人」，而对方没关注你 |
+| 403 | `This user only accepts private messages from mutual follows` | 私信权限（#240）：对方设置了「仅互相关注」，而你们不是互相关注 |
+| 403 | `This user has turned off private messages` | 私信权限（#240）：对方关闭了私信 |
+
+几个 403 的 `code` 都是 203，只能靠 `message` 区分；聊天页更推荐提前用 §2.2.1 的 `cannot_send_reason` 判断。
 | 404 | `No such user` | 接收方不存在、已禁用或已删除 |
 
 ### 2.2 GET /message/conversations — 会话列表
@@ -161,7 +184,7 @@
 
 ### 2.2.1 GET /message/conversations/with/:user_id — 按对方用户 ID 查会话
 
-从用户主页点「私信」时用：返回我与该用户的单聊会话。**只读**，不会创建会话，也不会清未读或取消删除。
+从用户主页点「私信」时用：返回我与该用户的单聊会话，以及**我现在能否给对方发私信**（#240）。**只读**，不会创建会话，也不会清未读或取消删除。
 
 **路径参数**：`user_id` 对方用户 ID。
 
@@ -170,6 +193,22 @@
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `conversation` | object \| null | 与 §2.2 会话列表项**字段完全相同**；两人还没有会话时为 `null` |
+| `can_send` | bool | 我现在能否给对方发私信（#240）。有没有会话都返回，与 `POST /message/send` 同一口径 |
+| `cannot_send_reason` | string \| null | `can_send=false` 时的原因（下表）；`can_send=true` 时为 `null` |
+
+`cannot_send_reason` 枚举（按判断顺序，只返回第一个命中的原因）：
+
+| 值 | 含义 | 对应的发送错误 | 建议文案 |
+|---|---|---|---|
+| `recipient_not_found` | 对方不存在、已禁用或已删除 | 404 `No such user` | 该用户不存在 |
+| `recipient_unavailable` | 对方是 AI 机器人账号 | 403 `This user cannot receive private messages` | 该用户不接收私信 |
+| `following_only` | 对方只接收其关注的人的私信，对方没关注你 | 403 `This user only accepts private messages from people they follow` | 对方只接收其关注的人的私信 |
+| `mutual_only` | 对方只接收互相关注的人的私信，你们不是互相关注 | 403 `This user only accepts private messages from mutual follows` | 对方只接收互相关注的人的私信 |
+| `dm_closed` | 对方关闭了私信 | 403 `This user has turned off private messages` | 对方已关闭私信 |
+| `dm_limit_reached` | 未关注发送限制（#239）：对方没关注你也没回复过你，你在该会话已发满 5 条 | 403 `dm limit reached` | 对方关注你或回复后可继续发送 |
+
+- `can_send` **计入了 5 条限制**（与发送接口一致：已发满时为 `false`、原因 `dm_limit_reached`）。
+- `can_send` 是查询时刻的结果：之后对方改设置 / 取关、或你在别的端发满 5 条，发送仍可能被拒，以 `POST /message/send` 的结果为准。
 
 ```json
 {
@@ -189,15 +228,17 @@
         "create_time": "2026-11-11T14:30:00.123456+08:00"
       },
       "unread_count": 1
-    }
+    },
+    "can_send": true,
+    "cannot_send_reason": null
   }
 }
 ```
 
-没有会话：
+没有会话（对方关闭了私信）：
 
 ```json
-{ "code": 200, "message": "Success", "data": { "conversation": null } }
+{ "code": 200, "message": "Success", "data": { "conversation": null, "can_send": false, "cannot_send_reason": "dm_closed" } }
 ```
 
 几种情况：
@@ -206,8 +247,8 @@
 |---|---|
 | 还没有会话 | `conversation: null`。进入空白聊天页，发第一条消息后用 `POST /message/send` 响应里的 `conversation_id` |
 | 我删除过这个会话，之后没有新消息 | 返回会话，`conversation_id` 可用，但 **`last_message` 为 `null`**、`unread_count` 为 `0`；用它拉历史只能看到删除之后的消息（此时为空）。这个会话在会话列表里仍然看不到，发消息后会重新出现 |
-| 对方已被禁用 / 删除，但以前聊过 | 返回会话，`peer` 为 `null`（同会话列表）；不能再发消息 |
-| 对方不存在 / 是 AI 机器人，且没有会话 | `conversation: null`（本接口不校验对方状态；能否发送以 `POST /message/send` 的结果为准） |
+| 对方已被禁用 / 删除，但以前聊过 | 返回会话，`peer` 为 `null`（同会话列表）；`can_send=false`、`recipient_not_found` |
+| 对方不存在 / 是 AI 机器人，且没有会话 | `conversation: null`；`can_send=false`，原因 `recipient_not_found` / `recipient_unavailable`（本接口不因对方状态报错） |
 
 注意：会话列表（§2.2）里的 `last_message` 一定不为 `null`；只有本接口在「删除后没有新消息」时为 `null`。
 
