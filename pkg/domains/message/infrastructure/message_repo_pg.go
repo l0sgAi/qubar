@@ -179,6 +179,68 @@ func (r *messageRepoPG) ListConversations(
 	return out, nil
 }
 
+// 按对方查会话：按 (user_low, user_high) 命中 uk_conversation_pair，再按 uk_conversation_member 取我的成员行；
+// 最后一条消息用 LEFT JOIN，且只在它位于隐藏截止位置之后时才连上（与会话列表的可见条件一致），
+// 删除后没有新消息时 msg.* 为 NULL。只读。
+const sqlGetDirectConversation = `
+SELECT m.conversation_id, c.type, m.peer_id, m.unread_count,
+       msg.id AS last_message_id, msg.sender_id AS last_sender_id, msg.msg_type AS last_msg_type,
+       left(msg.content, @preview) AS last_content, msg.create_time AS last_message_time
+FROM domains.conversation c
+JOIN domains.conversation_member m ON m.conversation_id = c.id AND m.user_id = @user AND m.deleted = 0
+LEFT JOIN domains.message msg ON msg.id = m.last_message_id
+  AND (m.cleared_message_id IS NULL OR m.last_message_id > m.cleared_message_id)
+WHERE c.user_low = @low AND c.user_high = @high`
+
+// directConversationRow 按对方查会话的扫描目标（最后一条消息不可见时 last_* 为 NULL）。
+type directConversationRow struct {
+	ConversationID  uuid.UUID
+	Type            int16
+	PeerID          *uuid.UUID
+	UnreadCount     int
+	LastMessageID   *uuid.UUID
+	LastSenderID    *uuid.UUID
+	LastMsgType     *int16
+	LastContent     *string
+	LastMessageTime *time.Time
+}
+
+// GetDirectConversation 见 domain.Repository。
+func (r *messageRepoPG) GetDirectConversation(
+	ctx context.Context, userID, peerID uuid.UUID, previewChars int,
+) (*domain.ConversationEntry, error) {
+	low, high := domain.OrderPair(userID, peerID)
+	args := map[string]any{"user": userID, "low": low, "high": high, "preview": previewChars}
+	var rows []directConversationRow
+	if err := r.db.WithContext(ctx).Raw(sqlGetDirectConversation, args).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, domain.ErrConversationNotFound
+	}
+	row := rows[0]
+	e := &domain.ConversationEntry{ConversationID: row.ConversationID, Type: row.Type, UnreadCount: row.UnreadCount}
+	if row.PeerID != nil {
+		e.PeerID = *row.PeerID
+	}
+	if row.LastMessageID != nil {
+		e.LastMessageID = *row.LastMessageID
+		e.LastSenderID = derefOr(row.LastSenderID, uuid.Nil)
+		e.LastMsgType = derefOr(row.LastMsgType, 0)
+		e.LastContent = derefOr(row.LastContent, "")
+		e.LastMessageTime = derefOr(row.LastMessageTime, time.Time{})
+	}
+	return e, nil
+}
+
+// derefOr 解引用可空列，NULL 时返回 def。
+func derefOr[T any](p *T, def T) T {
+	if p == nil {
+		return def
+	}
+	return *p
+}
+
 // ListMessages 见 domain.Repository。走 idx_message_conversation (conversation_id, id DESC) WHERE deleted = 0。
 func (r *messageRepoPG) ListMessages(
 	ctx context.Context, conversationID uuid.UUID, clearedMessageID, beforeMessageID *uuid.UUID, limit int,

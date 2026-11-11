@@ -81,6 +81,25 @@ func (h *Handler) ListConversations(c appctx.AppContext) {
 	httputil.Success(c, vo)
 }
 
+// GetConversationWithUser GET /message/conversations/with/:user_id —— 我与某个用户的单聊会话（没有时 conversation 为 null，不创建）。
+func (h *Handler) GetConversationWithUser(c appctx.AppContext) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+	peerID, err := uuid.Parse(c.Param("user_id"))
+	if err != nil || peerID == uuid.Nil {
+		httputil.BadRequest(c, "Invalid user id")
+		return
+	}
+	vo, err := h.svc.GetConversationWithUser(c, userID, peerID)
+	if err != nil {
+		writeMessageError(c, err)
+		return
+	}
+	httputil.Success(c, vo)
+}
+
 // ListMessages GET /message/conversations/:conversation_id/messages —— 消息历史（新 → 旧，向旧消息翻页）。
 func (h *Handler) ListMessages(c appctx.AppContext) {
 	userID, ok := requireUserID(c)
@@ -177,6 +196,8 @@ func writeMessageError(c appctx.AppContext, err error) {
 	switch {
 	case errors.Is(err, domain.ErrCannotMessageSelf):
 		httputil.BadRequest(c, "Cannot send message to yourself")
+	case errors.Is(err, domain.ErrConversationWithSelf):
+		httputil.BadRequest(c, "Cannot have a conversation with yourself")
 	case errors.Is(err, domain.ErrEmptyContent):
 		httputil.BadRequest(c, "Message content is empty")
 	case errors.Is(err, domain.ErrContentTooLong):

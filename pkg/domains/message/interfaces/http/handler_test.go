@@ -58,6 +58,15 @@ func (f *fakeSvc) ListConversations(_ context.Context, user uuid.UUID, cursor st
 	return &application.ConversationListVO{Items: []application.ConversationItemVO{}}, f.err
 }
 
+func (f *fakeSvc) GetConversationWithUser(_ context.Context, user, peer uuid.UUID) (*application.PeerConversationVO, error) {
+	f.calls++
+	f.gotUser, f.gotTarget = user, peer
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &application.PeerConversationVO{}, nil
+}
+
 func (f *fakeSvc) MarkRead(_ context.Context, user, conv uuid.UUID) error {
 	f.calls++
 	f.gotUser, f.gotTarget = user, conv
@@ -207,4 +216,45 @@ func TestListEndpoints_PassCursorAndSize(t *testing.T) {
 	ac, rc = newCtx("", "", "", "")
 	NewHandler(&fakeSvc{}).ListConversations(ac)
 	assertStatus(t, rc, http.StatusUnauthorized, "")
+}
+
+func TestGetConversationWithUser_ParamsAndErrors(t *testing.T) {
+	// withUser 构造 GET /message/conversations/with/:user_id 的上下文。
+	withUser := func(loginID, peer string) (appctx.AppContext, *app.RequestContext) {
+		ac, rc := newCtx(loginID, "", "", "")
+		rc.Params = append(rc.Params, param.Param{Key: "user_id", Value: peer})
+		return ac, rc
+	}
+
+	svc := &fakeSvc{}
+	ac, rc := withUser("", testPeer)
+	NewHandler(svc).GetConversationWithUser(ac)
+	assertStatus(t, rc, http.StatusUnauthorized, "")
+	for _, bad := range []string{"bad", uuid.Nil.String(), ""} {
+		ac, rc = withUser(testUser, bad)
+		NewHandler(svc).GetConversationWithUser(ac)
+		assertStatus(t, rc, http.StatusBadRequest, "Invalid user id")
+	}
+	if svc.calls != 0 {
+		t.Fatalf("service called %d times for invalid requests", svc.calls)
+	}
+
+	for _, tc := range []struct {
+		err  error
+		want int
+		body string
+	}{
+		// 没有会话：成功，conversation 为 null。
+		{nil, http.StatusOK, `"conversation":null`},
+		{domain.ErrConversationWithSelf, http.StatusBadRequest, "Cannot have a conversation with yourself"},
+		{errors.New("boom"), http.StatusInternalServerError, ""},
+	} {
+		svc = &fakeSvc{err: tc.err}
+		ac, rc = withUser(testUser, testPeer)
+		NewHandler(svc).GetConversationWithUser(ac)
+		assertStatus(t, rc, tc.want, tc.body)
+		if svc.gotUser.String() != testUser || svc.gotTarget.String() != testPeer {
+			t.Errorf("service got user=%s peer=%s", svc.gotUser, svc.gotTarget)
+		}
+	}
 }

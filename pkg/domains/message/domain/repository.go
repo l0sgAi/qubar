@@ -20,6 +20,8 @@ var (
 	ErrEmptyContent = errors.New("message content is empty")
 	// ErrContentTooLong 正文超过字符上限（handler 映射 400）。
 	ErrContentTooLong = errors.New("message content is too long")
+	// ErrConversationWithSelf 按对方用户 ID 查会话时对方是自己（handler 映射 400）。
+	ErrConversationWithSelf = errors.New("cannot have a conversation with yourself")
 	// ErrConversationNotFound 会话不存在，或当前用户不是会话成员（handler 映射 404，不区分两者，避免探测会话是否存在）。
 	ErrConversationNotFound = errors.New("conversation not found")
 	// ErrInvalidCursor 列表游标无法解析，或不属于本次请求的列表（handler 映射 400）。
@@ -34,6 +36,8 @@ type ConversationEntry struct {
 	PeerID      uuid.UUID
 	UnreadCount int
 	// LastMessageID 最后一条消息 ID，也是会话列表的 keyset 键。
+	// 会话列表里一定有值；GetDirectConversation 在会话被我删除（隐藏）且之后没有新消息时为 uuid.Nil，
+	// 此时 Last* 字段都是零值（隐藏截止位置之前的消息不可见）。
 	LastMessageID uuid.UUID
 	LastSenderID  uuid.UUID
 	LastMsgType   int16
@@ -59,6 +63,10 @@ type Repository interface {
 	// afterMessageID 为 nil 表示从头开始，否则只返回最后一条消息 ID 小于它的会话（keyset）。
 	// previewChars 是 LastContent 截取的字符数。
 	ListConversations(ctx context.Context, userID uuid.UUID, afterMessageID *uuid.UUID, limit, previewChars int) ([]ConversationEntry, error)
+	// GetDirectConversation 按对方用户 ID 取 userID 与 peerID 的单聊会话（按 OrderPair 命中 uk_conversation_pair），
+	// 返回 userID 视角的会话行：字段同 ListConversations；最后一条消息不在隐藏截止位置之后时 LastMessageID 为 uuid.Nil。
+	// 两人之间没有会话（或 userID 不是成员）返回 ErrConversationNotFound。只读，不改未读数与隐藏状态。
+	GetDirectConversation(ctx context.Context, userID, peerID uuid.UUID, previewChars int) (*ConversationEntry, error)
 	// ListMessages 按 ID 倒序（新 → 旧）返回会话里的消息，最多 limit 条。
 	// clearedMessageID 非 nil 时只返回 ID 大于它的消息（隐藏截止位置之后）；
 	// beforeMessageID 非 nil 时只返回 ID 小于它的消息（向上翻页的 keyset）。不校验成员身份，由调用方先 GetMember。

@@ -1,6 +1,7 @@
 # 私信（message）设计：会话与消息核心
 
-> 目标：新增 `pkg/domains/message`，落地一对一私信的数据模型、发送、会话列表、消息历史、标记已读与删除会话（issue #238，总览 #30 的第 1 步）。
+> 目标：新增 `pkg/domains/message`，落地一对一私信的数据模型、发送、会话列表、消息历史、标记已读与删除会话（issue #238，总览 #30 的第 1 步）；
+> 补充按对方用户 ID 查会话（issue #246，见第九节）。
 > 后续步骤建在这一步之上：未关注发送限制（#239）、私信权限设置（#240）、未读总数与实时推送（#241）、频率限制与内容安全（#242）、群聊（#31）。
 >
 > 基线：此前没有用户间私信。表结构见 `migrations/20261111134129_add_private_message.up.sql`，字段说明见 [pgsql-ddl/message.md](pgsql-ddl/message.md)，
@@ -18,6 +19,7 @@
 | AI 机器人账号 | **不能收私信**（维护者 2026-11-11 决策）：发给机器人账号（`users.role=2`，全局 / 圈内）按「不可发送」处理，返回 403 |
 | 会话 | 首次发送自动建会话；两人之间只有一个单聊会话（`(user_low, user_high)` 唯一），并发首发不会产生两个 |
 | 会话列表 | 对方简要信息、最后一条消息摘要（前 100 个字符）与时间、我的未读数；按最后消息时间倒序，keyset 游标分页 |
+| 按对方查会话（#246） | 按对方用户 ID 返回我与他的单聊会话，字段同会话列表单项；没有会话返回 `conversation: null`，不建会话；只读。细则见第九节 |
 | 消息历史 | 按会话向上翻旧消息，keyset 游标分页；只有会话双方可读，其他人 404（不区分「会话不存在」与「不是成员」） |
 | 标记已读 | 把会话内我的未读清零，最后已读位置前移到当前最新消息 |
 | 删除会话 | **只对自己隐藏**；对方（或自己）再发消息时会话重新出现，**只显示删除之后的消息**（维护者 2026-11-11 决策，按「成员行记录隐藏截止位置」实现）；对方不受影响 |
@@ -35,7 +37,8 @@ pkg/domains/message/
   domain/repository.go              端口 Repository、ConversationEntry、哨兵错误
   application/service.go            MessageService（由小接口组合）、RecipientChecker / UserBriefReader 端口、常量
   application/send.go               SendService：Send（校验 + 清洗 + 接收方判定）
-  application/conversation.go       ConversationService：会话列表（对方信息回填）/ 标记已读 / 删除会话
+  application/conversation.go       ConversationService：会话列表（对方信息回填）/ 按对方查会话（#246）/ 标记已读 / 删除会话；
+                                    列表项组装 toConversationItemVO 两处共用
   application/history.go            HistoryService：消息历史
   application/cursor.go             两种列表共用的 keyset 游标（带作用域校验）
   infrastructure/message_repo_pg.go Repository 的 PG 实现
@@ -85,6 +88,13 @@ GET /message/conversations
     ORDER BY m.last_message_id DESC LIMIT size+1
   → UserFacade.GetBriefs(对方 ID) 回填 peer
 
+GET /message/conversations/with/:user_id（#246，只读）
+  自己？→ 400
+  conversation c（uk_conversation_pair：OrderPair(我, 对方)）JOIN 我的成员行（uk_conversation_member）
+    LEFT JOIN message ON id = m.last_message_id AND m.last_message_id > COALESCE(m.cleared_message_id, -∞)
+  ─ 没有行 → conversation: null
+  → UserFacade.GetBriefs([对方 ID]) 回填 peer → toConversationItemVO（与会话列表同一个函数）
+
 GET /message/conversations/:id/messages
   GetMember(会话, 我) ─ 不是成员 → 404
   message（idx_message_conversation）WHERE conversation_id = ? [AND id > cleared] [AND id < 游标] ORDER BY id DESC LIMIT size+1
@@ -133,5 +143,26 @@ DELETE /message/conversations/:id        UPDATE 成员行 SET cleared = last_rea
 
 - 未关注发送限制、权限设置、未读总数与实时推送、频率限制与内容安全（#239–#242）。
 - 图片 / 文件消息、撤回、引用回复、消息搜索、拉黑、群聊（#31）。
-- 「按对方用户 ID 查会话」：前端从用户主页进入私信时，目前只能先发一条消息拿到 `conversation_id`，或从会话列表里找。是否需要
-  `GET /message/conversations/with/:user_id` 一类接口待维护者决定。
+- 进入会话时自动创建空会话（会话仍只在首次发送时创建，#246 范围外）。
+- 「能否给对方发私信」的判定与置灰原因（`can_send`）：由 #239 / #240 各自负责，#246 的接口不返回。
+
+## 九、按对方用户 ID 查会话（#246）
+
+> 前端从用户主页点「私信」进入会话页时，需要与该用户的 `conversation_id` 才能拉消息历史。维护者 2026-11-11 决定另开 #246 跟进。
+
+`GET /message/conversations/with/:user_id`（需登录），响应 `data` 为 `{"conversation": <会话列表单项> | null}`。
+
+| 场景 | 行为 |
+|---|---|
+| 有会话 | `conversation` 为会话列表单项（`conversation_id` / `type` / `peer_id` / `peer` / `last_message` / `unread_count`），由与会话列表相同的 `toConversationItemVO` 组装，口径一致 |
+| 两人之间没有会话 | 200，`conversation: null`；**不建会话**（会话仍只在首次发送时创建） |
+| `user_id` 是自己 | 400 `Cannot have a conversation with yourself`（`domain.ErrConversationWithSelf`） |
+| `user_id` 不是合法 UUID | 400 `Invalid user id` |
+| **对方用户不存在 / 已禁用 / 已删除 / 是机器人** | **不校验对方状态，只看会话是否存在**：没有会话时 `conversation: null`；已有会话（对方后来被禁用 / 删除）时照常返回会话，`peer` 为 `null`、`peer_id` 仍在。理由：与 #238 会话列表口径一致（会话与历史保留，`peer=null`），查询不额外读用户状态；能否发送由 `POST /message/send` 判定（不存在 / 禁用 / 删除 404、机器人 403），前端按主页信息决定是否显示「私信」按钮 |
+| **我删除过该会话（隐藏中），之后没有新消息** | 返回会话（`conversation_id`、`type`、`peer_id`、`peer` 照常），**`last_message` 为 `null`**、`unread_count` 为 `0`（删除时已清零）。理由：删除之前的消息对我不可见（与 #238 的隐藏截止位置 `cleared_message_id` 一致），摘要也不能暴露；用这个 `conversation_id` 拉历史只返回删除之后的消息（此时为空）。会话列表里仍然看不到它 |
+| 我删除过、之后又有新消息 | 与会话列表单项完全相同（会话已重新出现在列表里） |
+
+- **只读**：一条 SELECT，不改未读数、已读位置、隐藏截止位置（集成测试比对查询前后成员行 `update_time`）。
+- `last_message` 在会话列表里一定非 `null`（列表只含有可见消息的会话）；字段类型从对象改为可空对象，对列表的 JSON 没有影响。
+- 查询：`conversation` 按 `(user_low, user_high)` 命中 `uk_conversation_pair`，成员行按 `uk_conversation_member`，最后一条消息按主键；不需要新索引或迁移。
+- 群聊（#31）不走本接口。
