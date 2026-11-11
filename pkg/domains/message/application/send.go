@@ -21,6 +21,8 @@ type SendService interface {
 	// 正文超过 MaxContentChars 个字符 包装了 domain.ErrContentTooLong 的错误（message 带上限值）；
 	// 接收方不存在 / 已禁用 / 已删除 domain.ErrRecipientNotFound；接收方是 AI 机器人账号 domain.ErrRecipientUnavailable；
 	// 接收方没关注发送方、也没在会话里发过消息，且发送方在该会话已发满 UnfollowedSendLimit 条 domain.ErrSendLimitReached（#239）。
+	// 发送方账号已禁用 / 已删除 domain.ErrSenderUnavailable；超出每分钟 / 每天发送条数上限 包装了 domain.ErrSendRateLimited 的错误；
+	// 当天新会话数已满且本次会新建会话 包装了 domain.ErrNewConversationLimited 的错误（#242，message 带上限值）。
 	Send(ctx context.Context, senderID, receiverID uuid.UUID, content string) (*SendVO, error)
 }
 
@@ -64,11 +66,20 @@ func (s *messageServiceImpl) Send(ctx context.Context, senderID, receiverID uuid
 	default:
 		return nil, domain.ErrRecipientNotFound
 	}
+	if err := s.checkSender(ctx, senderID); err != nil {
+		return nil, err
+	}
 	limit, err := s.sendLimitFor(ctx, senderID, receiverID)
 	if err != nil {
 		return nil, err
 	}
+	// 发送频率限制（#242）：写库之前占用配额，被拒绝的请求不落库、不计入 sent_count、不推送。
+	ticket, err := s.acquireSendRate(ctx, senderID, receiverID)
+	if err != nil {
+		return nil, err
+	}
 	res, err := s.repo.SendDirect(ctx, senderID, receiverID, domain.MessageTypeText, content, limit)
+	s.settleSendRate(ctx, senderID, ticket, res, err)
 	if err != nil {
 		return nil, err
 	}

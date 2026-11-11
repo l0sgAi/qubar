@@ -1,7 +1,7 @@
 # 私信（message）设计：会话与消息核心
 
 > 目标：新增 `pkg/domains/message`，落地一对一私信的数据模型、发送、会话列表、消息历史、标记已读与删除会话（issue #238，总览 #30 的第 1 步）；
-> 补充按对方用户 ID 查会话（issue #246，见第九节）、未关注发送限制（issue #239，见第十节）。
+> 补充按对方用户 ID 查会话（issue #246，见第九节）、未关注发送限制（issue #239，见第十节）、发送频率限制与内容安全（issue #242，见第十二节）。
 > 后续步骤建在这一步之上：私信权限设置（#240）、未读总数与实时推送（#241）、频率限制与内容安全（#242）、群聊（#31）。
 >
 > 基线：此前没有用户间私信。表结构见 `migrations/20261111134129_add_private_message.up.sql`，字段说明见 [pgsql-ddl/message.md](pgsql-ddl/message.md)，
@@ -17,6 +17,8 @@
 | 正文 | 1–2000 个字符（按 Unicode 字符计，与 PG `varchar` 计数一致；**issue 原文 1000，维护者 2026-11-11 决策改为 2000**）；入库前过 `utils.SanitizeForPg`，清洗后不能为空或只有空白；正文按原样保存，不去首尾空白 |
 | 接收方 | 状态正常的普通用户。不能发给自己；不存在 / 已禁用 / 已删除返回 404 |
 | 未关注发送限制（#239） | 对方**没关注我**、也**没在会话里发过消息**时，我在该会话累计最多发 5 条，第 6 条 403 `dm limit reached`；对方关注我立即解除，对方回复过一次永久解除。固定 5 条，不可配置。细则见第十节 |
+| 发送频率（#242） | 按发送者计：每分钟 20 条、每天 500 条、每天最多主动开启 20 个新会话（配置 `message.send_rate`，`<=0` 兜底这些默认值），超限 429；正文含外链放行（维护者 2026-11-11 确认）。细则见第十二节 |
+| 发送方 | 账号已禁用 / 已删除时不能发送（登录态只校验 token，发送时再查账号状态），403。细则见第十二节 |
 | AI 机器人账号 | **不能收私信**（维护者 2026-11-11 决策）：发给机器人账号（`users.role=2`，全局 / 圈内）按「不可发送」处理，返回 403 |
 | 会话 | 首次发送自动建会话；两人之间只有一个单聊会话（`(user_low, user_high)` 唯一），并发首发不会产生两个 |
 | 会话列表 | 对方简要信息、最后一条消息摘要（前 100 个字符）与时间、我的未读数；按最后消息时间倒序，keyset 游标分页 |
@@ -142,12 +144,12 @@ DELETE /message/conversations/:id        UPDATE 成员行 SET cleared = last_rea
 | #239 未关注发送限制 | **已实现**，见第十节 |
 | #240 私信权限设置 | 接收方判定集中在 `RecipientChecker`（`application/send.go`）；权限设置可在 `user_setting` 加列（该表注释已预告），桥接器里一并判定，或新增端口 |
 | #241 未读总数与实时推送 | `conversation_member.unread_count`（按成员、按会话），未读总数 = `SUM(unread_count) WHERE user_id = ?`（可复用 `idx_conversation_member_list` 的前缀）；推送可在 `Send` 事务提交后发事件 |
-| #242 频率限制与内容安全 | 发送入口只有 `MessageService.Send`；内容校验集中在 `normalizeContent` |
+| #242 频率限制与内容安全 | **已实现**，见第十二节 |
 | #31 群聊 | `conversation.type=2`、`user_low/high` 为 NULL；`conversation_member.peer_id` 为 NULL、`deleted` 表示退出群聊；成员行的已读 / 未读 / 隐藏机制直接复用 |
 
 ## 八、范围外 / 未做
 
-- 权限设置、未读总数与实时推送、频率限制与内容安全（#240–#242）。
+- 权限设置（#240）。AI 内容审核、举报私信、拉黑（#242 范围外）。
 - 图片 / 文件消息、撤回、引用回复、消息搜索、拉黑、群聊（#31）。
 - 进入会话时自动创建空会话（会话仍只在首次发送时创建，#246 范围外）。
 - 「能否给对方发私信」的判定与置灰原因（`can_send`）：#246 的接口不返回；#239 只在发送时判定（发送响应带 `remaining_count`，满额时 403），
@@ -202,3 +204,95 @@ DELETE /message/conversations/:id        UPDATE 成员行 SET cleared = last_rea
 （与机器人账号的 403 `This user cannot receive private messages` 通过 `message` 区分）。
 
 **与 #240 叠加**：#240 的私信权限设置在本限制之前判定（先看权限，再看 5 条），建议放在 `Send` 里 `RecipientChecker` 之后、`sendLimitFor` 之前。
+
+## 十二、发送频率限制与内容安全（#242）
+
+> 维护者 2026-11-11 确认：每分钟 20 条、每天 500 条、每天最多主动开启 20 个新会话，做成新配置项（`<=0` 兜底默认值），超限 429；
+> 正文包含外链放行。项目没有通用限流中间件（#29 / #217 范围外），参考 auth 验证码频控（[design-rate-limit-otp-hardening.md](design/design-rate-limit-otp-hardening.md)）的 Redis 计数写法。
+
+### 12.1 规则
+
+| 项 | 规则 |
+|---|---|
+| 发送条数 | 每个发送者每分钟最多 `per_minute` 条、每天最多 `per_day` 条；只统计**发送成功**的消息 |
+| 新会话数 | 每个发送者每天最多**主动开启** `new_conversations_per_day` 个新会话：本次发送**新建了会话**才计数；会话已存在（包括对方先发起的、我删除过的）不计。额度用完后仍可在已有会话里发 |
+| 窗口 | 固定窗口，**从窗口内第一次计数起算** 1 分钟 / 24 小时，到期整体清零；不是自然日（不依赖时区） |
+| 被拒请求 | 不落库、不计入 #239 的 `sent_count`、不触发 #241 的推送、不占频率额度 |
+| 内容校验 | 不变（#238 `normalizeContent`）：`SanitizeForPg` 清洗 → 至少一个非空白字符 → 至多 2000 个字符；正文含外链**放行** |
+| 发送方状态 | 发送时用 `RecipientChecker`（与接收方同一判定，`UserService.GetByID`）校验发送方：不存在 / 已禁用 / 已删除 → 403 `ErrSenderUnavailable`；AI 机器人账号不在此拦截（行为不变） |
+| 接收方状态 | 不变（#238）：不存在 / 已禁用 / 已删除 404，机器人 403 |
+
+### 12.2 配置（`pkg/conf/conf_message.go`，段名 `message`）
+
+| key | 默认 / 兜底 | 说明 |
+|---|---|---|
+| `message.send_rate.per_minute` | 20 | 每分钟最多发送条数 |
+| `message.send_rate.per_day` | 500 | 每天（24h 窗口）最多发送条数 |
+| `message.send_rate.new_conversations_per_day` | 20 | 每天（24h 窗口）最多主动开启的新会话数 |
+
+各项 `<=0` 或缺省时兜底为默认值（`PerMinuteOrDefault` 等），生产 Secret 不加这一段也能跑。每次发送时读 `conf.Config`（composition `messageSendRateLimits`），
+配置热更新即时生效；调小上限时已占用的计数不变，超出部分直到窗口到期都会被拒。
+
+### 12.3 Redis key（`pkg/server/storage/redis/keys_message.go`）
+
+| key | 类型 | TTL | 语义 |
+|---|---|---|---|
+| `message:rate:min:{sender_id}` | String 计数 | 60s，自窗口内第一次计数起算 | 每分钟发送条数 |
+| `message:rate:day:{sender_id}` | String 计数 | 24h，同上 | 每天发送条数 |
+| `message:rate:newconv:{sender_id}` | String 计数 | 24h，自窗口内第一次预占起算 | 每天主动开启的新会话数 |
+
+Lua（`message_rate_lua.go`）：
+
+- **占用** `acquireMessageSendRateScript`：每分钟计数 ≥ 上限 → 返回 1；每天计数 ≥ 上限 → 返回 2（超限什么都不写）；否则两者各 `INCR`，
+  新会话计数 < 上限时也 `INCR` 并返回「已预占」。`INCR` 后 key 没有 TTL（第一次计数或异常残留）才 `PEXPIRE`，**不续期**
+  （续期会让持续发送时窗口永不到期，见 otp 设计文档 §2.5）。一次 `EVALSHA` 完成「检查 → 占用」，多实例下并发请求不会突破上限。
+- **退还** `releaseMessageSendRateScript`：key 存在且 > 0 才 `DECR`，不改 TTL；窗口已过期时不写，避免 `DECR` 建出 -1 且没有 TTL 的 key。
+
+### 12.4 发送流程
+
+```
+Send
+ ├─ 发给自己？ → 400
+ ├─ normalizeContent（SanitizeForPg / 空白 / 2000 字符）→ 400
+ ├─ RecipientChecker(receiver) → 404 / 403（机器人）
+ ├─ checkSender：RecipientChecker(sender) 为 NotFound → 403 ErrSenderUnavailable        ← #242
+ ├─ （#240 权限设置）
+ ├─ sendLimitFor：FollowChecker → limit（#239）
+ ├─ acquireSendRate                                                                       ← #242
+ │    ├─ limiter.Acquire：每分钟 / 每天超限 → 429 ErrSendRateLimited（不占额度）
+ │    └─ 新会话名额已用完（未预占）→ repo.GetDirectConversation(sender, receiver)
+ │         ├─ 会话不存在（本次会新建）→ 退还条数额度，429 ErrNewConversationLimited
+ │         └─ 会话已存在 → 继续
+ ├─ repo.SendDirect（事务：会话 upsert → #239 检查 → 写消息 → 成员行）
+ ├─ settleSendRate
+ │    ├─ SendDirect 失败（含 #239 的 403）→ 退还条数额度与预占的新会话名额
+ │    └─ 成功但 res.Created = false → 退还预占的新会话名额
+ └─ （#241 afterSend：未读缓存 / 推送）
+```
+
+**「新建了会话」怎么判断（不多一次查询）**：`SendDirect` 的会话 upsert 冲突时 `RETURNING` 已有行的 ID，所以返回的 ID 等于本次生成的 ID 即为新建，
+结果追加到 `domain.SendResult.Created`（仓储签名不变）。新会话名额采用「先预占、没新建再退还」：正常路径不多查询；
+只有当天新会话额度已用完的发送者，每次发送多一次按 `uk_conversation_pair` 的会话查询（判断这次会不会新建会话），被拒时不建会话。
+
+### 12.5 一致性 / 边界 / 风险
+
+| 场景 | 处理 |
+|---|---|
+| 多实例 | 计数在 Redis，一次 Lua 原子检查并占用，所有实例共享；集成测试 `TestSendRateLimiter_ConcurrentNeverExceeds`（30 并发、上限 5）覆盖 |
+| **Redis 不可用** | **拒绝发送**（`Acquire` 出错 → 返回错误，handler 500 `Failed to process message request`），与 auth 验证码频控一致（`CheckSendRateLimit` 出错直接返回错误）。登录态本身也在 Redis，Redis 不可用时登录接口已不可用，拒绝不会额外降低可用性 |
+| 退还失败 | 尽力而为，只记 Warn 日志；代价是该发送者当前窗口少几条额度，窗口到期自愈 |
+| 新会话名额边界的并发 | 名额只剩 1 个时，发往已有会话的请求会短暂预占再退还，同时发起的新会话请求可能看到「已用完」而被拒（偏严，不会超发）。只在额度临界、同一发送者并发时出现 |
+| 额度用完后的会话查询与新建之间 | 查到会话存在才放行，会话不会被删除（删除只是成员行隐藏），所以放行后的 `SendDirect` 不会新建会话 |
+| 固定窗口边界 | 窗口切换的瞬间最多可连发 2 倍每分钟上限（固定窗口的固有特性）；每天上限兜底 |
+| 发送方状态的实时性 | 与接收方同一判定（`UserService.GetByID`，`user:info` 缓存 30 分钟）：在库里禁用 / 删除账号后，缓存过期前仍按旧状态判断。项目目前没有应用内的禁用 / 删除入口（运维直接改库），改库时需同时删除 `user:info:{id}`；登录 token 也不会因禁用失效 |
+| 重放请求（#248 `client_msg_id`） | 本 issue 不处理幂等。当前口径：重放请求与普通请求一样先占用频率额度；`SendDirect` 返回原消息（成功）时不退还，即重放也计入频率。#248 合入后如需不计，可在其「命中重放」标志上退还 |
+| 被 #239 拒绝（403 `dm limit reached`） | `SendDirect` 失败 → 全部退还，不占频率额度 |
+| 配置热更新调小上限 | 已有计数不变，超出部分直到窗口到期都被拒 |
+
+### 12.6 错误
+
+| 错误 | HTTP（信封 code） | message |
+|---|---|---|
+| `domain.ErrSendRateLimited` | 429（208） | `message rate limit exceeded: at most {N} messages per minute` / `... per day` |
+| `domain.ErrNewConversationLimited` | 429（208） | `new conversation limit exceeded: at most {N} new conversations per day` |
+| `domain.ErrSenderUnavailable` | 403（203） | `Your account cannot send private messages` |

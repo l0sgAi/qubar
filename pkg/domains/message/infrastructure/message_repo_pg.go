@@ -99,10 +99,12 @@ func (r *messageRepoPG) SendDirect(
 	low, high := domain.OrderPair(senderID, receiverID)
 	msg := &domain.Message{SenderID: senderID, MsgType: msgType, Content: content}
 	var remaining *int
+	// 会话行冲突时返回已有行的 ID：返回的 ID 等于本次生成的 ID 即为新建（#242 新会话频率，不多一次查询）。
+	newConvID := sharedomain.NewID()
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var conv struct{ ID uuid.UUID }
 		if err := tx.Raw(sqlUpsertDirectConversation,
-			sharedomain.NewID(), domain.ConversationTypeDirect, low, high).Scan(&conv).Error; err != nil {
+			newConvID, domain.ConversationTypeDirect, low, high).Scan(&conv).Error; err != nil {
 			return err
 		}
 		if conv.ID == uuid.Nil {
@@ -134,7 +136,7 @@ func (r *messageRepoPG) SendDirect(
 		return nil, err
 	}
 	msg.UpdateTime = msg.CreateTime
-	return &domain.SendResult{Message: msg, Remaining: remaining}, nil
+	return &domain.SendResult{Message: msg, Remaining: remaining, Created: msg.ConversationID == newConvID}, nil
 }
 
 // GetMember 见 domain.Repository。

@@ -151,6 +151,13 @@ notice_stream:
 follow:
   max_following: 2000 # 每个用户最多关注人数(<=0 兜底 2000)；粉丝数不设上限
 
+# 私信配置（设计见 docs/message-design.md 第十二节）
+message:
+  send_rate: # 发送频率限制，按发送者计（Redis 计数，多实例共享）；超限返回 429
+    per_minute: 20                # 每分钟最多发送条数(<=0 兜底 20)
+    per_day: 500                  # 每天（自当天首条起 24h）最多发送条数(<=0 兜底 500)
+    new_conversations_per_day: 20 # 每天最多主动开启的新会话数(<=0 兜底 20)；发往已有会话不计
+
 # 热度计算配置（权重 + 上限）
 hot:
   weight:

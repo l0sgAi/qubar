@@ -34,6 +34,7 @@ type AppConfig struct {
 	Notice        Notice        `mapstructure:"notice" json:"notice" yaml:"notice"`
 	NoticeStream  NoticeStream  `mapstructure:"notice_stream" json:"notice_stream" yaml:"notice_stream"`
 	Follow        Follow        `mapstructure:"follow" json:"follow" yaml:"follow"`
+	Message       Message       `mapstructure:"message" json:"message" yaml:"message"`
 	Mailtrap      Mailtrap      `mapstructure:"mailtrap" json:"mailtrap" yaml:"mailtrap"`
 	Security      Security      `mapstructure:"security" json:"security" yaml:"security"`
 	Moderation    Moderation    `mapstructure:"moderation" json:"moderation" yaml:"moderation"`

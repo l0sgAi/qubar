@@ -37,6 +37,8 @@ type SendResult struct {
 	// Remaining 发送限制生效时，本条发出后发送方在该会话还能再发的条数（0 = 已到上限，下一条会被拒绝）；
 	// 不受限制（limit ≤ 0，或对方在会话里发过消息）时为 nil。
 	Remaining *int
+	// Created 本次发送是否新建了会话（#242 新会话频率按它计数；会话已存在为 false）。
+	Created bool
 }
 
 // ConversationEntry 会话列表里的一行：成员状态 + 最后一条消息（由一次 JOIN 查询得到，没有 N+1）。
