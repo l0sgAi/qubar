@@ -94,6 +94,8 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 
 	// SSE 未读数推流 hub：注入 notice service + Redpanda consumer hook（见 wire_notice.go）。
 	streamHub := newNoticeStreamHub(noticeSvc)
+	// 私信未读总数接入同一个 hub（第二个计数通道 dm-unread + 新消息摘要 dm-message，#241）。
+	wireMessageStream(messageSvc, streamHub)
 
 	// 跨领域 Facade 注入完成。如遗漏注入，相关领域会在请求时表现为空数据/校验失败，
 	// 这里打一条启动日志便于排查（强类型断言成本过高，用日志替代 panic，见 review P2-2）。

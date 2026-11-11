@@ -1,6 +1,7 @@
 # 未读通知数 SSE 实时推送 — 后端设计文档
 
 > 目标：新增 `GET /notice/stream` SSE 通道，未读数变化时服务端主动推送全量未读数；前端保留 30s 轮询降级。
+> #241（v0.9.0）起同一通道还推私信未读总数（`dm-unread`）与新私信摘要（`dm-message`），见第八节。
 > 基线：前端需求文档（2026-09-01 版，`qubar-frontend` `src/api/notice.js`）；本仓 notice 域现状见 `docs/notice-design.md`。
 > 关联代码：`pkg/domains/notice/`、`pkg/server/storage/redpanda/notification_consumer.go`、`pkg/composition/server.go`。
 
@@ -189,3 +190,80 @@ P0 自验清单：
 - [ ] 第 6 个连接建立成功，最旧连接收到 `conn-evicted` 并断开；其余不受影响
 - [ ] 断开后立即重连成功（名额即时释放，不 429、不踢人）
 - [ ] `go build ./... && go vet ./...` 通过；hub 单测（Add 上限/合并去重/lastSent 不重复推）
+
+## 八、私信未读与新消息推送（#241）
+
+> 维护者 2026-11-11 决策：私信实时推送**复用 `/notice/stream`**，不引入 WebSocket；新消息到达时**同时推摘要**，供前端在会话页即时上屏，
+> 多端与断线重连后以拉取为准。私信不是 notice 类型，只共用推送通道和角标。私信侧设计见 `docs/message-design.md` 第十节。
+
+### 8.1 hub 扩展：计数通道 + 即时事件
+
+`StreamHub`（`pkg/domains/notice/application/stream_hub.go`）从「只推一种未读数」扩成两类事件：
+
+| 类型 | 通道 / 事件名 | 语义 | 每连接缓冲 |
+|---|---|---|---|
+| 计数通道 `ChannelNoticeUnread` | `unread-count` | 消息中心未读通知数（不变） | 4，满了丢最旧（全量值，旧值已被取代） |
+| 计数通道 `ChannelDMUnread` | `dm-unread`（新） | 私信未读总数 = 各会话我的未读之和 | 4，同上 |
+| 即时事件（`Push`） | `dm-message`（新） | 新私信摘要，只推给接收方 | 32，满了丢新事件并记 warn（前端以拉取为准） |
+
+- **每个计数通道独立**保持「全量值、合并推送、去重」：各自的 dirty / lastSent / hasSent、各自的 `CountReader`、各自的连接 channel，
+  所以两种计数互不覆盖、互不挤掉（丢最旧只发生在同一通道内）。合并窗口共用 `notice_stream.coalesce_ms`（与 `unread-count` 一致）。
+- **即时事件不进计数通道**：不合并、不去重，`Push` 在锁内非阻塞投递到每条连接的独立 channel，同一用户的事件按 seq 顺序入队；
+  用户没有连接时直接丢弃（不积压）。
+- 事件 id 仍是 `{unixMilli}-{perUserSeq}`，所有事件共用 per 用户序号。
+- 接口变化：`SetChannelCountReader(ch, f)`、`PublishChannel(ch, uid)`、`Push(uid, type, data)`；`Snapshot` 改为返回各已注入通道的首包列表
+  （某通道读失败时跳过它并标脏、下一拍补推；全部失败才返回错误 → handler 500）。`SetCountReader` / `Publish` / `PublishBatch` 保持原义
+  （= 消息中心通道），notice 侧调用方不变。`StreamConn` 增加 `DMEvents`、`Pushes`。
+
+### 8.2 推送链路
+
+```
+POST /message/send ─ SendDirect 事务提交 ─▶ messageService.afterSend
+   ├─ Redis message:unread:{接收方} INCRBY 1（仅 key 存在）
+   ├─ notifier.UnreadChanged(接收方) ─▶ hub.PublishChannel(dm, 接收方)    ─┐ ≤ coalesce_ms
+   └─ notifier.NewMessage(接收方, 摘要) ─▶ hub.Push(接收方, "dm-message")   │ 立即
+POST .../read、DELETE 会话 ─ UPDATE 成功 ─▶ afterUnreadCleared              │
+   ├─ Redis DEL message:unread:{我}                                         │
+   └─ notifier.UnreadChanged(我) ─▶ hub.PublishChannel(dm, 我)            ─┤
+                                                                            ▼
+sweeper：dm 通道 CountReader = MessageService.GetUnreadTotal（缓存优先，miss SUM 回源回填）
+         → 与 dm lastSent 比对，变了才投递 → handler 写 event: dm-unread
+```
+
+- **进程内直连，不经 Redpanda**：私信发送本身是同步事务（没有 notice 那样的 consumer flush），提交后直接调 hub，与 notice 的
+  `MarkRead` / `MarkAllRead` 触发方式相同。没有新 topic、新配置、新迁移。
+- 跨域：message 域声明端口 `application.UnreadNotifier`，composition 的 `messageStreamNotifier`（`message_bridges.go`）桥接到 hub；
+  `wireMessageStream`（`wire_message.go`）在 `RegisterDomainRoutes` 里 hub 构造后注入 dm 通道读取器与 notifier。message 域不 import notice。
+- 先提交、后推送：客户端收到 `dm-unread` / `dm-message` 时拉会话列表 / 消息历史一定读得到。推送失败（缓存、用户信息）只记日志，不影响发送结果。
+
+### 8.3 事件格式
+
+```text
+event: dm-unread
+id: 1762843800123-8
+data: {"unread_count":2}
+
+event: dm-message
+id: 1762843800050-7
+data: {"id":"019a7b10-2c3d-7e4f-8a9b-0c1d2e3f4a5b","conversation_id":"019a7b10-2c3a-7d11-9e22-3f4a5b6c7d8e","sender_id":"019a5d2e-7c41-7b0e-9f3a-2f6c1d8e4b10","sender":{"id":"019a5d2e-7c41-7b0e-9f3a-2f6c1d8e4b10","username":"alice","avatar_url":"https://..."},"msg_type":1,"content":"你好","truncated":false,"create_time":"2026-11-11T14:30:00.123456+08:00"}
+```
+
+- `dm-unread`：data 与 `unread-count` 同形（`unread_count` 全量），与 `GET /message/unread-count` 同源同值。连接建立时首包紧跟 `unread-count`
+  下发一条（`retry` 只在整条连接的第一个事件上）。
+- `dm-message`：字段与 `MessageVO` 同名同义，另加 `sender`（发送人简要信息，读取失败为 `null`）与 `truncated`。
+  **摘要截断**：`content` 只有正文前 **100 个字符**（`PushPreviewChars` = 会话列表摘要长度，按 Unicode 字符计），超出时 `truncated=true`，
+  前端需要拉消息历史拿全文。只推给接收方本人（发送方的其他端不推）。
+- 旧前端只 `addEventListener('unread-count')`：EventSource 对未监听的具名事件不触发任何回调，新事件不影响它；`unread-count` 的格式与触发时机不变。
+
+### 8.4 一致性 / 边界
+
+| 场景 | 行为 |
+|---|---|
+| 同一窗口内连续收到多条私信 | `dm-message` 每条一个；`dm-unread` 合并为一条最终值 |
+| 接收方打开着会话页：收到即调已读 | `dm-unread` 先 1 后 0；同一窗口内则 lastSent 去重，可能一条都不推（值没变） |
+| 接收方离线 / 断线期间来消息 | 不积压；重连首包 `dm-unread` 为当前全量，消息内容以拉会话列表 / 历史为准 |
+| 多端 | 每条连接都收到同样的事件；在 A 端已读后，B 端收到 `dm-unread` 新值，会话列表需自行刷新 |
+| 慢连接 `dm-message` 缓冲（32）满 | 丢新事件、记 warn；该端以拉取为准 |
+| 私信未读缓存 miss / 读失败 | sweeper 读 `GetUnreadTotal` 自动回源 DB；读失败重新标脏下一拍重试 |
+| 消息中心未读与私信未读 | 两个通道、两个事件名，互不覆盖；首包各一条 |
+| 多实例 | 同 §六：P0 单实例进程内 hub，私信推送同样只到本实例的连接（P1 Redis pub/sub 时一并广播 dm 事件） |

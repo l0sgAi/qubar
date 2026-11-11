@@ -85,6 +85,19 @@ func (f *fakeSvc) ListMessages(_ context.Context, user, conv uuid.UUID, cursor s
 	return &application.MessageListVO{Items: []application.MessageVO{}}, f.err
 }
 
+func (f *fakeSvc) GetUnreadTotal(_ context.Context, user uuid.UUID) (int64, error) {
+	f.calls++
+	f.gotUser = user
+	if f.err != nil {
+		return 0, f.err
+	}
+	return 7, nil
+}
+
+func (f *fakeSvc) SetUnreadCache(domain.UnreadCache) {}
+
+func (f *fakeSvc) SetUnreadNotifier(application.UnreadNotifier) {}
+
 // newCtx 构造 AppContext：loginID 为空表示未登录；conv 非空时设路径参数 :conversation_id；
 // query 拼到 URI；body 非空时作为 JSON 请求体。
 func newCtx(loginID, conv, query, body string) (appctx.AppContext, *app.RequestContext) {
@@ -257,4 +270,26 @@ func TestGetConversationWithUser_ParamsAndErrors(t *testing.T) {
 			t.Errorf("service got user=%s peer=%s", svc.gotUser, svc.gotTarget)
 		}
 	}
+}
+
+func TestGetUnreadTotal(t *testing.T) {
+	svc := &fakeSvc{}
+	ac, rc := newCtx("", "", "", "")
+	NewHandler(svc).GetUnreadTotal(ac)
+	assertStatus(t, rc, http.StatusUnauthorized, "")
+	if svc.calls != 0 {
+		t.Fatal("service should not be called without login")
+	}
+
+	ac, rc = newCtx(testUser, "", "", "")
+	NewHandler(svc).GetUnreadTotal(ac)
+	assertStatus(t, rc, http.StatusOK, `"unread_count":7`)
+	if svc.gotUser.String() != testUser {
+		t.Errorf("service got user=%s", svc.gotUser)
+	}
+
+	svc = &fakeSvc{err: errors.New("boom")}
+	ac, rc = newCtx(testUser, "", "", "")
+	NewHandler(svc).GetUnreadTotal(ac)
+	assertStatus(t, rc, http.StatusInternalServerError, "")
 }

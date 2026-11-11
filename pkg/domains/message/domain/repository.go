@@ -78,4 +78,6 @@ type Repository interface {
 	// 之后对方再发消息，会话重新出现在 userID 的列表里，只显示截止位置之后的消息。
 	// 不是成员返回 ErrConversationNotFound。
 	Hide(ctx context.Context, conversationID, userID uuid.UUID) error
+	// SumUnread 返回 userID 的私信未读总数：各会话（成员行未退出）未读数之和（#241）。
+	SumUnread(ctx context.Context, userID uuid.UUID) (int64, error)
 }
