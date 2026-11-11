@@ -10,10 +10,8 @@ import (
 	"errors"
 	"testing"
 
-	"interestBar/pkg/conf"
 	followapp "interestBar/pkg/domains/follow/application"
 	followdomain "interestBar/pkg/domains/follow/domain"
-	followinfra "interestBar/pkg/domains/follow/infrastructure"
 	userapp "interestBar/pkg/domains/user/application"
 	redispkg "interestBar/pkg/server/storage/redis"
 	sharedomain "interestBar/pkg/shared/domain"
@@ -36,13 +34,7 @@ func setupFollow(t *testing.T) *followEnv {
 	// 这里的用例不关心通知，发布器用空实现：同进程的其他用例会启动通知 consumer，真发事件的话通知行要等
 	// flush 窗口才落库，晚于本用例的清理，会留在共享开发库里。生产装配（newFollowService + Redpanda 发布器）
 	// 的端到端链路见 follow_notice_integration_test.go。
-	svc := followapp.NewFollowService(
-		followinfra.NewRelationRepository(db),
-		followinfra.NewStatRepository(db),
-		&followUserChecker{delegate: userapp.NewUserFacade(newUserService(deps))},
-		func() int { return conf.Config.Follow.MaxFollowingOrDefault() },
-		noFollowEvents{},
-	)
+	svc := newFollowServiceWithEvents(deps, userapp.NewUserFacade(newUserService(deps)), newUserSettingService(deps), noFollowEvents{})
 	return &followEnv{db: db, svc: svc}
 }
 

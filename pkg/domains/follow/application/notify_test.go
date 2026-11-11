@@ -30,7 +30,7 @@ func newSvcWithEvents(limit int) (FollowService, *fakeRepo, *fakeUsers, *fakeEve
 	repo := newFakeRepo()
 	users := &fakeUsers{missing: map[uuid.UUID]bool{}}
 	events := &fakeEvents{}
-	return NewFollowService(repo, repo, users, func() int { return limit }, events), repo, users, events
+	return NewFollowService(repo, repo, users, func() int { return limit }, nil, ListDeps{}, events), repo, users, events
 }
 
 // 只有关系从「未关注」变为「已关注」才发布：重复关注不发，取关不发，取关后再关注再发一条。

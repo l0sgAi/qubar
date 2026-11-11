@@ -26,7 +26,7 @@ type RecommendService interface {
 	// GetHomeFeed 首页信息流分页（按 tab 分发）。
 	//   tab=recommend  → 候选池 offset 翻页（用 poolToken）
 	//   tab=hot|latest  → ES search_after 翻页（用 searchAfter），全局
-	//   tab=following   → ES search_after 翻页（用 searchAfter），限定已加入圈子
+	//   tab=following   → ES search_after 翻页（用 searchAfter），已加入圈子的帖子 + 关注的用户发的帖子
 	GetHomeFeed(ctx context.Context, userID uuid.UUID, tab string, size, offset int, poolToken string, searchAfter []interface{}) (*domain.FeedPage, error)
 }
 
@@ -40,12 +40,13 @@ type recommendServiceImpl struct {
 	feed     domain.FeedCache
 	intCache domain.InterestCircleCache
 	vis      domain.CircleVisibility
+	follow   domain.FolloweeLookup
 }
 
 // NewRecommendService 构造 RecommendService。
 //
 // searcher/seed/checker/feed/intCache 为 recommend 同域 infra（直构）；
-// circle/postMeta/hydrator/vis 为跨域桥接器（composition 注入）。
+// circle/postMeta/hydrator/vis/follow 为跨域桥接器（composition 注入）。
 func NewRecommendService(
 	searcher domain.HomeFeedSearcher,
 	circle domain.CircleLookup,
@@ -56,6 +57,7 @@ func NewRecommendService(
 	feed domain.FeedCache,
 	intCache domain.InterestCircleCache,
 	vis domain.CircleVisibility,
+	follow domain.FolloweeLookup,
 ) RecommendService {
 	return &recommendServiceImpl{
 		searcher: searcher,
@@ -67,13 +69,14 @@ func NewRecommendService(
 		feed:     feed,
 		intCache: intCache,
 		vis:      vis,
+		follow:   follow,
 	}
 }
 
 // GetHomeFeed 按 tab 分发：recommend 走候选池 offset；hot/latest/following 走 ES search_after。
 //
 // 访客策略：hot/latest 是全局 ES 流，访客（userID==uuid.Nil）可读（BatchCheck best-effort，
-// IsLiked/IsCollected 自然 false）；recommend/following 硬依赖 userID（用户行为池 / 已加圈子列表），
+// IsLiked/IsCollected 自然 false）；recommend/following 硬依赖 userID（用户行为池 / 已加圈子与关注列表），
 // 匿名访问返回 ErrLoginRequired。
 func (s *recommendServiceImpl) GetHomeFeed(ctx context.Context, userID uuid.UUID, tab string, size, offset int, poolToken string, searchAfter []interface{}) (*domain.FeedPage, error) {
 	switch tab {
@@ -207,9 +210,18 @@ func defaultInt(v, def int) int {
 	return v
 }
 
-// getSimpleFeed hot/latest 简单流（ES search_after 翻页，可选 circle 过滤）。
-// 单次 ES 检索 → 提取 ID → hydrate → 补交互态。非个性化，无候选池。
+// feedSearchFunc 一次 ES 检索：hidden 为查看者不可见的私密圈，size 已归一化。
+type feedSearchFunc func(hidden []uuid.UUID, size int) (ids []uuid.UUID, next []interface{}, err error)
+
+// getSimpleFeed hot/latest 简单流（ES search_after 翻页，可选 circle 过滤）。非个性化，无候选池。
 func (s *recommendServiceImpl) getSimpleFeed(ctx context.Context, userID uuid.UUID, sort string, circleIDs []uuid.UUID, size int, searchAfter []interface{}) (*domain.FeedPage, error) {
+	return s.searchFeed(ctx, userID, size, func(hidden []uuid.UUID, size int) ([]uuid.UUID, []interface{}, error) {
+		return s.searcher.Search(ctx, sort, circleIDs, hidden, size, searchAfter)
+	})
+}
+
+// searchFeed search_after 流的公共编排：取查看者不可见的私密圈 → 单次 ES 检索 → 提取 ID → hydrate → 补交互态。
+func (s *recommendServiceImpl) searchFeed(ctx context.Context, userID uuid.UUID, size int, search feedSearchFunc) (*domain.FeedPage, error) {
 	if size <= 0 || size > 100 {
 		size = 20
 	}
@@ -217,7 +229,7 @@ func (s *recommendServiceImpl) getSimpleFeed(ctx context.Context, userID uuid.UU
 	if err != nil {
 		return nil, err
 	}
-	ids, next, err := s.searcher.Search(ctx, sort, circleIDs, hidden, size, searchAfter)
+	ids, next, err := search(hidden, size)
 	if err != nil {
 		return nil, err
 	}
@@ -236,14 +248,22 @@ func (s *recommendServiceImpl) getSimpleFeed(ctx context.Context, userID uuid.UU
 	}, nil
 }
 
-// getFollowing 关注流（已加入圈子，按发帖时间倒序）。
-// 项目无 user-follow，关注 = 已加圈子（唯一可行映射）。0 圈子 → 空列表。
+// getFollowing 关注流（#220）：已加入圈子的帖子 + 关注的用户发的帖子，按发帖时间倒序。
+//
+// 两个条件在同一次 ES 查询里取并集（同一帖子只出现一次）；查看者不可见的私密圈照常排除，
+// 即使作者是关注的人。圈子与关注都为空 → 空页；只有一种时按那一种返回。
+// 关注 ID 读取失败降级为仅圈子（safeFollowees 返回空），不报错。
+// 圈子与关注列表每次请求都重新读取：关注 / 取关后从第一页请求即按新关系返回，
+// 已打开的翻页序列从下一页起按新关系过滤。
 func (s *recommendServiceImpl) getFollowing(ctx context.Context, userID uuid.UUID, size int, searchAfter []interface{}) (*domain.FeedPage, error) {
 	circles := s.safeJoined(ctx, userID, 200) // 关注流取更多圈子
-	if len(circles) == 0 {
+	followees := s.safeFollowees(ctx, userID)
+	if len(circles) == 0 && len(followees) == 0 {
 		return &domain.FeedPage{Posts: []domain.FeedPostItem{}, HasMore: false}, nil
 	}
-	return s.getSimpleFeed(ctx, userID, "latest", circles, size, searchAfter)
+	return s.searchFeed(ctx, userID, size, func(hidden []uuid.UUID, size int) ([]uuid.UUID, []interface{}, error) {
+		return s.searcher.SearchFollowing(ctx, circles, followees, hidden, size, searchAfter)
+	})
 }
 
 // marshalSearchAfter 把 ES sort values 序列化为不透明 JSON 字符串（search_after 游标）。

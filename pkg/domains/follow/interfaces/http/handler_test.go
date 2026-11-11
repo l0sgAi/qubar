@@ -36,6 +36,10 @@ type fakeSvc struct {
 	err                  error
 	gotViewer, gotTarget uuid.UUID
 	calls                int
+	// 列表 / 批量关系接口的入参（list_handler_test.go）
+	gotCursor  string
+	gotSize    int
+	gotTargets []uuid.UUID
 }
 
 func (f *fakeSvc) record(viewer, target uuid.UUID) {
@@ -56,6 +60,11 @@ func (f *fakeSvc) Unfollow(_ context.Context, follower, followee uuid.UUID) (*ap
 func (f *fakeSvc) GetStats(_ context.Context, viewer, target uuid.UUID) (*application.StatsVO, error) {
 	f.record(viewer, target)
 	return &application.StatsVO{UserID: target.String(), FollowingCount: 3, FollowerCount: 7, Relation: domain.RelationMutual}, f.err
+}
+
+// ListFolloweeIDs 没有对应的 HTTP 接口（供首页关注 tab 跨域读取），这里只为满足 FollowService。
+func (f *fakeSvc) ListFolloweeIDs(context.Context, uuid.UUID) ([]uuid.UUID, error) {
+	return nil, f.err
 }
 
 // newCtx 构造带路径参数 :user_id 的 AppContext；loginID 为空表示访客。

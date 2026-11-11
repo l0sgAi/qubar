@@ -31,6 +31,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	// 先构造各领域 Service（不立即注册路由，因为要互注 Facade）
 	userSvc := newUserService(deps)
 	userFacade := userapp.NewUserFacade(userSvc)
+	userSettingSvc := newUserSettingService(deps)
 
 	circleSvc, circleRepo, memberRepo := newCircleService(deps)
 	circleFacade := circleapp.NewCircleFacade(circleRepo)
@@ -43,8 +44,8 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	collectSvc := newCollectService(deps)
 	historySvc := newHistoryService(deps)
 	noticeSvc := newNoticeService(deps)
-	// follow 只读依赖 user（目标用户校验），构造时直接注入。
-	followSvc := newFollowService(deps, userFacade)
+	// follow 只读依赖 user（目标用户校验、列表项简要信息、列表隐私开关），构造时直接注入。
+	followSvc := newFollowService(deps, userFacade, userSettingSvc)
 
 	// 互注跨领域 Facade
 	// circle 需要 user Facade + post 媒体查询器
@@ -94,8 +95,8 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 		logger.Log.Info("cross-domain facades injected: circle<-user/post, post<-user/circle, comment<-user/post, like<-post/comment, collect<-post, history<-post, notice<-user/post, follow<-user")
 	}
 
-	// recommend 需要 post（hydrate + circle_id 反查）+ circle（joined IDs），均为只读消费者，无反向注入。
-	recommendSvc := newRecommendService(postSvc, circleSvc, circleVisibility)
+	// recommend 需要 post（hydrate + circle_id 反查）+ circle（joined IDs）+ follow（关注的用户 ID），均为只读消费者，无反向注入。
+	recommendSvc := newRecommendService(postSvc, circleSvc, circleVisibility, followSvc)
 
 	// trending 需要 post（hydrate + 交互态）+ circle（GetByIDs）+ user（GetBriefs），均为只读消费者。
 	trendingSvc := newTrendingService(postSvc, circleRepo, userFacade)
@@ -142,6 +143,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	registerCategory(root, deps, authCheck, OptionalLoginFn)
 	registerStorage(root, deps, authCheck)
 	registerUser(root, userSvc, authCheck, OptionalLoginFn)
+	registerUserSetting(root, userSettingSvc, authCheck)
 	registerAuth(root, deps, authCheck)
 	registerCircle(root, circleSvc, authCheck, OptionalLoginFn)
 	registerPost(root, postSvc, authCheck, OptionalLoginFn)

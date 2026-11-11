@@ -34,3 +34,15 @@ func IsPasswordMismatchErr(err error) bool { return errors.Is(err, errPasswordMi
 
 // IsPasswordIncompleteErr 判断是否为"password 与 confirm_password 未成对提供"错误。
 func IsPasswordIncompleteErr(err error) bool { return errors.Is(err, errPasswordIncomplete) }
+
+// 用户设置（setting.go）的可识别错误。
+var (
+	errNoSettingField       = errors.New("at least one setting must be provided")
+	errFollowListVisibility = errors.New("follow_list_visibility must be 0 (public) or 1 (private)")
+)
+
+// IsNoSettingFieldErr 判断是否为"至少修改一个设置项"错误。
+func IsNoSettingFieldErr(err error) bool { return errors.Is(err, errNoSettingField) }
+
+// IsFollowListVisibilityErr 判断是否为"列表可见性取值非法"错误。
+func IsFollowListVisibilityErr(err error) bool { return errors.Is(err, errFollowListVisibility) }

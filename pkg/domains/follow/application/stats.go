@@ -22,6 +22,9 @@ type StatsVO struct {
 	FollowingCount int             `json:"following_count"`
 	FollowerCount  int             `json:"follower_count"`
 	Relation       domain.Relation `json:"relation"`
+	// ListVisible 该用户的关注 / 粉丝列表对查看者是否可见（本人恒为 true；设为私密后其他人为 false）。
+	// 两个计数不受它影响，前端用它决定数字能否点进列表。
+	ListVisible bool `json:"list_visible"`
 }
 
 func (s *followServiceImpl) GetStats(ctx context.Context, viewerID, userID uuid.UUID) (*StatsVO, error) {
@@ -32,11 +35,16 @@ func (s *followServiceImpl) GetStats(ctx context.Context, viewerID, userID uuid.
 	if err != nil {
 		return nil, err
 	}
+	visible, err := s.listVisibleTo(ctx, viewerID, userID)
+	if err != nil {
+		return nil, err
+	}
 	vo := &StatsVO{
 		UserID:         userID.String(),
 		FollowingCount: stat.FollowingCount,
 		FollowerCount:  stat.FollowerCount,
 		Relation:       domain.RelationNone,
+		ListVisible:    visible,
 	}
 	if viewerID != uuid.Nil && viewerID != userID {
 		if vo.Relation, err = s.relations.GetRelation(ctx, viewerID, userID); err != nil {

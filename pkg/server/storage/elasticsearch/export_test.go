@@ -4,3 +4,6 @@ package elasticsearch
 
 // SearchUsersInIndex 暴露 searchUsersInIndex（集成测试对临时索引执行真实用户搜索 DSL）。
 var SearchUsersInIndex = searchUsersInIndex
+
+// SearchFollowingFeedInIndex 暴露 searchFollowingFeedInIndex（集成测试对临时索引执行真实关注流 DSL）。
+var SearchFollowingFeedInIndex = searchFollowingFeedInIndex

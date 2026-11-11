@@ -47,7 +47,7 @@ func setupFollowNotice(t *testing.T) *followNoticeEnv {
 	noticeSvc := newNoticeService(deps)
 	noticeSvc.SetUserFacade(&noticeUserFacade{delegate: userFacade})
 	return &followNoticeEnv{
-		followEnv: &followEnv{db: db, svc: newFollowService(deps, userFacade)},
+		followEnv: &followEnv{db: db, svc: newFollowService(deps, userFacade, newUserSettingService(deps))},
 		notice:    noticeSvc,
 	}
 }
