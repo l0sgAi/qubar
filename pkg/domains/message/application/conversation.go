@@ -148,9 +148,17 @@ func toConversationItemVO(e *domain.ConversationEntry, briefs map[uuid.UUID]User
 }
 
 func (s *messageServiceImpl) MarkRead(ctx context.Context, userID, conversationID uuid.UUID) error {
-	return s.repo.MarkRead(ctx, conversationID, userID)
+	if err := s.repo.MarkRead(ctx, conversationID, userID); err != nil {
+		return err
+	}
+	s.afterUnreadCleared(ctx, userID) // #241：失效未读缓存并推送
+	return nil
 }
 
 func (s *messageServiceImpl) DeleteConversation(ctx context.Context, userID, conversationID uuid.UUID) error {
-	return s.repo.Hide(ctx, conversationID, userID)
+	if err := s.repo.Hide(ctx, conversationID, userID); err != nil {
+		return err
+	}
+	s.afterUnreadCleared(ctx, userID) // #241：失效未读缓存并推送
+	return nil
 }

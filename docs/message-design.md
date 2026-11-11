@@ -1,8 +1,8 @@
 # 私信（message）设计：会话与消息核心
 
 > 目标：新增 `pkg/domains/message`，落地一对一私信的数据模型、发送、会话列表、消息历史、标记已读与删除会话（issue #238，总览 #30 的第 1 步）；
-> 补充按对方用户 ID 查会话（issue #246，见第九节）、未关注发送限制（issue #239，见第十节）、发送幂等 client_msg_id（issue #248，见第十二节）。
-> 后续步骤建在这一步之上：私信权限设置（#240）、未读总数与实时推送（#241）、频率限制与内容安全（#242）、群聊（#31）。
+> 补充按对方用户 ID 查会话（issue #246，见第九节）、未关注发送限制（issue #239，见第十节）、私信未读总数与 SSE 实时推送（issue #241，见第十一节）、发送幂等 client_msg_id（issue #248，见第十二节）。
+> 后续步骤建在这一步之上：私信权限设置（#240）、频率限制与内容安全（#242）、群聊（#31）。
 >
 > 基线：此前没有用户间私信。表结构见 `migrations/20261111134129_add_private_message.up.sql`，字段说明见 [pgsql-ddl/message.md](pgsql-ddl/message.md)，
 > 前端对接见 [api/message-api.md](api/message-api.md)。
@@ -147,13 +147,13 @@ DELETE /message/conversations/:id        UPDATE 成员行 SET cleared = last_rea
 |---|---|
 | #239 未关注发送限制 | **已实现**，见第十节 |
 | #240 私信权限设置 | 接收方判定集中在 `RecipientChecker`（`application/send.go`）；权限设置可在 `user_setting` 加列（该表注释已预告），桥接器里一并判定，或新增端口 |
-| #241 未读总数与实时推送 | `conversation_member.unread_count`（按成员、按会话），未读总数 = `SUM(unread_count) WHERE user_id = ?`（可复用 `idx_conversation_member_list` 的前缀）；推送可在 `Send` 事务提交后发事件 |
+| #241 未读总数与实时推送 | **已实现，见第十一节** |
 | #242 频率限制与内容安全 | 发送入口只有 `MessageService.Send`；内容校验集中在 `normalizeContent` |
 | #31 群聊 | `conversation.type=2`、`user_low/high` 为 NULL；`conversation_member.peer_id` 为 NULL、`deleted` 表示退出群聊；成员行的已读 / 未读 / 隐藏机制直接复用 |
 
 ## 八、范围外 / 未做
 
-- 权限设置、未读总数与实时推送、频率限制与内容安全（#240–#242）。
+- 权限设置、频率限制与内容安全（#240、#242）。未读总数与实时推送（#241）见第十一节。
 - 图片 / 文件消息、撤回、引用回复、消息搜索、拉黑、群聊（#31）。
 - 进入会话时自动创建空会话（会话仍只在首次发送时创建，#246 范围外）。
 - 「能否给对方发私信」的判定与置灰原因（`can_send`）：#246 的接口不返回；#239 只在发送时判定（发送响应带 `remaining_count`，满额时 403），
@@ -208,6 +208,57 @@ DELETE /message/conversations/:id        UPDATE 成员行 SET cleared = last_rea
 （与机器人账号的 403 `This user cannot receive private messages` 通过 `message` 区分）。
 
 **与 #240 叠加**：#240 的私信权限设置在本限制之前判定（先看权限，再看 5 条），建议放在 `Send` 里 `RecipientChecker` 之后、`sendLimitFor` 之前。
+
+## 十一、私信未读总数与实时推送（#241）
+
+> 维护者 2026-11-11 决策：实时推送复用 `/notice/stream`（SSE），不引入 WebSocket；新消息到达时同时推摘要（发送人、会话 ID、摘要），
+> 多端与断线重连后以拉取为准。推送通道侧的设计见 [design/sse-notification-design.md](design/sse-notification-design.md) 第八节，
+> 前端对接见 [api/message-api.md](api/message-api.md) §2.6、§3 与 [notice-stream-frontend-api.md](notice-stream-frontend-api.md)。
+
+### 11.1 未读总数
+
+- 口径：`SUM(conversation_member.unread_count) WHERE user_id = 我 AND deleted = 0`（`Repository.SumUnread`，走 `idx_conversation_member_list` 前缀）。
+  删除（隐藏）会话时未读已清零，对方再发消息时会话重现、未读照常累加，所以不需要再按隐藏截止位置过滤；与会话列表各项 `unread_count` 之和一致。
+- 接口：`GET /message/unread-count`（需登录）→ `{"unread_count": N}`；`MessageService.GetUnreadTotal` 同时是 SSE `dm-unread` 通道的读取器（同源同值）。
+
+### 11.2 Redis 缓存
+
+| key | 类型 | TTL | 写 | 读 |
+|---|---|---|---|---|
+| `message:unread:{user_id}`（`redispkg.GetMessageUnreadKey`，`keys_message.go`） | String（整数） | 24h（`MessageUnreadTTL`，回填时设置；INCRBY 不续期） | 发送提交后对**接收方** `INCRBY 1`，**仅 key 存在时**（Lua）；标记已读 / 删除会话成功后 `DEL` | 命中直接返回；miss / 脏值 → DB `SUM` → `SET` 回填 |
+
+- 发送不能用普通 `INCRBY`：key 不存在时会从 0 起算，少计已有未读。自增失败时删 key，让下一次读回源。
+- 已读 / 删除用 `DEL` 而不是扣减：一条 UPDATE 清掉的条数不确定；删了下一次读按 DB 重算，顺带校正之前的漂移。
+- 已知竞态（软信号，接受）：读 miss 回源与并发写交错时，回填值可能少 / 多一次写的影响，直到下一次已读 / 删除（`DEL`）或 TTL 到期。
+  缓存读失败降级查 DB；DB 失败返回 500。
+
+### 11.3 推送
+
+写路径都在 #238 的事务 / 单条 UPDATE **提交之后**调用，尽力而为（失败只记日志，不影响接口结果）：
+
+| 写路径 | 缓存 | 推送（`application.UnreadNotifier`） |
+|---|---|---|
+| `Send` | 接收方 `IncrIfExists(+1)` | `UnreadChanged(接收方)`（→ `dm-unread`）+ `NewMessage(接收方, 摘要)`（→ `dm-message`） |
+| `MarkRead` | 我 `Invalidate` | `UnreadChanged(我)` |
+| `DeleteConversation` | 我 `Invalidate` | `UnreadChanged(我)` |
+
+- `UnreadNotifier` 由 composition 的 `messageStreamNotifier` 桥接到 notice 的 `StreamHub`（进程内，非阻塞），message 域不 import notice；
+  `notice_stream.enabled=false` 时 `/notice/stream` 路由不注册，hub 仍然装配但没有连接，推送都是空操作；`GET /message/unread-count` 不受影响。
+- 摘要 `NewMessageEvent`：`id / conversation_id / sender_id / sender / msg_type / content / truncated / create_time`。
+  `content` 截取前 `PushPreviewChars = 100` 个字符（同会话列表摘要），超出时 `truncated=true`；`sender` 经 `UserBriefReader` 读取，失败为 `null`。
+  只推给接收方；发送方自己的未读不变，不推。
+
+### 11.4 文件
+
+| 文件 | 内容 |
+|---|---|
+| `domain/unread.go` | 端口 `UnreadCache` |
+| `domain/repository.go` | `Repository.SumUnread` |
+| `application/unread.go` | `UnreadService`（`GetUnreadTotal` / setter）、`UnreadNotifier`、`NewMessageEvent`、提交后钩子 |
+| `application/send.go`、`conversation.go` | 写路径提交后调钩子（各一处追加） |
+| `infrastructure/unread_cache_redis.go`、`message_repo_pg.go` | Redis 缓存、`SumUnread` |
+| `interfaces/http/handler.go`、`routes.go` | `GET /message/unread-count` |
+| `pkg/composition/wire_message.go`、`message_bridges.go` | 注入缓存；`wireMessageStream`、`messageStreamNotifier` |
 
 ## 十二、发送幂等 client_msg_id（#248）
 

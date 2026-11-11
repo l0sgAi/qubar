@@ -435,3 +435,19 @@ func (r *messageRepoPG) updateMember(ctx context.Context, sql string, conversati
 	}
 	return nil
 }
+
+// 私信未读总数（#241）：走 idx_conversation_member_list 的前缀 (user_id) WHERE deleted = 0。
+// 被删除（隐藏）的会话未读已清零，对方再发消息时会话重现、未读照常累加，所以不需要再按隐藏截止位置过滤。
+const sqlSumUnread = `
+SELECT COALESCE(SUM(unread_count), 0)
+FROM domains.conversation_member
+WHERE user_id = ? AND deleted = 0`
+
+// SumUnread 见 domain.Repository。
+func (r *messageRepoPG) SumUnread(ctx context.Context, userID uuid.UUID) (int64, error) {
+	var total int64
+	if err := r.db.WithContext(ctx).Raw(sqlSumUnread, userID).Scan(&total).Error; err != nil {
+		return 0, err
+	}
+	return total, nil
+}

@@ -89,6 +89,11 @@ func (s *messageServiceImpl) SendWithClientMsgID(
 		return nil, err
 	}
 	msg := res.Message
+	// 事务已提交：接收方未读缓存与实时推送（#241，尽力而为）。
+	// 发送幂等重放（#248）没有写任何数据：不改未读缓存、不重复推送。
+	if !res.Replayed {
+		s.afterSend(ctx, msg, receiverID)
+	}
 	vo := &SendVO{MessageVO: toMessageVO(msg), RemainingCount: res.Remaining}
 	return vo, nil
 }

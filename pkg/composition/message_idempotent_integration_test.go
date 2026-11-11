@@ -2,7 +2,7 @@
 
 // message_idempotent_integration_test.go 发送幂等（#248）经 composition 装配后的端到端集成测试：真实 PG + Redis，
 // 关注关系走真实 FollowService（未关注时 #239 的 5 条限制生效）。
-// 覆盖：重放返回原消息且不改未读 / 计数、已达 5 条上限时重放返回原消息（remaining_count=0）而新键 403、非法键 400 前置拒绝。
+// 覆盖：重放返回原消息且不改未读（含 #241 的 Redis 未读缓存）/ 计数、已达 5 条上限时重放返回原消息（remaining_count=0）而新键 403、非法键 400 前置拒绝。
 package composition
 
 import (
@@ -13,7 +13,9 @@ import (
 
 	messageapp "interestBar/pkg/domains/message/application"
 	messagedomain "interestBar/pkg/domains/message/domain"
+	redispkg "interestBar/pkg/server/storage/redis"
 	sharedomain "interestBar/pkg/shared/domain"
+	"interestBar/pkg/shared/testkit"
 
 	"github.com/google/uuid"
 )
@@ -33,6 +35,7 @@ func TestMessageIdempotent_ReplayAtSendLimit(t *testing.T) {
 	ctx := t.Context()
 	a := e.insertUser(t, "it248 a", 0, 1, 0)
 	b := e.insertUser(t, "it248 b", 0, 1, 0)
+	testkit.CleanupKeys(t, redispkg.GetMessageUnreadKey(a), redispkg.GetMessageUnreadKey(b))
 
 	keys := make([]string, messageapp.UnfollowedSendLimit)
 	sent := make([]*messageapp.SendVO, messageapp.UnfollowedSendLimit)
@@ -43,9 +46,18 @@ func TestMessageIdempotent_ReplayAtSendLimit(t *testing.T) {
 		assertRemaining(t, sent[i], &want)
 	}
 
+	// 先读一次接收方未读总数，回填 Redis 缓存（#241：之后的发送只在 key 存在时 INCR）。
+	if n, err := e.svc.GetUnreadTotal(ctx, b); err != nil || n != int64(messageapp.UnfollowedSendLimit) {
+		t.Fatalf("unread total = %d err %v, want %d", n, err, messageapp.UnfollowedSendLimit)
+	}
+
 	// 第 5 条超时重试（正文不同）：返回原消息，remaining_count 仍为 0，不是 403。
 	last := sent[len(sent)-1]
 	replay := e.mustSendKeyed(t, a, b, "retry body", keys[len(keys)-1])
+	// 重放不自增接收方未读缓存（不调 afterSend）。
+	if n, err := e.svc.GetUnreadTotal(ctx, b); err != nil || n != int64(messageapp.UnfollowedSendLimit) {
+		t.Fatalf("unread total after replay = %d err %v, want %d", n, err, messageapp.UnfollowedSendLimit)
+	}
 	if replay.ID != last.ID || replay.ConversationID != last.ConversationID || replay.Content != last.Content ||
 		!replay.CreateTime.Equal(last.CreateTime) {
 		t.Fatalf("replay = %+v, want original %+v", replay.MessageVO, last.MessageVO)

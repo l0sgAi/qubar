@@ -161,6 +161,21 @@ func (h *Handler) DeleteConversation(c appctx.AppContext) {
 
 // ===== 辅助函数 =====
 
+// GetUnreadTotal GET /message/unread-count —— 我的私信未读总数（各会话我的未读之和，#241）。
+// 与 SSE /notice/stream 的 dm-unread 事件同源同值；SSE 不可用时前端轮询本接口。
+func (h *Handler) GetUnreadTotal(c appctx.AppContext) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+	count, err := h.svc.GetUnreadTotal(c, userID)
+	if err != nil {
+		writeMessageError(c, err)
+		return
+	}
+	httputil.Success(c, map[string]int64{"unread_count": count})
+}
+
 func requireUserID(c appctx.AppContext) (uuid.UUID, bool) {
 	loginID, ok := c.LoginID()
 	if !ok || loginID == "" {

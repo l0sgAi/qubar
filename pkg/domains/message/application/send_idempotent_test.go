@@ -88,3 +88,29 @@ func TestSendWithClientMsgID_Replay(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+// 重放不触发发送后的钩子（#241）：不自增接收方未读缓存、不推 dm-unread / dm-message；正常发送照常触发。
+func TestSendWithClientMsgID_ReplayDoesNotNotify(t *testing.T) {
+	me, other := sharedomain.NewID(), sharedomain.NewID()
+	orig := &domain.Message{ID: sharedomain.NewID(), ConversationID: sharedomain.NewID(), SenderID: me, Content: "first"}
+	repo := &fakeRepo{replay: orig}
+	svc := NewMessageService(repo, fakeRecipients{}, &fakeUsers{}, fakeFollows{followed: true})
+	cache, notifier := newFakeCache(), &fakeNotifier{}
+	svc.SetUnreadCache(cache)
+	svc.SetUnreadNotifier(notifier)
+
+	if _, err := svc.SendWithClientMsgID(t.Context(), me, other, "again", "k1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(cache.incrs) != 0 || len(notifier.changed) != 0 || len(notifier.msgs) != 0 {
+		t.Fatalf("replay triggered side effects: incrs=%v changed=%v msgs=%v", cache.incrs, notifier.changed, notifier.msgs)
+	}
+
+	repo.replay = nil
+	if _, err := svc.SendWithClientMsgID(t.Context(), me, other, "new", "k2"); err != nil {
+		t.Fatal(err)
+	}
+	if len(cache.incrs) != 1 || len(notifier.changed) != 1 || len(notifier.msgs) != 1 {
+		t.Fatalf("new send side effects: incrs=%v changed=%v msgs=%v", cache.incrs, notifier.changed, notifier.msgs)
+	}
+}
