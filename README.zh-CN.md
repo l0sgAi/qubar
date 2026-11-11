@@ -72,6 +72,7 @@ pkg/
 │   ├── comment/         # 评论领域（二级扁平化结构）
 │   ├── like/            # 点赞领域（原子操作 + 事件）
 │   ├── collect/         # 收藏领域
+│   ├── share/           # 分享领域（外部分享去重、分享数、热度）
 │   ├── history/         # 浏览历史领域
 │   ├── discover/        # 发现页聚合领域
 │   ├── trending/        # 热榜领域
@@ -398,6 +399,7 @@ docker run -p 8888:8888 -v "$PWD/configs/config.yaml:/etc/qubar/config.yaml:ro" 
 | `POST` | `/like/toggle` | 点赞/取消点赞（帖子/评论通用） |
 | `POST` | `/collect/toggle` | 收藏/取消收藏帖子 |
 | `GET` | `/collect/posts` | 我收藏的帖子 |
+| `POST` | `/post/share` | 记录帖子外部分享（一人一帖只记一次，不可撤销） |
 
 ### 消息中心（需登录）
 

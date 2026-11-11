@@ -1,4 +1,4 @@
-# 帖子互动域(like/collect/view/interaction)
+# 帖子互动域(like/collect/share/view/interaction)
 
 > 全局约定(UUIDv7 主键、无 FK/CHECK、逻辑删除)见 [README.md](README.md)。
 
@@ -92,6 +92,29 @@ CREATE INDEX idx_pcollect_user_active ON domains.post_collect(user_id, create_ti
 -- 3. 【统计/关联】查询某帖子的收藏者列表 (通常只展示头像，不常翻页)
 -- 配合 `deleted=0` 查询有效收藏者。
 CREATE INDEX idx_pcollect_post_active ON domains.post_collect(post_id, create_time DESC) WHERE deleted = 0;
+```
+
+## 帖子分享表
+
+> 帖子外部分享记录(#232,迁移 `20261111134224_add_post_share`,权威 DDL 以迁移文件为准)。
+> 一人一帖只记一次、不可撤销:只插入不更新不删除,故无 `update_time` / `deleted`(唯一例外:分享事件投递失败时应用删除刚插入的行)。
+> 去重真值:`INSERT … ON CONFLICT (user_id, post_id) DO NOTHING` 的影响行数即「是否首次」。
+> 分享数:`post.share_count` 由帖子统计消费者按本表 `count(*)` 批量重算;读路径以 Redis `post:sharecnt:{post_id}` 为准。不进 CDC(`-- cdc: none`)。
+
+```sql
+CREATE TABLE domains.post_share (
+    id uuid DEFAULT uuidv7() NOT NULL,      -- 主键(UUIDv7,应用层生成;分享事件的 share_id)
+    user_id uuid NOT NULL,                  -- 分享人
+    post_id uuid NOT NULL,                  -- 被分享的帖子
+    create_time timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL, -- 首次分享时间
+    CONSTRAINT post_share_pkey PRIMARY KEY (id)
+);
+
+-- 一人一帖只记一次(应用依赖 ON CONFLICT,勿删 / 勿改为部分索引)
+CREATE UNIQUE INDEX uk_post_share_user_post ON domains.post_share USING btree (user_id, post_id);
+
+-- 按帖子重算分享数
+CREATE INDEX idx_post_share_post ON domains.post_share USING btree (post_id);
 ```
 
 ## 帖子浏览历史表

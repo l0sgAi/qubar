@@ -12,7 +12,7 @@ import (
 const (
 	HotDimPostLike    = "post_like"    // 帖子点赞（无上限）
 	HotDimPostCollect = "post_collect" // 帖子收藏（无上限）
-	HotDimPostShare   = "post_share"   // 帖子分享（无上限；TODO: 分享功能未实现）
+	HotDimPostShare   = "post_share"   // 帖子分享（无上限；一人一帖只记一次、不可撤销，#232）
 	HotDimComment     = "comment"      // 评论（上限 cap.comment）
 	HotDimCommentLike = "comment_like" // 评论点赞（上限 cap.comment_like）
 )

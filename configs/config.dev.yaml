@@ -133,6 +133,7 @@ redpanda:
   notice_event_flush_interval: 5 # 通知落库间隔(秒)
   post_moderation_topic: "post_moderation" # 帖子 AI 审核事件topic（仅 moderation 启用时使用）
   post_moderation_consumer_group: "post_moderation_consumer_group" # 帖子审核 worker 消费者组
+  share_event_topic: "post_share_events" # 帖子首次分享事件topic（#232，供声望消费；为空兜底 post_share_events）
 
 # 消息中心配置（设计见 docs/notice-design.md）
 notice:
@@ -155,7 +156,7 @@ hot:
   weight:
     post_like: 2      # 帖子点赞
     post_collect: 5   # 帖子收藏
-    post_share: 7     # 帖子分享（TODO: 分享功能未实现，预留）
+    post_share: 7     # 帖子分享（首次分享累加，一人一帖只记一次，#232）
     comment: 5        # 评论
     comment_like: 1   # 评论点赞
   cap:

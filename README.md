@@ -72,6 +72,7 @@ pkg/
 │   ├── comment/          # Comment (two-level flattened structure)
 │   ├── like/             # Like (atomic ops + events)
 │   ├── collect/          # Favorites
+│   ├── share/            # External post sharing (dedup, share count, hot)
 │   ├── history/          # Browsing history
 │   ├── discover/         # Discover page aggregation
 │   ├── trending/         # Trending posts
@@ -398,6 +399,7 @@ The image is distroless (nonroot, no shell) and contains no config. It has a bui
 | `POST` | `/like/toggle` | Like/unlike (posts & comments) |
 | `POST` | `/collect/toggle` | Favorite/unfavorite a post |
 | `GET` | `/collect/posts` | My favorite posts |
+| `POST` | `/post/share` | Record an external share of a post (once per user, not revocable) |
 
 ### Message Center (login required)
 
