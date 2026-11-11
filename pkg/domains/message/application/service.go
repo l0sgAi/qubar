@@ -1,6 +1,6 @@
 // Package application 是 message（私信）领域的应用层：发送、会话列表、按对方查会话、消息历史、标记已读、删除会话。
 //
-// 文件按职责拆分：send.go（发送）、send_limit.go（未关注发送限制）、conversation.go（会话列表 / 按对方查会话 / 已读 / 删除）、history.go（消息历史）、
+// 文件按职责拆分：send.go（发送）、send_limit.go（未关注发送限制）、send_idempotent.go（发送幂等 client_msg_id 校验）、conversation.go（会话列表 / 按对方查会话 / 已读 / 删除）、history.go（消息历史）、
 // cursor.go（两种列表的 keyset 游标）。MessageService 由各文件里的小接口组合而成。
 // 设计见 docs/message-design.md。
 package application

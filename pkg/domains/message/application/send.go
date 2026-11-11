@@ -22,6 +22,12 @@ type SendService interface {
 	// 接收方不存在 / 已禁用 / 已删除 domain.ErrRecipientNotFound；接收方是 AI 机器人账号 domain.ErrRecipientUnavailable；
 	// 接收方没关注发送方、也没在会话里发过消息，且发送方在该会话已发满 UnfollowedSendLimit 条 domain.ErrSendLimitReached（#239）。
 	Send(ctx context.Context, senderID, receiverID uuid.UUID, content string) (*SendVO, error)
+	// SendWithClientMsgID 同 Send，并支持发送幂等（#248）：clientMsgID 为客户端生成的幂等键，空串表示不提供（等同 Send）。
+	// 同一发送人用同一 clientMsgID 再次请求（含并发重复）时返回第一次写入的那条消息，不新增消息、不改计数 / 未读 / 最新消息、
+	// 不推送；正文与接收方不参与判断（正文不同也返回原消息）。重放判断在 #239 发送限制之前，已达上限时重试返回原消息而不是 403。
+	//
+	// 额外错误：clientMsgID 超过 MaxClientMsgIDLen 或含 [A-Za-z0-9_-] 以外的字符 domain.ErrInvalidClientMsgID。
+	SendWithClientMsgID(ctx context.Context, senderID, receiverID uuid.UUID, content, clientMsgID string) (*SendVO, error)
 }
 
 // MessageVO 一条消息。
@@ -46,10 +52,20 @@ func toMessageVO(m *domain.Message) MessageVO {
 }
 
 func (s *messageServiceImpl) Send(ctx context.Context, senderID, receiverID uuid.UUID, content string) (*SendVO, error) {
+	return s.SendWithClientMsgID(ctx, senderID, receiverID, content, "")
+}
+
+func (s *messageServiceImpl) SendWithClientMsgID(
+	ctx context.Context, senderID, receiverID uuid.UUID, content, clientMsgID string,
+) (*SendVO, error) {
 	if senderID == receiverID {
 		return nil, domain.ErrCannotMessageSelf
 	}
 	content, err := normalizeContent(content)
+	if err != nil {
+		return nil, err
+	}
+	idemKey, err := normalizeClientMsgID(clientMsgID)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +84,7 @@ func (s *messageServiceImpl) Send(ctx context.Context, senderID, receiverID uuid
 	if err != nil {
 		return nil, err
 	}
-	res, err := s.repo.SendDirect(ctx, senderID, receiverID, domain.MessageTypeText, content, limit)
+	res, err := s.repo.SendDirect(ctx, senderID, receiverID, domain.MessageTypeText, content, limit, idemKey)
 	if err != nil {
 		return nil, err
 	}
