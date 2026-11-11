@@ -17,6 +17,8 @@ func newPostService(deps *Deps) postapp.PostService {
 	searcher := postinfra.NewPostSearcher()
 	publisher := postinfra.NewPostEventPublisher()
 	svc := postapp.NewPostService(repo, statsCache, likeCache, collectCache, searcher, publisher)
+	// 分享数缓存（#233）：详情 / 列表 share_count 读 Redis post:sharecnt，miss 回源 PG 并回种。
+	svc.SetShareCountCache(postinfra.NewPostShareCountCache())
 	// AI 审核（#117）：始终注入，是否生效由 moderation.enabled + api_key 决定（未启用时发帖直接发布）。
 	svc.SetModeration(postinfra.NewJevModerator(conf.Config.Moderation),
 		postinfra.NewPostModerationLogRepository(deps.DB.Get()), conf.Config.Moderation)

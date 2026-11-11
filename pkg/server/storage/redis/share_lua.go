@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -108,4 +109,49 @@ func ReconcilePostShareCounts(counts map[uuid.UUID]int64) (int, error) {
 		fixed += int(r)
 	}
 	return fixed, firstErr
+}
+
+// GetPostShareCounts 批量读分享数（MGET，1 RTT，#233 列表回填）。
+// 只返回存在且可解析的 key；不存在的 postID 不在结果里，由调用方回源 PG。
+func GetPostShareCounts(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]int64, error) {
+	result := make(map[uuid.UUID]int64, len(postIDs))
+	if len(postIDs) == 0 {
+		return result, nil
+	}
+	keys := make([]string, len(postIDs))
+	for i, id := range postIDs {
+		keys[i] = GetPostShareCountKey(id)
+	}
+	vals, err := Client.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to batch get post share counts: %w", err)
+	}
+	for i, v := range vals {
+		s, ok := v.(string)
+		if !ok {
+			continue // nil = key 不存在
+		}
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			continue // 脏值按 miss 处理，回源 PG
+		}
+		result[postIDs[i]] = n
+	}
+	return result, nil
+}
+
+// SeedPostShareCounts 批量冷 key 回种（pipeline SET NX EX，1 RTT，#233 读路径）。
+// 已存在的 key 不覆盖：分享自增或落库校准写入的值比回种用的 PG 快照新，不能被冲掉。
+func SeedPostShareCounts(ctx context.Context, counts map[uuid.UUID]int64) error {
+	if len(counts) == 0 {
+		return nil
+	}
+	pipe := Client.Pipeline()
+	for postID, n := range counts {
+		pipe.SetNX(ctx, GetPostShareCountKey(postID), n, postStatsTTL)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("failed to seed post share counts: %w", err)
+	}
+	return nil
 }

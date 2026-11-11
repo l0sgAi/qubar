@@ -145,6 +145,7 @@ GET /discover
 | `comment_count` | int | 评论数 |
 | `like_count` | int | 点赞数 |
 | `collect_count` | int | 收藏数 |
+| `share_count` | int | 分享数（去重后的分享人数，口径同帖子详情） |
 | `is_pinned` | int | 置顶（0/1） |
 | `is_essence` | int | 精华（0/1） |
 | `is_lock` | int | 锁定（0/1） |
@@ -157,6 +158,7 @@ GET /discover
 | `images` | string[] | 帖子图片 URL 列表 |
 | `is_liked` | bool | **当前用户**是否已点赞（匿名恒为 `false`） |
 | `is_collected` | bool | **当前用户**是否已收藏（匿名恒为 `false`） |
+| `is_shared` | bool | **当前用户**是否分享过（匿名恒为 `false`） |
 
 ### 3.4 DiscoverCircleItem（随机圈子项）
 
@@ -258,13 +260,13 @@ Header: satoken: <已登录用户的token>
         "title": "分享一个冷门但超棒的露营地",
         "summary": "...",
         "content": "...",
-        "view_count": 234, "comment_count": 12, "like_count": 45, "collect_count": 8,
+        "view_count": 234, "comment_count": 12, "like_count": 45, "collect_count": 8, "share_count": 2,
         "is_pinned": 0, "is_essence": 0, "is_lock": 0, "status": 1,
         "create_time": "2026-06-28T08:30:00Z",
         "author_name": "bob", "author_avatar": "https://.../b.png",
         "circle_name": "户外探险", "circle_avatar": "https://.../c.png",
         "images": ["https://.../camp.jpg"],
-        "is_liked": false, "is_collected": false
+        "is_liked": false, "is_collected": false, "is_shared": false
       }
     ],
     "pool_token": "f4e5d6c7-1111-2222-3333-444455556666",
@@ -287,7 +289,7 @@ GET /discover?section=all&size=20
 
 返回结构与上面一致。区别：
 - 所有匿名用户**共享同一个全局随机池**（`discover:anon:*`），看到的是同一批内容
-- `is_liked` / `is_collected` **恒为 `false`**（无用户态）
+- `is_liked` / `is_collected` / `is_shared` **恒为 `false`**（无用户态）
 - 内容**无排除**（纯随机，可能包含任意圈子/帖子）
 
 ### 5.3 单分区翻页（`posts`，回传 pool_token）
@@ -394,8 +396,8 @@ GET /discover?section=posts&size=20&offset=40&pool_token=f4e5d6c7-1111-2222-3333
 ### 7.5 不要频繁轮询
 候选池每 10 分钟才更新一次。前端无需短轮询；**下拉刷新**触发重新请求即可（若池未更新，会返回相同 token 的相同池）。给用户的「换一批」体验主要靠后台周期刷新。
 
-### 7.6 `is_liked` / `is_collected` 仅帖子项有
-圈子项不涉及当前用户的交互态。帖子项的两个布尔值反映**当前登录用户**对该帖的点赞/收藏状态：
+### 7.6 `is_liked` / `is_collected` / `is_shared` 仅帖子项有
+圈子项不涉及当前用户的交互态。帖子项的三个布尔值反映**当前登录用户**对该帖的点赞 / 收藏 / 分享状态：
 - 登录用户：真实交互态（可直接复用首页帖卡的交互逻辑）
 - 匿名用户：恒为 `false`
 
@@ -413,7 +415,7 @@ GET /discover?section=posts&size=20&offset=40&pool_token=f4e5d6c7-1111-2222-3333
 
 **DiscoverBoard**：`circles[]` `posts[]` `pool_token` `has_more` `pool_refreshed` `offset` `size`
 
-**DiscoverPostItem**：`id` `circle_id` `user_id` `type` `title` `summary` `content` `view_count` `comment_count` `like_count` `collect_count` `is_pinned` `is_essence` `is_lock` `status` `create_time` `author_name` `author_avatar` `circle_name` `circle_avatar` `images[]` `is_liked` `is_collected`
+**DiscoverPostItem**：`id` `circle_id` `user_id` `type` `title` `summary` `content` `view_count` `comment_count` `like_count` `collect_count` `share_count` `is_pinned` `is_essence` `is_lock` `status` `create_time` `author_name` `author_avatar` `circle_name` `circle_avatar` `images[]` `is_liked` `is_collected` `is_shared`
 
 **DiscoverCircleItem**：`id` `name` `avatar_url` `description` `category_id` `member_count` `post_count` `hot` `join_type` `create_time`
 
@@ -426,6 +428,6 @@ GET /discover?section=posts&size=20&offset=40&pool_token=f4e5d6c7-1111-2222-3333
 - [ ] 翻页：`section=posts`/`circles` + `offset` + 回传 `pool_token`
 - [ ] 检查 `has_more` 决定是否显示「加载更多」
 - [ ] **必须**处理 `pool_refreshed: true`：重置分页状态 + 更新 `pool_token`（可加「已换新内容」轻提示）
-- [ ] 匿名场景：不带 `satoken` 头，`is_liked`/`is_collected` 恒 `false`
+- [ ] 匿名场景：不带 `satoken` 头，`is_liked`/`is_collected`/`is_shared` 恒 `false`
 - [ ] 空态：`circles`/`posts` 为 `[]` 时展示「暂无发现内容，下拉刷新」
 - [ ] 不要短轮询；用下拉刷新触发重新请求

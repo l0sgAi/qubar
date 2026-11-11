@@ -75,10 +75,13 @@ func (h *echoHydrator) Hydrate(_ context.Context, viewer uuid.UUID, ids []uuid.U
 	return out, nil
 }
 
-type likedSet map[uuid.UUID]bool
+// interactionSet 固定的交互态：liked → is_liked，shared → is_shared（#233）。
+type interactionSet struct {
+	liked, shared map[uuid.UUID]bool
+}
 
-func (l likedSet) BatchCheck(context.Context, uuid.UUID, []uuid.UUID) (map[uuid.UUID]bool, map[uuid.UUID]bool, error) {
-	return l, nil, nil
+func (s interactionSet) BatchCheck(context.Context, uuid.UUID, []uuid.UUID) (map[uuid.UUID]bool, map[uuid.UUID]bool, map[uuid.UUID]bool, error) {
+	return s.liked, nil, s.shared, nil
 }
 
 type followingEnv struct {
@@ -96,7 +99,7 @@ func newFollowingEnv(circles, followees, hidden []uuid.UUID) *followingEnv {
 		followees: &fixedFollowees{ids: followees},
 		hydrator:  &echoHydrator{},
 	}
-	e.svc = NewRecommendService(e.searcher, e.circles, nil, nil, e.hydrator, likedSet{}, nil, nil, fixedHidden(hidden), e.followees)
+	e.svc = NewRecommendService(e.searcher, e.circles, nil, nil, e.hydrator, interactionSet{}, nil, nil, fixedHidden(hidden), e.followees)
 	return e
 }
 
@@ -227,7 +230,8 @@ func TestFollowing_PaginationAndOrder(t *testing.T) {
 	hits := newIDs(2)
 	e.searcher.ids = hits
 	e.searcher.next = []interface{}{"2026-11-10T08:00:00Z", hits[1].String()}
-	e.svc = NewRecommendService(e.searcher, e.circles, nil, nil, e.hydrator, likedSet{hits[1]: true}, nil, nil, fixedHidden(nil), e.followees)
+	e.svc = NewRecommendService(e.searcher, e.circles, nil, nil, e.hydrator,
+		interactionSet{liked: map[uuid.UUID]bool{hits[1]: true}, shared: map[uuid.UUID]bool{hits[0]: true}}, nil, nil, fixedHidden(nil), e.followees)
 	cursor := []interface{}{"2026-11-10T09:00:00Z", "prev"}
 
 	page, err := e.svc.GetHomeFeed(context.Background(), uuid.New(), "following", 2, 0, "", cursor)
@@ -240,7 +244,7 @@ func TestFollowing_PaginationAndOrder(t *testing.T) {
 	if len(page.Posts) != 2 || page.Posts[0].ID != hits[0] || page.Posts[1].ID != hits[1] {
 		t.Fatalf("posts out of search order: %+v", page.Posts)
 	}
-	if page.Posts[0].IsLiked || !page.Posts[1].IsLiked {
+	if page.Posts[0].IsLiked || !page.Posts[1].IsLiked || !page.Posts[0].IsShared || page.Posts[1].IsShared {
 		t.Fatalf("interaction flags not filled: %+v", page.Posts)
 	}
 	if !page.HasMore || page.SearchAfter != `["2026-11-10T08:00:00Z","`+hits[1].String()+`"]` {

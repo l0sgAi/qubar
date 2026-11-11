@@ -225,10 +225,10 @@ func (s *discoverServiceImpl) fillPosts(ctx context.Context, ids []uuid.UUID, us
 		byID[it.ID] = it
 	}
 
-	var liked, collected map[uuid.UUID]bool
+	var liked, collected, shared map[uuid.UUID]bool
 	if userID != nil { // 登录态回填交互（best-effort：失败按 false）
-		if l, c, err := s.checker.BatchCheck(ctx, *userID, ids); err == nil {
-			liked, collected = l, c
+		if l, c, sh, err := s.checker.BatchCheck(ctx, *userID, ids); err == nil {
+			liked, collected, shared = l, c, sh
 		}
 	}
 
@@ -243,6 +243,9 @@ func (s *discoverServiceImpl) fillPosts(ctx context.Context, ids []uuid.UUID, us
 		}
 		if collected != nil {
 			it.IsCollected = collected[id]
+		}
+		if shared != nil {
+			it.IsShared = shared[id]
 		}
 		out = append(out, domain.DiscoverPostItem{FeedPostItem: it})
 	}

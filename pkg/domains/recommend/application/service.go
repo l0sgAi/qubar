@@ -149,12 +149,13 @@ func (s *recommendServiceImpl) getRecommend(ctx context.Context, userID uuid.UUI
 	}
 	posts := s.hydrateOrdered(ctx, userID, ids)
 
-	// 4. 补交互态 is_liked/is_collected
+	// 4. 补交互态 is_liked/is_collected/is_shared
 	if len(posts) > 0 {
-		liked, collected, _ := s.checker.BatchCheck(ctx, userID, ids)
+		liked, collected, shared, _ := s.checker.BatchCheck(ctx, userID, ids)
 		for i := range posts {
 			posts[i].IsLiked = liked[posts[i].ID]
 			posts[i].IsCollected = collected[posts[i].ID]
+			posts[i].IsShared = shared[posts[i].ID]
 		}
 	}
 
@@ -235,10 +236,11 @@ func (s *recommendServiceImpl) searchFeed(ctx context.Context, userID uuid.UUID,
 	}
 	posts := s.hydrateOrdered(ctx, userID, ids)
 	if len(posts) > 0 {
-		liked, collected, _ := s.checker.BatchCheck(ctx, userID, ids)
+		liked, collected, shared, _ := s.checker.BatchCheck(ctx, userID, ids)
 		for i := range posts {
 			posts[i].IsLiked = liked[posts[i].ID]
 			posts[i].IsCollected = collected[posts[i].ID]
+			posts[i].IsShared = shared[posts[i].ID]
 		}
 	}
 	return &domain.FeedPage{

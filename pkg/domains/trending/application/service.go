@@ -135,11 +135,12 @@ func (s *trendingServiceImpl) fillPosts(ctx context.Context, userID uuid.UUID, w
 		byID[it.ID] = it
 	}
 
-	liked, collected, err := s.checker.BatchCheck(ctx, userID, ids)
+	liked, collected, shared, err := s.checker.BatchCheck(ctx, userID, ids)
 	if err != nil {
 		// 交互态 best-effort：失败按 false，不影响榜单展示。
 		liked = nil
 		collected = nil
+		shared = nil
 	}
 
 	out := make([]domain.TrendingPostItem, 0, len(scored))
@@ -153,6 +154,9 @@ func (s *trendingServiceImpl) fillPosts(ctx context.Context, userID uuid.UUID, w
 		}
 		if collected != nil {
 			it.IsCollected = collected[sc.ID]
+		}
+		if shared != nil {
+			it.IsShared = shared[sc.ID]
 		}
 		out = append(out, domain.TrendingPostItem{FeedPostItem: it, HotScore: sc.Score})
 	}
