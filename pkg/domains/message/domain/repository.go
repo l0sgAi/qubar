@@ -39,6 +39,8 @@ type SendResult struct {
 	// Remaining 发送限制生效时，本条发出后发送方在该会话还能再发的条数（0 = 已到上限，下一条会被拒绝）；
 	// 不受限制（limit ≤ 0，或对方在会话里发过消息）时为 nil。
 	Remaining *int
+	// Created 本次发送是否新建了会话（#242 新会话频率按它计数；会话已存在为 false）。
+	Created bool
 	// Replayed 为 true 表示命中发送幂等（#248）：发送方此前已用同一 client_msg_id 发过，Message 是第一次写入的那条消息，
 	// 本次没有写任何数据（不新增消息、不改计数 / 未读 / 最新消息）；调用方不应再触发发送后的副作用（推送等）。
 	// 此时 Remaining 按当前已发条数重新计算（= limit − sent_count，不再减本条），口径见 docs/message-design.md 第十二节。
@@ -83,6 +85,9 @@ type Repository interface {
 	// 插入消息时以唯一索引 uk_message_sender_client_msg 兜底（并发重复时 DO NOTHING 并查回原消息，同样返回 Replayed=true）。
 	// 命中按发送人 + client_msg_id 判断，不比较接收方与正文。nil 表示不启用，行为与 #238 / #239 一致。
 	SendDirect(ctx context.Context, senderID, receiverID uuid.UUID, msgType int16, content string, limit int, clientMsgID *string) (*SendResult, error)
+	// HasClientMsgID 发送方是否已用 clientMsgID 发过消息（#248 幂等键，走 uk_message_sender_client_msg）。
+	// 只在发送被频率限制拒绝时调用（#242）：命中说明本次是幂等重放，不占频率配额、直接交给 SendDirect 返回原消息。
+	HasClientMsgID(ctx context.Context, senderID uuid.UUID, clientMsgID string) (bool, error)
 	// GetMember 返回 userID 在会话里的成员行；不是成员（或会话不存在）返回 ErrConversationNotFound。
 	GetMember(ctx context.Context, conversationID, userID uuid.UUID) (*ConversationMember, error)
 	// ListConversations 按最后一条消息倒序返回 userID 可见的会话（有消息、且最后一条在隐藏截止位置之后），最多 limit 条。

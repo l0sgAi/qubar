@@ -55,6 +55,9 @@ func (e *messageEnv) insertUser(t *testing.T, name string, role, status, deleted
 	testkit.CleanupRows(t, "domains.user_follow", "follower_id", id)
 	testkit.CleanupRows(t, "domains.user_follow_stat", "user_id", id)
 	testkit.CleanupKeys(t, redispkg.GetUserInfoKey(id))
+	// 发送频率计数（#242）：newMessageService 默认接了 Redis 计数。
+	testkit.CleanupKeys(t, redispkg.GetMessageRateMinuteKey(id.String()), redispkg.GetMessageRateDayKey(id.String()),
+		redispkg.GetMessageRateNewConvKey(id.String()))
 	return id
 }
 

@@ -61,6 +61,8 @@ func (f *fakeSvc) SendWithClientMsgID(_ context.Context, sender, receiver uuid.U
 	}, nil
 }
 
+func (f *fakeSvc) SetSendRateLimiter(domain.SendRateLimiter, func() domain.SendRateLimits) {}
+
 func (f *fakeSvc) ListConversations(_ context.Context, user uuid.UUID, cursor string, size int) (*application.ConversationListVO, error) {
 	f.calls++
 	f.gotUser, f.gotCursor, f.gotSize = user, cursor, size
@@ -152,6 +154,8 @@ func TestSend_AuthBodyAndErrors(t *testing.T) {
 	}
 
 	tooLong := fmt.Errorf("%w: at most 2000 characters", domain.ErrContentTooLong)
+	rateMin := fmt.Errorf("%w: at most 20 messages per minute", domain.ErrSendRateLimited)
+	newConv := fmt.Errorf("%w: at most 20 new conversations per day", domain.ErrNewConversationLimited)
 	badClientID := fmt.Errorf("%w: at most 64 characters", domain.ErrInvalidClientMsgID)
 	for _, tc := range []struct {
 		err  error
@@ -166,6 +170,9 @@ func TestSend_AuthBodyAndErrors(t *testing.T) {
 		{domain.ErrRecipientNotFound, http.StatusNotFound, "No such user"},
 		{domain.ErrRecipientUnavailable, http.StatusForbidden, "cannot receive private messages"},
 		{domain.ErrSendLimitReached, http.StatusForbidden, `"message":"dm limit reached"`},
+		{domain.ErrSenderUnavailable, http.StatusForbidden, "Your account cannot send private messages"},
+		{rateMin, http.StatusTooManyRequests, `"message":"message rate limit exceeded: at most 20 messages per minute"`},
+		{newConv, http.StatusTooManyRequests, `"message":"new conversation limit exceeded: at most 20 new conversations per day"`},
 		{badClientID, http.StatusBadRequest, "invalid client_msg_id: at most 64 characters"},
 		{errors.New("boom"), http.StatusInternalServerError, ""},
 	} {

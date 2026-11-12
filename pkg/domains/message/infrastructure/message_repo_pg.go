@@ -109,11 +109,13 @@ func (r *messageRepoPG) SendDirect(
 	low, high := domain.OrderPair(senderID, receiverID)
 	msg := &domain.Message{SenderID: senderID, MsgType: msgType, Content: content, ClientMsgID: clientMsgID}
 	var remaining *int
+	// 会话行冲突时返回已有行的 ID：返回的 ID 等于本次生成的 ID 即为新建（#242 新会话频率，不多一次查询）。
+	newConvID := sharedomain.NewID()
 	var replayed *domain.Message // 命中发送幂等时的原消息（#248）
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var conv struct{ ID uuid.UUID }
 		if err := tx.Raw(sqlUpsertDirectConversation,
-			sharedomain.NewID(), domain.ConversationTypeDirect, low, high).Scan(&conv).Error; err != nil {
+			newConvID, domain.ConversationTypeDirect, low, high).Scan(&conv).Error; err != nil {
 			return err
 		}
 		if conv.ID == uuid.Nil {
@@ -168,7 +170,7 @@ func (r *messageRepoPG) SendDirect(
 		return &domain.SendResult{Message: replayed, Remaining: remaining, Replayed: true}, nil
 	}
 	msg.UpdateTime = msg.CreateTime
-	return &domain.SendResult{Message: msg, Remaining: remaining}, nil
+	return &domain.SendResult{Message: msg, Remaining: remaining, Created: msg.ConversationID == newConvID}, nil
 }
 
 // 发送幂等（#248）：唯一部分索引 uk_message_sender_client_msg (sender_id, client_msg_id) WHERE client_msg_id IS NOT NULL。
@@ -200,6 +202,12 @@ func findByClientMsgID(tx *gorm.DB, senderID uuid.UUID, clientMsgID string) (*do
 		return nil, nil
 	}
 	return &rows[0], nil
+}
+
+// HasClientMsgID 见 domain.Repository。与 SendDirect 里的重放判断同一个查询（findByClientMsgID）。
+func (r *messageRepoPG) HasClientMsgID(ctx context.Context, senderID uuid.UUID, clientMsgID string) (bool, error) {
+	orig, err := findByClientMsgID(r.db.WithContext(ctx), senderID, clientMsgID)
+	return orig != nil, err
 }
 
 // insertMessageIdempotent 带 client_msg_id 插入消息。插入成功回填 msg.CreateTime 并返回 nil；

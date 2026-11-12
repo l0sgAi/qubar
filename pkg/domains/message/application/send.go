@@ -21,6 +21,9 @@ type SendService interface {
 	// 正文超过 MaxContentChars 个字符 包装了 domain.ErrContentTooLong 的错误（message 带上限值）；
 	// 接收方不存在 / 已禁用 / 已删除 domain.ErrRecipientNotFound；接收方是 AI 机器人账号 domain.ErrRecipientUnavailable；
 	// 接收方没关注发送方、也没在会话里发过消息，且发送方在该会话已发满 UnfollowedSendLimit 条 domain.ErrSendLimitReached（#239）。
+	// 发送方账号已禁用 / 已删除 domain.ErrSenderUnavailable；超出每分钟 / 每天发送条数上限 包装了 domain.ErrSendRateLimited 的错误；
+	// 当天新会话数已满且本次会新建会话 包装了 domain.ErrNewConversationLimited 的错误（#242，message 带上限值）。
+	// 频率限制之前先完成发送方状态校验；幂等重放（SendWithClientMsgID）不消耗频率配额，也不会被频率限制拒绝。
 	Send(ctx context.Context, senderID, receiverID uuid.UUID, content string) (*SendVO, error)
 	// SendWithClientMsgID 同 Send，并支持发送幂等（#248）：clientMsgID 为客户端生成的幂等键，空串表示不提供（等同 Send）。
 	// 同一发送人用同一 clientMsgID 再次请求（含并发重复）时返回第一次写入的那条消息，不新增消息、不改计数 / 未读 / 最新消息、
@@ -80,11 +83,22 @@ func (s *messageServiceImpl) SendWithClientMsgID(
 	default:
 		return nil, domain.ErrRecipientNotFound
 	}
+	if err := s.checkSender(ctx, senderID); err != nil {
+		return nil, err
+	}
 	limit, err := s.sendLimitFor(ctx, senderID, receiverID)
 	if err != nil {
 		return nil, err
 	}
+	// 发送频率限制（#242）：写库之前占用配额，被拒绝的请求不落库、不计入 sent_count、不推送。
+	// 幂等重放（#248）不消耗配额、也不被频率限制拒绝：被拒时若 client_msg_id 已发过，放行交给 SendDirect 返回原消息；
+	// 占用配额后 SendDirect 判定为重放的，在 settleSendRate 里全部退还。
+	ticket, err := s.acquireSendRate(ctx, senderID, receiverID)
+	if err != nil && !s.replayBypassesRateLimit(ctx, senderID, idemKey, err) {
+		return nil, err
+	}
 	res, err := s.repo.SendDirect(ctx, senderID, receiverID, domain.MessageTypeText, content, limit, idemKey)
+	s.settleSendRate(ctx, senderID, ticket, res, err)
 	if err != nil {
 		return nil, err
 	}

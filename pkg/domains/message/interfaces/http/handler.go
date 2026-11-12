@@ -233,6 +233,11 @@ func writeMessageError(c appctx.AppContext, err error) {
 	case errors.Is(err, domain.ErrSendLimitReached):
 		// 固定文案，前端据此提示「对方关注你或回复后可继续发送」（#239）。
 		httputil.Forbidden(c, "dm limit reached")
+	case errors.Is(err, domain.ErrSenderUnavailable):
+		httputil.Forbidden(c, "Your account cannot send private messages")
+	case errors.Is(err, domain.ErrSendRateLimited), errors.Is(err, domain.ErrNewConversationLimited):
+		// message 带窗口与上限值，如 "message rate limit exceeded: at most 20 messages per minute"（#242）。
+		httputil.TooManyRequests(c, err.Error())
 	case errors.Is(err, domain.ErrConversationNotFound):
 		httputil.NotFound(c, "No such conversation")
 	default:
