@@ -44,7 +44,10 @@
 
 - 任一维度 `fail` 就记 `claude-review` failure（即使模型给的 `verdict` 是 pass）。
 - `unverified` 不阻塞：表示这里核实不了（没有关联 issue、依赖开发栈没有的 CDC / ES / 外部服务等），合并前由人看评论里「未验证」一节。
-- PR 描述没写 `Closes #N` 时需求维度必然是 `unverified`，所以 PR 一定要关联 issue。
+- 关联 issue 的来源（#225）：develop 不是默认分支，GitHub 不给合入 develop 的 PR 建立 `Closes #N` 关联（`closingIssuesReferences` 为空），
+  所以工作流还会解析 PR 描述里的 `Closes / Fixes / Resolves #N`（HTML 注释和代码里的不算）以及 `agent/<N>-` / `fix/<N>-` 分支名；
+  编号是 PR 或不存在时跳过，最多 10 个。`Collect linked issues` 步骤的日志里有 `linked issues: #N …`。
+- 三个来源都没有时需求维度必然是 `unverified`，所以 PR 一定要在描述里写 `Closes #N`。
 - 审查能执行 PR 里的测试代码；只审同仓库 PR（fork PR 不审），与 `agent-fix` 跑 `make` 的信任边界相同。
 
 ## 排障
