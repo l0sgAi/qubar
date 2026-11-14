@@ -160,7 +160,7 @@ jobs:
 
       - name: Open issues
         if: steps.claude.outcome == 'success'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           OUTPUT: ${{ steps.claude.outputs.structured_output }}
           REMAINING: ${{ steps.quota.outputs.remaining }}
