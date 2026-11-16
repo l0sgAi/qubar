@@ -142,7 +142,11 @@ jobs:
           go-version-file: go.mod
 
       # 关联 issue 由工作流先收集到 tmp/review/issues.md（与 agent-patrol 同一做法），审查对照其中的验收标准。
-      # 用 GraphQL closingIssuesReferences（PR 描述里的 Closes / Fixes / Resolves #N）；没有关联时写明，审查记为无法核对。
+      # 来源依次合并（#225）：
+      #   1. GraphQL closingIssuesReferences：只有目标是默认分支的 PR 才有值，合入 develop 的 PR 恒为空；
+      #   2. PR 描述里的 Closes / Fixes / Resolves #N（规则同 agent-metrics.yml，另接受关键字后的冒号；HTML 注释和代码里的不算）；
+      #   3. agent/<N>- / fix/<N>- 分支名。
+      # 编号是 PR 或不存在时跳过；最多 10 个。没有关联时写明，审查记为无法核对。
       - name: Collect linked issues
         uses: actions/github-script@v8
         env:
@@ -151,21 +155,53 @@ jobs:
           script: |
             const fs = require('fs');
             const { owner, repo } = context.repo;
+            const MAX_ISSUES = 10;
+            const ISSUE_FIELDS = `
+              number title body
+              labels(first: 20) { nodes { name } }
+              comments(last: 5) { nodes { author { login } body } }`;
             const { repository } = await github.graphql(`
               query($owner: String!, $repo: String!, $number: Int!) {
                 repository(owner: $owner, name: $repo) {
                   pullRequest(number: $number) {
-                    closingIssuesReferences(first: 10) {
-                      nodes {
-                        number title body
-                        labels(first: 20) { nodes { name } }
-                        comments(last: 5) { nodes { author { login } body } }
-                      }
-                    }
+                    body headRefName
+                    closingIssuesReferences(first: ${MAX_ISSUES}) { nodes { ${ISSUE_FIELDS} } }
                   }
                 }
               }`, { owner, repo, number: Number(process.env.NUMBER) });
-            const issues = repository.pullRequest.closingIssuesReferences.nodes;
+            const pr = repository.pullRequest;
+            const issues = [...pr.closingIssuesReferences.nodes];
+            const seen = new Set(issues.map(i => i.number));
+
+            // 正文：先去掉 HTML 注释（PR 模板的说明）、代码块和行内代码，再找关闭关键字
+            const prose = (pr.body || '')
+              .replace(/<!--[\s\S]*?-->/g, '')
+              .replace(/```[\s\S]*?```/g, '')
+              .replace(/`[^`\n]*`/g, '');
+            const wanted = [...prose.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+#(\d+)/gi)].map(m => Number(m[1]));
+            const branch = /^(?:agent|fix)\/(\d+)-/.exec(pr.headRefName || '');
+            if (branch) wanted.push(Number(branch[1]));
+
+            for (const n of wanted) {
+              if (issues.length >= MAX_ISSUES) break;
+              if (seen.has(n)) continue;
+              seen.add(n);
+              try {
+                // issueOrPullRequest：编号是 PR 时 Issue 片段不匹配，返回空对象
+                const res = await github.graphql(`
+                  query($owner: String!, $repo: String!, $number: Int!) {
+                    repository(owner: $owner, name: $repo) {
+                      issueOrPullRequest(number: $number) { ... on Issue { ${ISSUE_FIELDS} } }
+                    }
+                  }`, { owner, repo, number: n });
+                const node = res.repository.issueOrPullRequest;
+                if (node?.number) issues.push(node);
+                else core.info(`#${n} is not an issue, skipped`);
+              } catch (e) {
+                core.warning(`cannot load #${n}: ${e.message}`);
+              }
+            }
+
             const cut = (s, n) => (s || '').length > n ? `${s.slice(0, n)}\n…（已截断）` : (s || '');
             const parts = issues.map(i => [
               `## #${i.number} ${i.title}`,
