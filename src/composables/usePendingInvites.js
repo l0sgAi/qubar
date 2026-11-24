@@ -1,50 +1,77 @@
-import { ref } from 'vue'
+import { getCurrentScope, ref, watch } from 'vue'
 import { getMyInvites } from '@/api/circleInvite'
 import { auth } from '@/utils/auth'
 
-// 待接受的圈子邀请数（侧栏 / TabBar / 个人中心入口共用的模块级单例）。
-// 后端不发邮件也没有站内通知（l0sgAi/qubar#169），这个角标是被邀请人知道自己被邀请的唯一途径。
-// 用 GET /circle/invite/my?size=1 的 total 计数；页面切换时各入口重新挂载，
-// 只在超过 REFRESH_INTERVAL 或显式 force 时才真正请求。
-
+// 侧栏、TabBar 和个人中心复用待接受邀请数。普通挂载最多每分钟请求一次。
 const REFRESH_INTERVAL = 60 * 1000
-
 const pendingCount = ref(0)
-let lastFetched = 0
+let cacheSession = null
+let lastFetched = null
 let inflight = null
+let readVersion = 0
 
-/** 拉取待接受邀请数；未登录时归零且不请求。失败静默（角标不是关键路径）。 */
-export async function refreshPendingInvites({ force = false } = {}) {
-  if (!auth.isAuthenticated()) {
+export const getInviteSession = () => auth.isAuthenticated() ? auth.getToken() : null
+
+function syncSession() {
+  const session = getInviteSession()
+  if (session !== cacheSession) {
+    cacheSession = session
+    readVersion++
     pendingCount.value = 0
-    return 0
+    lastFetched = null
+    inflight = null
   }
-  if (!force && inflight) return inflight
-  if (!force && lastFetched && Date.now() - lastFetched < REFRESH_INTERVAL) return pendingCount.value
-  inflight = getMyInvites({ page: 1, size: 1 })
-    .then((res) => {
-      pendingCount.value = Number(res.total) || 0
-      lastFetched = Date.now()
-      return pendingCount.value
-    })
-    .catch(() => pendingCount.value)
-    .finally(() => { inflight = null })
-  return inflight
+  return session
 }
 
-/** 「我的邀请」页拿到完整列表后直接回写总数，免一次请求 */
-export function setPendingInvites(count) {
+/** 角标请求和「我的邀请」列表共用读序号，迟到的旧总数不能覆盖新读。 */
+export function beginPendingInvitesRead() {
+  syncSession()
+  lastFetched = null
+  return ++readVersion
+}
+
+export function setPendingInvites(count, version) {
+  if (!syncSession() || version !== readVersion) return
   pendingCount.value = Math.max(0, Number(count) || 0)
   lastFetched = Date.now()
 }
 
+/** 未登录时归零。读取失败时保留当前账号上一次成功的值，下次挂载可重试。 */
+export async function refreshPendingInvites({ force = false } = {}) {
+  if (!syncSession()) return 0
+  if (!force && inflight) return inflight
+  if (!force && lastFetched !== null && Date.now() - lastFetched < REFRESH_INTERVAL) return pendingCount.value
+
+  const version = beginPendingInvitesRead()
+  const request = getMyInvites({ page: 1, size: 1 })
+    .then((res) => setPendingInvites(res.total, version))
+    .catch(() => {})
+    .then(() => {
+      syncSession()
+      return pendingCount.value
+    })
+  inflight = request
+  try {
+    return await request
+  } finally {
+    if (inflight === request) inflight = null
+  }
+}
+
 export function usePendingInvites() {
-  return { pendingCount, refreshPendingInvites, setPendingInvites }
+  syncSession()
+  if (getCurrentScope()) {
+    watch(getInviteSession, () => refreshPendingInvites(), { flush: 'sync' })
+  }
+  return { pendingCount, refreshPendingInvites, beginPendingInvitesRead, setPendingInvites }
 }
 
 // 仅供单测重置模块状态
 export function __resetPendingInvites() {
+  cacheSession = null
   pendingCount.value = 0
-  lastFetched = 0
+  lastFetched = null
   inflight = null
+  readVersion++
 }
