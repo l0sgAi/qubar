@@ -47,15 +47,15 @@ Live site: <https://qubar.site>
 
 ### Requirements
 
-- **Node.js 20** (the version CI uses) and npm
+- **Node.js 20.20.2** (the version CI uses) and npm
 - A running [Qubar backend](https://github.com/l0sgAi/qubar), local or remote
 
 ### Install and run
 
 ```bash
-git clone https://github.com/l0sgAi/qubar-frontend.git
-cd qubar-frontend
-npm install
+git clone https://github.com/l0sgAi/qubar.git
+cd qubar/web
+npm ci
 npm run dev
 ```
 
@@ -73,7 +73,7 @@ The dev server starts at <http://localhost:5173> and opens a browser tab.
 
 ### Environment variables
 
-The backend address is **not** hard-coded. Vite reads it from `.env.*` at the repo root, and
+The backend address is **not** hard-coded. Vite reads it from `.env.*` at the web directory, and
 [src/config/index.js](src/config/index.js) exposes it to the rest of the app as `API_BASE` / `APP_DOWNLOAD_URL`.
 
 | Variable | Required | Purpose |
@@ -102,7 +102,7 @@ The backend address is **not** hard-coded. Vite reads it from `.env.*` at the re
 ## 📁 Project Structure
 
 ```
-qubar-frontend/
+web/
 ├── src/
 │   ├── api/            # One module per backend domain (auth, post, comment, circle, notice, agent, moderation, ...)
 │   ├── assets/         # main.css: global styles and design tokens
@@ -123,7 +123,6 @@ qubar-frontend/
 ├── public/             # Copied as-is: CNAME, favicon, standalone landing page (/landing)
 ├── docs/               # Design and integration notes (Chinese)
 ├── scripts/            # Build diagnostics script
-├── .github/workflows/  # CI, deploy, Claude review
 ├── .env.development    # Dev env vars
 ├── .env.production     # Production env vars
 ├── vite.config.js
@@ -143,20 +142,7 @@ npm run check   # coverage tests + production build, same as CI
   the production compiler and checks that both languages have the same keys and placeholders.
 - See [CONTRIBUTING.md](CONTRIBUTING.md#testing) for how to write tests.
 
-Workflows in [.github/workflows](.github/workflows):
-
-| Workflow | Trigger | What it does |
-|----------|---------|--------------|
-| `ci.yml` | PRs to `main` (also called by `deploy.yml`) | Two checks: `unit` (tests + coverage thresholds) and `build` (production build) |
-| `deploy.yml` | Push to `main` | Runs the same CI first, then builds and deploys to GitHub Pages |
-| `claude-review.yml` | Non-draft PRs to `main` from this repo | Automatic Claude code review (inline comments + a summary comment) |
-| `claude.yml` | `@claude` in an issue / PR comment or review | Runs Claude on request; only users with write access can trigger it |
-
-## 🌐 Deployment
-
-The site is deployed to GitHub Pages by `deploy.yml` on every push to `main`. The custom domain is set in
-`public/CNAME`, and the build copies `index.html` to `404.html` so deep links work as an SPA.
-Pages setup, branch protection and troubleshooting are covered in [DEPLOY.md](DEPLOY.md).
+The [repository CI](../.github/workflows/ci.yml) verifies coverage, the production build and the uploaded Pages archive on Linux. See the [deployment guide](DEPLOY.md).
 
 ## 📚 Documentation
 

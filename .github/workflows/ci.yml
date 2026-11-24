@@ -179,3 +179,48 @@ jobs:
 
       - name: shellcheck
         run: shellcheck deploy/scripts/*.sh scripts/*.sh
+
+  web-scope:
+    runs-on: ubuntu-latest
+    outputs:
+      required: ${{ steps.scope.outputs.required }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: scope
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          # pr-sync 手动补跑完整 web 检查。普通 PR 用合并基线，push 用事件前一 SHA。
+          required=true
+          base=$BEFORE
+          if [ -n "$BASE_REF" ]; then base=$(git merge-base HEAD "origin/$BASE_REF"); fi
+          if [ -n "$base" ] && git cat-file -e "$base^{commit}"; then
+            if git diff --quiet "$base" HEAD -- web cmd pkg go.mod go.sum docs/api ':(glob)docs/**/*frontend*' .github scripts Makefile; then
+              required=false
+            else
+              test "$?" -eq 1
+            fi
+          fi
+          echo "required=$required" >> "$GITHUB_OUTPUT"
+
+  web-build:
+    needs: web-scope
+    if: needs.web-scope.outputs.required == 'true'
+    uses: ./.github/workflows/web-build.yml
+
+  web:
+    needs: [web-scope, web-build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检查范围与实际结果必须一致
+        env:
+          SCOPE: ${{ needs.web-scope.result }}
+          REQUIRED: ${{ needs.web-scope.outputs.required }}
+          BUILD: ${{ needs.web-build.result }}
+        run: |
+          test "$SCOPE" = success
+          case "$REQUIRED/$BUILD" in true/success|false/skipped) ;; *) exit 1 ;; esac

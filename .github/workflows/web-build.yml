@@ -1,0 +1,45 @@
+name: web-build
+on: workflow_call
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.20.2'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run test:coverage
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: web-coverage
+          path: web/coverage/
+          overwrite: true
+          retention-days: 7
+      - run: npm run build
+      - name: 打包生产站点（含隐藏目录）
+        run: tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -C dist -cf "$RUNNER_TEMP/artifact.tar" .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: github-pages
+          path: ${{ runner.temp }}/artifact.tar
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+      - uses: actions/download-artifact@v8
+        with:
+          name: github-pages
+          path: ${{ runner.temp }}/uploaded
+      - name: 校验实际上传的 Pages 包
+        run: python3 ../scripts/verify-pages.py "$RUNNER_TEMP/uploaded/artifact.tar" >> "$GITHUB_STEP_SUMMARY"

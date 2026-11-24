@@ -44,6 +44,7 @@ jobs:
             if gh pr update-branch "$pr" -R "$REPO"; then
               sleep 5
               gh workflow run ci.yml -R "$REPO" --ref "$ref"
+              gh workflow run secret-scan.yml -R "$REPO" --ref "$ref"
               gh workflow run pr-gate.yml -R "$REPO" --ref develop -f pr="$pr"
               gh workflow run claude-review.yml -R "$REPO" --ref develop -f pr="$pr" -f carry=true
             elif [[ "$ref" == agent/* ]]; then
