@@ -12,6 +12,8 @@
     <AppHeader />
     <SideNav @collapsed="offset = SIDENAV_COLLAPSED_WIDTH" @expanded="offset = SIDENAV_WIDTH" />
   </template>
+  <!-- 私信页以外收到新私信时弹提示（不渲染内容） -->
+  <DmToastListener />
 </template>
 
 <script setup>
@@ -22,6 +24,7 @@ import AppHeader from '@/components/layout/AppHeader.vue'
 import SideNav from '@/components/layout/SideNav.vue'
 import MobileTopBar from '@/components/layout/mobile/MobileTopBar.vue'
 import MobileTabBar from '@/components/layout/mobile/MobileTabBar.vue'
+import DmToastListener from '@/components/message/DmToastListener.vue'
 import { useMobileShell, SIDENAV_WIDTH, SIDENAV_COLLAPSED_WIDTH } from '@/composables/useAppShell'
 import { getMobileMeta } from '@/router/mobileMeta'
 

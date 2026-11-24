@@ -46,7 +46,9 @@ import { useI18n } from 'vue-i18n'
 import CreateCircleModal from '@/components/circle/CreateCircleModal.vue'
 import { useSideNavCircles } from '@/composables/useSideNavCircles'
 import { usePendingInvites } from '@/composables/usePendingInvites'
-import { Mail as MailIcon } from '@vicons/tabler'
+import { Mail as MailIcon, MessageCircle } from '@vicons/tabler'
+import { auth } from '@/utils/auth'
+import { useUnreadNotice } from '@/composables/useUnreadNotice'
 
 const router = useRouter()
 const route = useRoute()
@@ -145,6 +147,29 @@ const invitesMenuItem = computed(() => {
 })
 const inviteItems = computed(() => (pendingCount.value > 0 ? [invitesMenuItem.value] : []))
 
+// 私信入口（仅登录用户）：角标为私信未读总数（dm-unread，与消息中心铃铛分开）；折叠时图标右上角小红点。
+// 共用 useUnreadNotice 单例连接；访客不 acquire，避免无意义的启动调用
+const isLoggedIn = auth.isAuthenticated()
+const dmUnreadCount = isLoggedIn ? useUnreadNotice().dmUnreadCount : computed(() => 0)
+const messagesMenuItem = computed(() => {
+  const count = dmUnreadCount.value
+  const badge = count > 99 ? '99+' : String(count)
+  return {
+    label: () => h(RouterLink, { to: '/messages', class: 'nav-link nav-link--invites' }, {
+      default: () => [
+        h('span', null, t('message.entry')),
+        count > 0 ? h('span', { class: 'nav-badge' }, badge) : null
+      ]
+    }),
+    key: 'messages',
+    icon: () => h('span', { class: 'nav-icon-wrap' }, [
+      h(NIcon, null, { default: () => h(MessageCircle) }),
+      isCollapsed.value && count > 0 ? h('span', { class: 'nav-dot' }) : null
+    ])
+  }
+})
+const messageItems = computed(() => (isLoggedIn ? [messagesMenuItem.value] : []))
+
 // 机器人管理菜单项：对所有用户开放，后端做权限控制（避免异步角色判断导致菜单项跳动）
 const agentMenuItem = computed(() => ({
   label: linkLabel('/admin/agents', t('agent.navEntry')),
@@ -211,6 +236,7 @@ const activeItem = computed(() => {
   if (path === '/discover') return 'explore'
   if (path === '/admin/agents') return 'admin-agents'
   if (path === '/invites') return 'my-invites'
+  if (path === '/messages' || path.startsWith('/messages/')) return 'messages'
   if (path.startsWith('/circle/')) {
     const id = path.split('/')[2]
     // 匹配「我的圈子」或「近期活跃」中的对应条目
@@ -243,6 +269,7 @@ const menuOptions = computed(() => {
         key: 'explore',
         icon: () => h(NIcon, null, { default: () => h(Explore) })
       },
+      ...messageItems.value,
       agentMenuItem.value,
       {
         label: t('circle.createCircle'),
@@ -270,6 +297,7 @@ const menuOptions = computed(() => {
       key: 'explore',
       icon: () => h(NIcon, null, { default: () => h(Explore) })
     },
+    ...messageItems.value,
     agentMenuItem.value,
     {
       label: t('circle.createCircle'),
@@ -357,6 +385,8 @@ const handleMenuSelect = (key) => {
     router.push('/admin/agents')
   } else if (key === 'my-invites') {
     router.push('/invites')
+  } else if (key === 'messages') {
+    router.push('/messages')
   } else if (key === 'view-all-circles') {
     router.push({ path: '/profile', query: { tab: 'groups' } })
   } else if (key.startsWith('active-circle-')) {

@@ -28,6 +28,8 @@ export const loginLocation = (currentFullPath) => ({
 const TAB_MATCH = {
   home: (path) => path === '/home',
   discover: (path) => path === '/discover' || path === '/hot' || path === '/search',
+  // 私信：会话列表与聊天页（聊天页移动端不显示 TabBar，这里只为语义完整）
+  messages: (path) => path === '/messages' || path.startsWith('/messages/'),
   notice: (path) => path === '/notifications',
   me: (path) => path === '/profile' || path === '/invites'
 }
