@@ -1312,6 +1312,7 @@ export default {
   // Post sharing (backend v0.9.0; workstream D appends page copy here)
   share: {
     button: 'Share',
+    shared: 'Shared',
     linkCopied: 'Link copied',
     copyFailed: 'Copy failed. Please copy the link manually',
     // Error copy: shareErrorKey in utils/share.js
