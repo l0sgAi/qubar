@@ -3,10 +3,8 @@ import request from '@/utils/request'
 /**
  * 创建 AI 回复机器人
  * 创建成功后后端自动生成 role=2 机器人账号（linked_user_id，只读，前端不传）。
- * 注意：创建统一返回 200/`Created successfully`（非 201）；不传 status 一律默认启用，
- * 创建时可直接传 status=0 停用。
+ * 创建成功返回 200，机器人默认启用。管理列表使用 updateAgent 调整状态。
  * @param {Object} data - 机器人数据
- * @param {0|1} [data.status] - 0 停用，1 启用
  * @param {string} data.name - 展示名，全局唯一，1-50 字符
  * @param {string} [data.avatar_url] - 头像 URL，可空
  * @param {string} data.api_protocol - 协议：openai/anthropic

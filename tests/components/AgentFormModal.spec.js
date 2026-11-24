@@ -158,6 +158,7 @@ describe('AgentFormModal 自动回复', () => {
   it('圈内创建：带 circle_id 与 auto_config，展示圈内说明', async () => {
     await openModal({ scope: 'circle', circleId: 'c1' })
     expect(bodyText()).toContain('圈内机器人只回复本圈内容')
+    expect(bodyText()).toContain('机器人创建后默认启用，可在管理列表中停用。')
     Object.assign(form(), { name: 'cbot', model: 'm', trigger_keywords: ['k'] })
     await toggle(true)
     form().auto_reply.post_hot_min = 50
@@ -165,6 +166,8 @@ describe('AgentFormModal 自动回复', () => {
     expect(mocks.createCircleAgent).toHaveBeenCalledTimes(1)
     const payload = mocks.createCircleAgent.mock.calls[0][0]
     expect(payload.circle_id).toBe('c1')
+    expect(payload).not.toHaveProperty('status')
+    expect(mocks.updateCircleAgent).not.toHaveBeenCalled()
     expect(payload.auto_config).toEqual({
       auto_reply: {
         enabled: true,
@@ -220,17 +223,19 @@ describe('AgentFormModal 自动回复', () => {
     })
   })
 
-  it('全局创建手动机器人可以同时停用，并以一个请求提交完整的发帖配置', async () => {
+  it('全局创建手动机器人：提示默认启用，单次创建提交完整的发帖配置', async () => {
     await openModal()
-    Object.assign(form(), { name: 'manual', model: 'model', trigger_mode: 3, createDisabled: true })
+    expect(bodyText()).toContain('机器人创建后默认启用，可在管理列表中停用。')
+    Object.assign(form(), { name: 'manual', model: 'model', trigger_mode: 3 })
     wrapper.findAllComponents(NSwitch)[1].vm.$emit('update:value', true)
     await flushPromises()
     expect(bodyText()).toContain('UTC+8')
     Object.assign(form().auto_post, { active_hours: [22, 6], daily_max: 3, topics: [' 游戏 ', '游戏'] })
     await submit()
     expect(mocks.createAgent).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      trigger_mode: 3, status: 0, auto_config: { auto_post: autoPost() }
+      trigger_mode: 3, auto_config: { auto_post: autoPost() }
     }))
+    expect(mocks.createAgent.mock.calls[0][0]).not.toHaveProperty('status')
     expect(mocks.updateAgent).not.toHaveBeenCalled()
   })
 

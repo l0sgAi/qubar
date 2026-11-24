@@ -31,9 +31,7 @@
           />
         </NFormItem>
 
-        <NFormItem v-if="!isEdit">
-          <NCheckbox v-model:checked="formData.createDisabled">{{ t('agent.form.createDisabled') }}</NCheckbox>
-        </NFormItem>
+        <p v-if="!isEdit"><NText depth="3">{{ t('agent.form.createEnabledHint') }}</NText></p>
 
         <NFormItem :label="t('agent.form.avatarUrl')">
           <div class="avatar-row">
@@ -495,7 +493,6 @@ const submitting = ref(false)
 
 const emptyForm = () => ({
   name: '',
-  createDisabled: false,
   avatar_url: '',
   api_protocol: 'openai',
   base_url: '',
@@ -685,7 +682,6 @@ const buildCreatePayload = () => {
     max_replies_per_hour: f.max_replies_per_hour ?? 0,
     min_interval_sec: f.min_interval_sec ?? 0
   }
-  if (f.createDisabled) payload.status = 0
   if (isCircle.value) payload.circle_id = props.circleId
   if (f.api_key.trim()) payload.api_key = f.api_key.trim()
   const llm = buildLlmParams()
