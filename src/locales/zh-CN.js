@@ -1228,7 +1228,9 @@ export default {
       postReported: '本圈帖子《{snippet}》被举报，请及时复核',
       postSelfHarm: '本圈 {actor} 的帖子《{snippet}》疑似有自伤 / 轻生倾向，请关注',
       postRemoved: '你的帖子《{snippet}》被举报，经圈主 / 管理员复核已下架',
-      follow: '{actor} 关注了你'
+      follow: '{actor} 关注了你',
+      // 关注者已注销 / 禁用（actor 缺省）
+      followAnonymous: '有人关注了你'
     },
     mention: {
       button: '提及',
@@ -1271,7 +1273,6 @@ export default {
     loadFailed: '列表加载失败',
     noMore: '没有更多了',
     listOwner: '{name} 的关注与粉丝',
-    listPrivateOwnerHint: '你已设为不公开，只有你自己能看到名单',
     followBack: '回关',
     // 错误文案：utils/follow.js 的 followErrorKey
     error: {

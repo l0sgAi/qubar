@@ -26,7 +26,7 @@
               <div :key="`${activeTab}-${feedView}`" class="feed-body">
                 <!-- 首屏加载：骨架屏模拟列表结构，弱网长加载时感知更流畅 -->
                 <PostListSkeleton v-if="loading && !isAppending" />
-                <!-- 空态：following 引导加圈，其余通用空文案 -->
+                <!-- 空态：following（已加入圈子 ∪ 关注的人，后端 v0.9.0）引导加圈或关注人，其余通用空文案 -->
                 <div v-else-if="posts.length === 0" class="feed-empty">
                   {{ activeTab === 'following' ? t('feed.emptyFollowing') : t('feed.empty') }}
                 </div>

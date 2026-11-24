@@ -1226,7 +1226,9 @@ export default {
       postReported: 'A post in your circle, "{snippet}", was reported. Please review it.',
       postSelfHarm: 'A post by {actor} in your circle, "{snippet}", may show signs of self-harm. Please check in.',
       postRemoved: 'Your post "{snippet}" was reported and removed after review by a circle owner / admin',
-      follow: '{actor} followed you'
+      follow: '{actor} followed you',
+      // Follower deleted / disabled (no actor)
+      followAnonymous: 'Someone followed you'
     },
     mention: {
       button: 'Mention',
@@ -1269,7 +1271,6 @@ export default {
     loadFailed: 'Failed to load the list',
     noMore: 'No more',
     listOwner: "{name}'s following and followers",
-    listPrivateOwnerHint: 'Your lists are private. Only you can see the names',
     followBack: 'Follow back',
     // Error copy: followErrorKey in utils/follow.js
     error: {
