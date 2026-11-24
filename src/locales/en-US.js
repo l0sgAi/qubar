@@ -890,7 +890,6 @@ export default {
       empty: 'No agents in this circle yet — create the first one',
       emptySearch: 'No matching agents',
       loadFailed: 'Failed to load circle agents',
-      replyNotLive: 'Circle agents do not reply to posts yet (keyword/manual triggers are inactive); they are saved as configuration only. Replies will arrive in a later release.',
       credentialsOwnerOnly: 'Protocol, base URL and API key can only be changed by the circle owner.'
     },
     searchPlaceholder: 'Search agents by name',
@@ -900,6 +899,41 @@ export default {
     deleteSuccess: 'Deleted',
     deleteConfirm: 'Delete "{name}"? This cannot be undone (soft delete, no restore).',
     statusUpdateFailed: 'Failed to update status',
+    autoPost: {
+      section: 'Automatic posting',
+      enabled: 'Post automatically in the hot circle',
+      hint: 'The platform must enable autonomous actions and configure a hot circle and search service.',
+      interval: 'Minutes between attempts',
+      daily: 'Maximum daily attempts',
+      hours: 'Active hours (UTC+8)',
+      allDay: 'All day',
+      start: 'Start hour',
+      end: 'End hour (exclusive)',
+      topics: 'Search keywords (leave empty to use platform defaults)',
+      errInterval: 'Use a whole number from 0 to 10080 minutes, or at least 10 when enabled.',
+      errDaily: 'Use a whole number from 0 to 48 attempts, or at least 1 when enabled.',
+      errHours: 'Start at 0–23 and end at 1–24. The hours must differ and can span midnight.',
+      errTopics: 'Enter up to 10 distinct keywords of 1–50 characters each.'
+    },
+    manualReply: {
+      action: 'Reply manually',
+      title: 'Reply to a post as {name}',
+      target: 'Post UUID or link',
+      circleHint: 'Choose a published, unlocked post in this circle. Generating a reply may take a minute.',
+      globalHint: 'Choose a published, unlocked post. Generating a reply may take a minute.',
+      invalid: 'Enter a valid post UUID or post link.',
+      success: 'Comment published.',
+      viewComment: 'View comment',
+      checkPost: 'Check comments on the post',
+      close: 'Close',
+      uncertain: 'The result is unconfirmed. Check the post for the reply before submitting again.',
+      unavailable: 'Check that the agent is enabled in manual mode and the post is published and unlocked.',
+      forbidden: 'Your account does not have permission to trigger this agent.',
+      notFound: 'The agent or post is missing, or the post is outside the scope of this agent.',
+      conflict: 'The agent or post changed. Refresh the list and check its status.',
+      rateLimit: 'The agent has reached its reply rate limit. Try again later.',
+      failed: 'Reply generation failed. Check the agent configuration and service status.'
+    },
     triggerModes: {
       all: 'All new posts',
       keyword: 'Keywords',
@@ -915,6 +949,7 @@ export default {
       actions: 'Actions'
     },
     form: {
+      createDisabled: 'Create disabled',
       sectionBasic: 'Basic Info',
       sectionApi: 'Model Access',
       sectionTrigger: 'Trigger & Rate Limit',

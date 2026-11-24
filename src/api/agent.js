@@ -4,8 +4,9 @@ import request from '@/utils/request'
  * 创建 AI 回复机器人
  * 创建成功后后端自动生成 role=2 机器人账号（linked_user_id，只读，前端不传）。
  * 注意：创建统一返回 200/`Created successfully`（非 201）；不传 status 一律默认启用，
- * 需要「创建即停用」须创建后立刻 PUT 改 status=0。
+ * 创建时可直接传 status=0 停用。
  * @param {Object} data - 机器人数据
+ * @param {0|1} [data.status] - 0 停用，1 启用
  * @param {string} data.name - 展示名，全局唯一，1-50 字符
  * @param {string} [data.avatar_url] - 头像 URL，可空
  * @param {string} data.api_protocol - 协议：openai/anthropic
@@ -25,7 +26,7 @@ import request from '@/utils/request'
  * @param {Object} [data.auto_config] - 自主行为配置，不传 = 不自动回复；
  *   auto_reply: { enabled, targets: ('post'|'comment')[], post_hot_min, comment_like_min,
  *   comment_reply_min, window_hours(1-168), max_per_hour(0-1000) }，规则见后端文档 §2.5
- *   （前端校验见 src/utils/agentAutoReply.js）
+ *   auto_post: { enabled, interval_min, daily_max, active_hours, topics, require_review }，见 §2.6
  * @returns {Promise} data 为完整 AgentVO（auto_config.auto_reply 未配置时回显 enabled=false 的零值）
  */
 export function createAgent(data) {
@@ -71,7 +72,7 @@ export function getAgentDetail(id) {
  * - api_key 传空串 = 清除 key；要「保持不变」就不传该字段
  * - filter_prompt 传空串 = 关闭判定（回到命中即回复）；不传 = 保持原条件
  * - llm_params / trigger_keywords 是整体替换语义（传了就覆盖全量），不是合并
- * - auto_config.auto_reply 传了即整体替换该子对象（未传字段按 0 / false 处理），不传保持不变
+ * - auto_config.auto_reply / auto_post 传了即整体替换该子对象（未传字段按 0 / false 处理），不传保持不变
  * - trigger_mode 改为 2 时需同请求带非空 trigger_keywords（或已存关键词非空）
  * - 空请求体（无任何可更新字段）返回 400
  * @param {string} id - 机器人 ID(UUIDv7)
@@ -118,6 +119,7 @@ export function deleteAgent(id) {
 export function triggerAgentReply(id, postId) {
   return request({
     url: `/agent/${id}/reply/${postId}`,
-    method: 'post'
+    method: 'post',
+    timeout: 120000
   })
 }
