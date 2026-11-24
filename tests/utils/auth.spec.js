@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import { computed } from 'vue'
 import { auth } from '@/utils/auth'
 
 const DEVICE_ID_KEY = 'qubar_device_id'
@@ -54,5 +55,30 @@ describe('utils/auth device_id', () => {
     auth.clearToken()
     expect(auth.getToken()).toBeNull()
     expect(localStorage.getItem(DEVICE_ID_KEY)).toBe(ID_A)
+  })
+})
+
+describe('utils/auth 会话变更', () => {
+  it('同标签页登录、换号和登出时更新订阅', () => {
+    const current = computed(() => auth.getToken())
+    expect(current.value).toBeNull()
+    auth.setToken('session-a', 60)
+    expect(current.value).toBe('session-a')
+    auth.setToken('session-b', 60)
+    expect(current.value).toBe('session-b')
+    auth.clearToken()
+    expect(current.value).toBeNull()
+  })
+
+  it('其它标签页更换 token 或清空存储时更新订阅', () => {
+    auth.setToken('session-a')
+    const current = computed(() => auth.getToken())
+    expect(current.value).toBe('session-a')
+    localStorage.setItem('qubar_token', 'session-b')
+    window.dispatchEvent(new StorageEvent('storage', { key: 'qubar_token' }))
+    expect(current.value).toBe('session-b')
+    localStorage.clear()
+    window.dispatchEvent(new StorageEvent('storage', { key: null }))
+    expect(current.value).toBeNull()
   })
 })

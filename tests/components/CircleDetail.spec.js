@@ -12,6 +12,9 @@ const api = vi.hoisted(() => ({
 const msg = vi.hoisted(() => ({ success: null, error: null, warning: null, info: null }))
 const authState = vi.hoisted(() => ({ loggedIn: true }))
 
+const shell = vi.hoisted(() => ({ mobile: false }))
+const shareOrCopy = vi.hoisted(() => vi.fn())
+vi.mock('@/utils/share', async (original) => ({ ...(await original()), shareOrCopy }))
 vi.mock('@/api/circle', () => ({
   getCircleDetail: (...a) => api.getCircleDetail(...a),
   getCirclePosts: (...a) => api.getCirclePosts(...a),
@@ -24,7 +27,7 @@ vi.mock('@/utils/guest-action', () => ({ requireLogin: vi.fn() }))
 vi.mock('@/composables/useSideNavCircles', () => ({ MEMBERSHIP_CHANGED_EVENT: 'test:membership' }))
 vi.mock('@/composables/usePageTitle', () => ({ usePageTitle: () => ({ setTitleData: () => {} }) }))
 vi.mock('@/composables/useAppShell', () => ({
-  useAppShell: () => ({ offset: ref(260), mobileShell: computed(() => false), contentStyle: computed(() => ({})) })
+  useAppShell: () => ({ offset: ref(260), mobileShell: computed(() => shell.mobile), contentStyle: computed(() => ({})) })
 }))
 vi.mock('@/components/layout/AppShell.vue', () => ({ default: { render: () => null } }))
 vi.mock('@/components/post/PostList.vue', () => ({
@@ -92,6 +95,8 @@ describe('CircleDetail：私密圈非成员空态（后端 #170）', () => {
   beforeEach(() => {
     vi.stubGlobal('IntersectionObserver', class { observe() {} disconnect() {} })
     vi.spyOn(console, 'error').mockImplementation(() => {})
+    shell.mobile = false
+    shareOrCopy.mockReset()
     authState.loggedIn = true
     api.getCirclePosts = vi.fn(() => Promise.resolve({ data: { posts: [{ id: 'p1' }], search_after: '' } }))
     api.joinCircle = vi.fn(() => Promise.resolve({ code: 200 }))
@@ -194,6 +199,26 @@ describe('CircleDetail：私密圈非成员空态（后端 #170）', () => {
 
     expect(api.getModerationCounts).toHaveBeenCalledWith(CIRCLE_ID)
     expect(wrapper.find('.manage-badge').text()).toBe('3')
+  })
+
+  it('已开启的免打扰只在成员信息中显示，没有本地修改的按钮', async () => {
+    api.getCircleDetail = vi.fn().mockResolvedValue({ data: fullDetail({ is_joined: true, member_is_disturb: 1 }) })
+    await mountPage()
+    expect(wrapper.find('.member-info').text()).toContain('消息免打扰')
+    expect(buttonByText('免打扰')).toBeUndefined()
+  })
+
+  it.each([false, true])('圈子分享按钮使用详情链接，移动外框=%s', async (mobile) => {
+    shell.mobile = mobile
+    api.getCircleDetail = vi.fn().mockResolvedValue({ data: restrictedDetail() })
+    shareOrCopy.mockResolvedValue('copied')
+    await mountPage()
+    await wrapper.get('button[aria-label="分享圈子"]').trigger('click')
+    await flushPromises()
+    expect(shareOrCopy).toHaveBeenCalledWith({ title: '私密圈', url: new URL('/circle/c1', location.origin).href })
+    expect(msg.success).toHaveBeenCalledTimes(1)
+    expect(api.getCirclePosts).not.toHaveBeenCalled()
+    expect(buttonByText('举报')).toBeUndefined()
   })
 
   it.each([

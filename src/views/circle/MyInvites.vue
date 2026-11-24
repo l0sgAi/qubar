@@ -52,7 +52,7 @@
                 round
                 quaternary
                 class="reject-btn"
-                :disabled="actingId === item.invite_id"
+                :disabled="!!actingId"
                 @click="confirmReject(item)"
               >
                 {{ t('circle.invite.mine.reject') }}
@@ -63,7 +63,7 @@
                 type="primary"
                 class="accept-btn"
                 :loading="actingId === item.invite_id && acting === 'accept'"
-                :disabled="actingId === item.invite_id && acting !== 'accept'"
+                :disabled="!!actingId"
                 @click="accept(item)"
               >
                 {{ t('circle.invite.mine.accept') }}
@@ -87,7 +87,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, watch, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { NAvatar, NButton, NEmpty, NIcon, NPagination, useDialog, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
@@ -96,7 +96,7 @@ import AppShell from '@/components/layout/AppShell.vue'
 import SmartLink from '@/components/common/SmartLink.vue'
 import { getMyInvites, respondEmailInvite } from '@/api/circleInvite'
 import { useAppShell } from '@/composables/useAppShell'
-import { usePendingInvites } from '@/composables/usePendingInvites'
+import { getInviteSession, usePendingInvites } from '@/composables/usePendingInvites'
 import { MEMBERSHIP_CHANGED_EVENT } from '@/composables/useSideNavCircles'
 import { useFormatTime } from '@/utils/i18n'
 import { INVITE_PAGE_SIZE, respondInviteErrorKey, isInviteInvalidError } from '@/constants/circleInvite'
@@ -107,7 +107,7 @@ const dialog = useDialog()
 const { t } = useI18n()
 const { formatTime } = useFormatTime()
 const { offset, mobileShell, contentStyle } = useAppShell()
-const { setPendingInvites, refreshPendingInvites } = usePendingInvites()
+const { beginPendingInvitesRead, setPendingInvites, refreshPendingInvites } = usePendingInvites()
 
 const invites = ref([])
 const total = ref(0)
@@ -117,24 +117,28 @@ const loadFailed = ref(false)
 const actingId = ref('')
 const acting = ref('')
 let gen = 0
+let viewVersion = 0
+let listSession = null
+const ownsList = () => listSession !== null && listSession === getInviteSession()
 
 const loadInvites = async () => {
   const myGen = ++gen
+  const countVersion = beginPendingInvitesRead()
   loading.value = true
   loadFailed.value = false
   try {
     const res = await getMyInvites({ page: page.value, size: INVITE_PAGE_SIZE })
-    if (myGen !== gen) return
+    if (myGen !== gen || !ownsList()) return
     invites.value = Array.isArray(res.data) ? res.data : []
     total.value = res.total || 0
     // 列表只含待接受邀请：总数直接同步给侧栏 / TabBar 角标
-    setPendingInvites(total.value)
+    setPendingInvites(total.value, countVersion)
     if (invites.value.length === 0 && page.value > 1 && total.value > 0) {
       page.value = Math.ceil(total.value / INVITE_PAGE_SIZE)
       loadInvites()
     }
   } catch {
-    if (myGen !== gen) return
+    if (myGen !== gen || !ownsList()) return
     loadFailed.value = true
   } finally {
     if (myGen === gen) loading.value = false
@@ -152,52 +156,71 @@ const handleRespondError = (error) => {
   if (isInviteInvalidError(error)) loadInvites()
 }
 
-const accept = async (item) => {
+const respond = async (item, accepted, version) => {
+  if (version !== viewVersion || actingId.value || !ownsList()) return
+  const session = listSession
   actingId.value = item.invite_id
-  acting.value = 'accept'
+  acting.value = accepted ? 'accept' : 'reject'
   try {
-    const res = await respondEmailInvite({ invite_id: item.invite_id, accept: true })
+    const res = await respondEmailInvite({ invite_id: item.invite_id, accept: accepted })
+    if (session !== getInviteSession()) return
     const { circle_id: circleId, already_member: alreadyMember } = res.data || {}
-    if (alreadyMember) {
-      message.info(t('circle.invite.mine.alreadyMember'))
-    } else {
-      message.success(t('circle.invite.mine.accepted', { name: item.circle_name || '' }))
-      window.dispatchEvent(new CustomEvent(MEMBERSHIP_CHANGED_EVENT))
+    if (accepted && !alreadyMember) window.dispatchEvent(new CustomEvent(MEMBERSHIP_CHANGED_EVENT))
+    // 已离开页面时仍同步同账号的角标，但不跳转、不重置后来页面的状态。
+    if (version !== viewVersion) {
+      refreshPendingInvites({ force: true })
+      return
     }
-    refreshPendingInvites({ force: true })
-    router.push(`/circle/${circleId || item.circle_id}`)
+    if (accepted) {
+      ++gen
+      if (alreadyMember) message.info(t('circle.invite.mine.alreadyMember'))
+      else message.success(t('circle.invite.mine.accepted', { name: item.circle_name || '' }))
+      refreshPendingInvites({ force: true })
+      router.push(`/circle/${circleId || item.circle_id}`)
+    } else {
+      message.success(t('circle.invite.mine.rejected'))
+      await loadInvites()
+    }
   } catch (error) {
-    handleRespondError(error)
+    if (version === viewVersion && ownsList()) handleRespondError(error)
   } finally {
-    actingId.value = ''
-    acting.value = ''
+    if (version === viewVersion) {
+      actingId.value = ''
+      acting.value = ''
+    }
   }
 }
 
+const accept = (item) => respond(item, true, viewVersion)
 const confirmReject = (item) => {
+  const version = viewVersion
   dialog.warning({
     title: t('circle.invite.mine.rejectTitle'),
     content: t('circle.invite.mine.rejectContent', { name: item.circle_name || '' }),
     positiveText: t('circle.invite.mine.reject'),
     negativeText: t('common.cancel'),
-    onPositiveClick: async () => {
-      actingId.value = item.invite_id
-      acting.value = 'reject'
-      try {
-        await respondEmailInvite({ invite_id: item.invite_id, accept: false })
-        message.success(t('circle.invite.mine.rejected'))
-        await loadInvites()
-      } catch (error) {
-        handleRespondError(error)
-      } finally {
-        actingId.value = ''
-        acting.value = ''
-      }
-    }
+    onPositiveClick: () => respond(item, false, version)
   })
 }
 
-onMounted(loadInvites)
+watch(getInviteSession, (session) => {
+  listSession = session
+  ++gen
+  ++viewVersion
+  invites.value = []
+  total.value = 0
+  page.value = 1
+  loading.value = false
+  loadFailed.value = false
+  actingId.value = ''
+  acting.value = ''
+  if (session) loadInvites()
+}, { immediate: true, flush: 'sync' })
+
+onBeforeUnmount(() => {
+  ++gen
+  ++viewVersion
+})
 </script>
 
 <style scoped>

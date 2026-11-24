@@ -52,24 +52,6 @@
 
             <!-- 操作按钮组 -->
             <div class="action-buttons">
-              <!-- 免打扰按钮（移动端门户不提供，见 docs/mobile-adaptation-plan.md 2.3） -->
-              <NButton
-                v-if="circleDetail.is_joined && !mobileShell"
-                size="large"
-                quaternary
-                round
-                @click="handleToggleDisturb"
-                :type="circleDetail.member_is_disturb ? 'warning' : 'default'"
-              >
-                <template #icon>
-                  <NIcon>
-                    <BellOffIcon v-if="circleDetail.member_is_disturb" />
-                    <BellIcon v-else />
-                  </NIcon>
-                </template>
-                {{ circleDetail.member_is_disturb ? t('circle.disturbOn') : t('circle.disturbOff') }}
-              </NButton>
-
               <!-- 创建帖子按钮（移动端不支持发帖） -->
               <NButton
                 v-if="circleDetail.is_joined && !mobileShell"
@@ -164,14 +146,11 @@
                 {{ isButtonHovered ? t('circle.leaveCircle') : t('circle.joined') }}
               </NButton>
 
-              <!-- 更多选项下拉菜单 -->
-              <AppDropdown :options="moreOptions" @select="handleMoreSelect">
-                <NButton size="large" quaternary round>
-                  <template #icon>
-                    <NIcon><MoreIcon /></NIcon>
-                  </template>
-                </NButton>
-              </AppDropdown>
+              <NButton size="large" quaternary round :aria-label="t('circle.shareCircle')" @click="handleShare">
+                <template #icon>
+                  <NIcon><ShareIcon /></NIcon>
+                </template>
+              </NButton>
             </div>
           </div>
         </div>
@@ -362,7 +341,6 @@ import { useRoute, useRouter } from 'vue-router'
 import { NTabs, NTabPane, NButton, NIcon, NTag, NSpin, NTooltip, useMessage, useDialog } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import AppShell from '@/components/layout/AppShell.vue'
-import AppDropdown from '@/components/common/AppDropdown.vue'
 import { useAppShell } from '@/composables/useAppShell'
 import { shareOrCopy } from '@/utils/share'
 import PostList from '@/components/post/PostList.vue'
@@ -376,7 +354,7 @@ import { usePageTitle } from '@/composables/usePageTitle'
 import { isManager, needsInviteToJoin, joinErrorKey, isForbiddenError } from '@/constants/circle'
 import { canManageInvites } from '@/constants/circleInvite'
 import { getModerationCounts } from '@/api/moderation'
-import { Bell as BellIcon, BellOff as BellOffIcon, Edit as EditIcon, DotsVertical as MoreIcon } from '@vicons/tabler'
+import { Edit as EditIcon, Share as ShareIcon } from '@vicons/tabler'
 import { User as UserIcon, FileText as FileTextIcon, Flame as FlameIcon } from '@vicons/tabler'
 import { ShieldCheck as ShieldCheckIcon, Lock as LockIcon, UserPlus as UserPlusIcon } from '@vicons/tabler'
 
@@ -391,22 +369,6 @@ const { offset, mobileShell, contentStyle } = useAppShell()
 
 // 注入圈子搜索状态设置方法
 const setCircleSearch = inject('setCircleSearch', () => {})
-
-// 更多选项下拉菜单（移动端只保留分享：举报尚在开发中，门户不展示）
-const moreOptions = computed(() => {
-  const options = [
-    {
-      label: t('circle.shareCircle'),
-      key: 'share'
-    },
-    {
-      label: t('circle.report'),
-      key: 'report'
-    }
-  ]
-
-  return mobileShell.value ? options.filter(o => o.key === 'share') : options
-})
 
 // 圈子详情数据
 const circleDetail = ref({
@@ -705,42 +667,15 @@ const doLeaveCircle = async () => {
   }
 }
 
-// 切换免打扰
-const handleToggleDisturb = async () => {
-  try {
-    // TODO: 调用切换免打扰接口
-    circleDetail.value.member_is_disturb = !circleDetail.value.member_is_disturb
-    message.success(circleDetail.value.member_is_disturb ? t('circle.disturbEnabled') : t('circle.disturbDisabled'))
-  } catch (error) {
-    message.error(t('messages.operationFailed', { error: error.message || t('common.unknownError') }))
-  }
-}
-
 // 创建帖子
 const handleCreatePost = () => {
   // TODO: 跳转到发帖页面，并传递圈子ID
   router.push(`/create-post?circleId=${circleDetail.value.id}`)
 }
 
-// 更多选项处理
-const handleMoreSelect = (key) => {
-  switch (key) {
-    case 'share':
-      if (mobileShell.value) {
-        handleMobileShare()
-      } else {
-        message.info(t('common.featureInDevelopment'))
-      }
-      break
-    case 'report':
-      message.info(t('common.featureInDevelopment'))
-      break
-  }
-}
-
-// 移动端分享：系统分享面板，不支持时复制链接
-const handleMobileShare = async () => {
-  const result = await shareOrCopy({ title: circleDetail.value.name, url: window.location.href })
+// 分享圈子详情页：系统分享面板，不支持时复制链接
+const handleShare = async () => {
+  const result = await shareOrCopy({ title: circleDetail.value.name, url: new URL(router.resolve(`/circle/${circleDetail.value.id}`).href, window.location.origin).href })
   if (result === 'copied') message.success(t('mobile.linkCopied'))
   else if (result === 'failed') message.error(t('mobile.copyFailed'))
 }
