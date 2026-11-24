@@ -221,3 +221,19 @@ export function reportPost(data) {
     data
   })
 }
+
+/**
+ * 分享帖子计数（需登录；后端 v0.9.0 #232）。只做外部分享：前端拼链接（utils/share.js 的 postShareUrl）
+ * 复制 / 唤起系统分享，同时调本接口。一人一帖只计一次，不可撤销；接口失败不影响分享本身。
+ * 文档：后端 docs/api/post-share-api.md
+ * @param {string} postId - 帖子 ID
+ * @returns {Promise} data: { share_count, first_share }。失败时 reject：
+ *   401 / 202 未登录（访客不要调用）；404 / 204 帖子不可分享；503 / 212 服务端已回滚，可直接重试（utils/share.js 的 isShareRetryableError）
+ */
+export function sharePost(postId) {
+  return request({
+    url: '/post/share',
+    method: 'post',
+    data: { post_id: postId }
+  })
+}
