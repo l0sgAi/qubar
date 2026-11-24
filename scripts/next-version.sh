@@ -24,13 +24,11 @@ if [ -n "$(git tag --points-at "$REV" --list 'v[0-9]*')" ]; then
   exit 0
 fi
 
-prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$REV" 2>/dev/null || true)
+prev=$(git describe --first-parent --tags --abbrev=0 --match 'v[0-9]*' "$REV" 2>/dev/null || true)
 if [ -n "$prev" ]; then
-  range="$prev..$REV"
   base="${prev#v}"
   base="${base%%[-+]*}"
 else
-  range="$REV"
   base="0.0.0"
 fi
 
@@ -42,8 +40,8 @@ major="${BASH_REMATCH[1]}"
 minor="${BASH_REMATCH[2]}"
 patch="${BASH_REMATCH[3]}"
 
-subjects=$(git log --no-merges --format='%s' "$range")
-bodies=$(git log --no-merges --format='%b' "$range")
+subjects=$("$(dirname "$0")/product-log.sh" "$prev" "$REV" '%s')
+bodies=$("$(dirname "$0")/product-log.sh" "$prev" "$REV" '%b')
 if [ -z "$subjects" ]; then
   log "${prev:-（无 tag）} 之后没有新提交，跳过"
   echo "prev=$prev"
@@ -71,6 +69,6 @@ case "$bump" in
 esac
 
 next="v$major.$minor.$patch"
-log "${prev:-（无 tag）} → $next（$bump，$(wc -l <<<"$subjects" | tr -d ' ') 个提交）"
+log "${prev:-（无 tag）} → ${next}（${bump}，$(wc -l <<<"$subjects" | tr -d ' ') 个提交）"
 echo "prev=$prev"
 echo "next=$next"

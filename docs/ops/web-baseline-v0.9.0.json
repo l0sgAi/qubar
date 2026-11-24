@@ -1,0 +1,11 @@
+{
+  "sha": "8828539beb628f4e43379f601d53738744b6397d",
+  "image": "ghcr.io/l0sgai/qubar@sha256:65cd27682b9a4a5b29233ebaed404f307fea9bd2e8f430ecf007f533e60f1390",
+  "deployment": "https://github.com/l0sgAi/qubar/actions/runs/45383230472",
+  "pages": {
+    "sha": "b8f551dc60f23a26835412fbd6a6008bab23d54a",
+    "sha256": "1444231edc98dfad5ede59111a6d1b1fd8cf470bd0a8ecfbf283263164e60a4b",
+    "url": "https://github.com/l0sgAi/qubar/releases/download/web-baseline-v0.9.0/pages.tar",
+    "deployment": "https://github.com/l0sgAi/qubar-frontend/actions/runs/45387861482"
+  }
+}
