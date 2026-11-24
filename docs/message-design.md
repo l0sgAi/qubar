@@ -306,8 +306,9 @@ DELETE /message/conversations/:id        UPDATE 成员行 SET cleared = last_rea
    锁覆盖不到的情况只有「同键发往不同接收方」（锁的是不同会话行），由第 2 步唯一索引兜底：`DO NOTHING` 会等冲突事务提交，不报唯一冲突，不会 500。
 
 **应用层**：`SendService.SendWithClientMsgID(ctx, sender, receiver, content, clientMsgID)`；原 `Send` 等于 `clientMsgID=""`，签名不变。
-校验顺序：发给自己 → 正文 → `client_msg_id` 格式 → 接收方状态（#240 权限）→ 关注关系 → `SendDirect`。所以重放请求同样要先通过接收方 / 权限判定：
-原消息发出后对方被禁用或关闭了私信，重试得到的是对应的 404 / 403，而不是原消息。
+校验顺序：发给自己 → 正文 → `client_msg_id` 格式 → 接收方状态 → 发送方状态 / #240 权限 → 关注关系 → `SendDirect`。重放请求同样要先通过接收方状态判定：
+原消息发出后对方被禁用 / 删除，重试得到的是 404，而不是原消息。**#240 私信权限设置的拒绝例外**：原消息发出后对方改了设置（关闭 / 取关），
+同一个 `client_msg_id` 重试仍返回原消息（维护者 2026-11-24 确认，见第十四节 14.2）。
 
 **与 #242 频率限制的关系**：频率限制在应用层、`SendDirect` 之前，重放请求会先经过它（本 issue 不改频率口径，是否把重放计入频率由 #242 决定）。
 #242 的口径：重放不消耗频率配额、也不会被频率限制拒绝，见第十三节 13.4 / 13.5。
@@ -418,6 +419,8 @@ Send
 
 > 用户设置「谁可以给我发私信」。维护者 2026-11-11 确认：四个选项、存 `user_setting` 新列默认所有人；已有会话同样受约束、对方回复过不豁免；
 > 「我能否给对方发私信」放在 `GET /message/conversations/with/:user_id` 的响应里；先看权限再看 #239 的 5 条限制。
+> 维护者 2026-11-24 确认：权限检查在 `checkSender` 之后、`sendLimitFor` 之前（不占 #242 频率配额）；#248 幂等重放绕过权限拒绝、返回原消息；
+> `can_send` 不反映 #242 频率限制。
 
 ### 14.1 选项与存储
 
@@ -440,9 +443,11 @@ Send
 **5 条限制**（`sendLimitFor`）→ **频率配额**（`acquireSendRate`，#242）→ `SendDirect`（事务内 #248 重放判断 → #239 `checkSendLimit` → 写入）。
 权限拒绝时直接返回：不再查 5 条限制（「关闭」时连关注关系都不查），**不占用频率配额**（在 `acquireSendRate` 之前），不写库、不推送。
 
-**幂等重放（#248）同样先过权限判断**：权限检查在应用层、`SendDirect` 之前，重放请求不绕过它。原消息发出后对方改了设置（关闭 / 取关），
-同一个 `client_msg_id` 重试得到对应的 403，而不是原消息——与第十二节「重放请求同样要先通过接收方 / 权限判定」的口径一致，
-也与接收方被禁用后重放返回 404 一致（「设置优先」）。频率限制则相反：重放可以绕过（第十三节），因为频率是发送方自身的额度。
+**幂等重放（#248）绕过权限拒绝**（维护者 2026-11-24 确认）：第一次发送时权限允许、消息已送达，之后对方改了设置（关闭 / 取关），
+同一个 `client_msg_id` 的重试**返回原消息**（不新增消息、不改计数 / 未读 / 最后消息、不推送），新的 `client_msg_id` 才返回 403。
+实现同 #242 的 `replayBypassesRateLimit`：只有被权限拒绝（三个权限哨兵错误）**且**带 `client_msg_id` 时，`replayBypassesDMPermission` 用
+`repo.HasClientMsgID` 按唯一索引查一次，命中就放行，交给 `SendDirect` 在事务内返回原消息；正常发送不多任何查询；查询出错按拒绝处理并记日志。
+**接收方状态的拒绝不放行**：对方被禁用 / 删除（404）或是机器人（403）时重放仍返回对应错误（第十二节原口径不变）。
 
 | 拒绝 | 哨兵错误 | HTTP |
 |---|---|---|
@@ -477,11 +482,11 @@ Send
 - 接口原先不校验对方状态（#246）；现在为了 `can_send` 会读一次对方状态（`UserService.GetByID`，缓存优先），但仍**不因对方状态报错**，
   `conversation` 的返回规则不变（对方被禁用 / 删除时 `peer=null`、`can_send=false`）。
 - `can_send` 是查询时刻的快照，发送仍以 `POST /message/send` 的结果为准。
-- **不反映 #242 的发送频率限制**：频率是发送方自身的短时额度，与「能不能给这个人发」无关，且会让每次进主页都多读 Redis；超限时发送返回 429。
+- **不反映 #242 的发送频率限制**（维护者 2026-11-24 确认：只看接收方状态 + 权限 + #239 未关注上限）：频率是发送方自身的短时额度，与「能不能给这个人发」无关，且会让每次进主页都多读 Redis；超限时发送返回 429。
 
 ### 14.4 测试
 
-- 单测：`application/permission_test.go`（四个选项 × 四种关注关系的发送结果、判断顺序、权限拒绝不占频率配额、can_send 各原因与 JSON）、user 域设置校验 / handler。
+- 单测：`application/permission_test.go`（四个选项 × 四种关注关系的发送结果、判断顺序、权限拒绝不占频率配额、幂等重放绕过权限拒绝、can_send 各原因与 JSON）、user 域设置校验 / handler。
 - 集成：`pkg/composition/message_dm_permission_integration_test.go`（真实设置 + 真实关注：四个选项 × 关注关系组合下发送结果与 `can_send` 一致、
-  拒绝不建会话；已有会话且对方回复过不豁免；先权限后 5 条）、`infrastructure/dm_permission_integration_test.go`（`GetSendLimitState`）、
+  拒绝不建会话；已有会话且对方回复过不豁免；先权限后 5 条；对方改为关闭后同 `client_msg_id` 重放返回原消息且不改数据、新键 403）、`infrastructure/dm_permission_integration_test.go`（`GetSendLimitState`）、
   `user/infrastructure/user_setting_dm_permission_integration_test.go`（新列按列 upsert）。

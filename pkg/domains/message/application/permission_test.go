@@ -235,3 +235,55 @@ func TestSend_DMPermissionDeniedUsesNoRateQuota(t *testing.T) {
 		t.Errorf("acquires=%d releases=%v sends=%d, want 0 / none / 0", limiter.acquires, limiter.releases, repo.sendCalls)
 	}
 }
+
+// TestSendWithClientMsgID_DMPermissionReplay 幂等重放（#248）绕过私信权限拒绝（维护者 2026-11-24 确认）：
+// client_msg_id 已发过 → 放行、返回原消息、不推送；没发过 / 不带 / 查询出错 → 403；接收方状态拒绝不放行；正常发送不额外查询。
+func TestSendWithClientMsgID_DMPermissionReplay(t *testing.T) {
+	me, peer := sharedomain.NewID(), sharedomain.NewID()
+	orig := &domain.Message{ID: sharedomain.NewID(), ConversationID: sharedomain.NewID(), SenderID: me, Content: "first"}
+	dbDown := errors.New("db down")
+	for _, tc := range []struct {
+		name        string
+		recipient   fakeRecipients
+		perm        DMPermission
+		replay      *domain.Message
+		lookupErr   error
+		key         string
+		wantErr     error
+		wantLookups int
+		wantReplay  bool
+	}{
+		{name: "closed replay passes", perm: DMPermissionClosed, replay: orig, key: "k1", wantLookups: 1, wantReplay: true},
+		{name: "following-only replay passes", perm: DMPermissionFollowing, replay: orig, key: "k1", wantLookups: 1, wantReplay: true},
+		{name: "mutual-only replay passes", perm: DMPermissionMutual, replay: orig, key: "k1", wantLookups: 1, wantReplay: true},
+		{name: "closed new key", perm: DMPermissionClosed, key: "k2", wantErr: domain.ErrRecipientDMClosed, wantLookups: 1},
+		{name: "closed no key", perm: DMPermissionClosed, replay: orig, wantErr: domain.ErrRecipientDMClosed},
+		{name: "closed lookup error", perm: DMPermissionClosed, replay: orig, key: "k1", lookupErr: dbDown, wantErr: domain.ErrRecipientDMClosed, wantLookups: 1},
+		{name: "recipient gone not bypassed", recipient: fakeRecipients{status: RecipientNotFound}, perm: DMPermissionClosed, replay: orig, key: "k1", wantErr: domain.ErrRecipientNotFound},
+		{name: "allowed send no lookup", perm: DMPermissionEveryone, key: "k3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &replayLookupRepo{fakeRepo: &fakeRepo{replay: tc.replay}, lookupErr: tc.lookupErr}
+			svc := NewMessageService(repo, tc.recipient, &fakeUsers{}, fakeFollows{})
+			svc.SetDMPermissionReader(fakePermission{perm: tc.perm})
+			n := &fakeNotifier{}
+			svc.SetUnreadNotifier(n)
+			vo, err := svc.SendWithClientMsgID(t.Context(), me, peer, "again", tc.key)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("err = %v, want %v", err, tc.wantErr)
+			}
+			if len(repo.lookups) != tc.wantLookups {
+				t.Errorf("lookups = %v, want %d", repo.lookups, tc.wantLookups)
+			}
+			if tc.wantErr != nil {
+				if repo.sendCalls != 0 {
+					t.Errorf("denied send reached SendDirect")
+				}
+				return
+			}
+			if tc.wantReplay && (vo.ID != orig.ID.String() || len(n.msgTo) != 0 || len(n.changed) != 0) {
+				t.Errorf("vo = %+v pushes %v / %v, want original message and no push", vo, n.msgTo, n.changed)
+			}
+		})
+	}
+}

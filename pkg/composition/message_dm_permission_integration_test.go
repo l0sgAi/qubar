@@ -15,6 +15,7 @@ import (
 	messagedomain "interestBar/pkg/domains/message/domain"
 	userapp "interestBar/pkg/domains/user/application"
 	userdomain "interestBar/pkg/domains/user/domain"
+	sharedomain "interestBar/pkg/shared/domain"
 
 	"github.com/google/uuid"
 )
@@ -196,4 +197,61 @@ func TestMessageDMPermission_PermissionBeforeSendLimit(t *testing.T) {
 	}
 	assertCanSend(t, e.canSend(t, me, peer), "")
 	assertRemaining(t, e.mustSend(t, me, peer), nil)
+}
+
+// 幂等重放绕过私信权限（维护者 2026-11-24 确认）：第一次发送成功 → 接收方改为关闭 → 同一 client_msg_id 重放返回原消息，
+// 不新增消息、不改计数（sent_count / 未读 / 最后消息）；换一个新 client_msg_id 发送返回 403。
+func TestMessageDMPermission_ReplayAfterClosedReturnsOriginal(t *testing.T) {
+	t.Parallel()
+	e := setupMessage(t)
+	ctx := t.Context()
+	me := e.insertUser(t, "it240 a", 0, 1, 0)
+	peer := e.insertUser(t, "it240 b", 0, 1, 0)
+
+	key := sharedomain.NewID().String()
+	first := e.mustSendKeyed(t, me, peer, "first", key)
+
+	type counts struct {
+		Messages    int64
+		SentCount   int
+		UnreadCount int
+		LastMessage uuid.UUID
+	}
+	snapshot := func() counts {
+		t.Helper()
+		var c counts
+		if err := e.db.Raw(`SELECT
+  (SELECT count(*) FROM domains.message WHERE conversation_id = @conv) AS messages,
+  (SELECT sent_count FROM domains.conversation_member WHERE conversation_id = @conv AND user_id = @me) AS sent_count,
+  (SELECT unread_count FROM domains.conversation_member WHERE conversation_id = @conv AND user_id = @peer) AS unread_count,
+  (SELECT last_message_id FROM domains.conversation_member WHERE conversation_id = @conv AND user_id = @peer) AS last_message`,
+			map[string]any{"conv": first.ConversationID, "me": me, "peer": peer}).Scan(&c).Error; err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	before := snapshot()
+	if before.Messages != 1 || before.SentCount != 1 || before.UnreadCount != 1 || before.LastMessage.String() != first.ID {
+		t.Fatalf("after first send: %+v", before)
+	}
+
+	e.setDMPermission(t, peer, userdomain.DMPermissionClosed)
+
+	replay := e.mustSendKeyed(t, me, peer, "retry body", key)
+	if replay.ID != first.ID || replay.ConversationID != first.ConversationID || replay.Content != "first" ||
+		!replay.CreateTime.Equal(first.CreateTime) {
+		t.Fatalf("replay = %+v, want original %+v", replay.MessageVO, first.MessageVO)
+	}
+	if after := snapshot(); after != before {
+		t.Errorf("replay changed data: %+v -> %+v", before, after)
+	}
+
+	if _, err := e.svc.SendWithClientMsgID(ctx, me, peer, "new", sharedomain.NewID().String()); !errors.Is(err, messagedomain.ErrRecipientDMClosed) {
+		t.Fatalf("new key after closed err = %v, want ErrRecipientDMClosed", err)
+	}
+	if after := snapshot(); after != before {
+		t.Errorf("rejected send changed data: %+v -> %+v", before, after)
+	}
+	// can_send 仍反映当前设置。
+	assertCanSend(t, e.canSend(t, me, peer), messageapp.ReasonDMClosed)
 }

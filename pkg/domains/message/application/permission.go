@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"interestBar/pkg/domains/message/domain"
+	"interestBar/pkg/logger"
 
 	"github.com/google/uuid"
 )
@@ -66,7 +67,7 @@ type SendPermissionVO struct {
 func (s *messageServiceImpl) SetDMPermissionReader(r DMPermissionReader) { s.permissions = r }
 
 // checkDMPermission 按接收方的私信权限设置判断 senderID 能否给 receiverID 发私信（#240）。
-// 已有会话同样受约束，对方回复过也不豁免（维护者 2026-11-11 决策）。不允许时返回
+// 已有会话同样受约束，对方回复过也不豁免（维护者 2026-11-11 决策）；幂等重放的放行见 replayBypassesDMPermission。不允许时返回
 // domain.ErrRecipientFollowingOnly / ErrRecipientMutualOnly / ErrRecipientDMClosed；所有人可发时不查关注关系。
 func (s *messageServiceImpl) checkDMPermission(ctx context.Context, senderID, receiverID uuid.UUID) error {
 	if s.permissions == nil {
@@ -106,6 +107,28 @@ func (s *messageServiceImpl) checkDMPermission(ctx context.Context, senderID, re
 		// DMPermissionClosed，以及未知取值（应用层只写合法值；未知值按关闭处理，宁可拒绝也不放过）。
 		return domain.ErrRecipientDMClosed
 	}
+}
+
+// isDMPermissionDenied 是否为私信权限设置的拒绝（不含接收方状态、5 条限制等其他拒绝）。
+func isDMPermissionDenied(err error) bool {
+	return errors.Is(err, domain.ErrRecipientFollowingOnly) || errors.Is(err, domain.ErrRecipientMutualOnly) ||
+		errors.Is(err, domain.ErrRecipientDMClosed)
+}
+
+// replayBypassesDMPermission 发送被私信权限设置拒绝（permErr）时判断是否是幂等重放（#248）：带 client_msg_id 且发送方已用它发过消息，
+// 返回 true 放行，SendDirect 会返回原消息（维护者 2026-11-24 确认：原消息发出后对方改了设置，重试仍返回原消息）。
+// 只在被权限拒绝时多这一次按唯一索引的查询，正常发送不额外查询。读设置 / 关注关系出错等其他错误不放行；查询出错按拒绝处理并记日志。
+// 接收方状态（不存在 / 禁用 / 删除 / 机器人）的拒绝不经过这里，重放仍返回对应错误。
+func (s *messageServiceImpl) replayBypassesDMPermission(ctx context.Context, senderID uuid.UUID, clientMsgID *string, permErr error) bool {
+	if clientMsgID == nil || !isDMPermissionDenied(permErr) {
+		return false
+	}
+	ok, err := s.repo.HasClientMsgID(ctx, senderID, *clientMsgID)
+	if err != nil {
+		logger.Log.Warn("message: check replay after dm permission denied failed for sender " + senderID.String() + ": " + err.Error())
+		return false
+	}
+	return ok
 }
 
 // sendPermission 计算 senderID 现在能否给 receiverID 发私信，判断顺序与 Send 一致：
