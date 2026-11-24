@@ -2,8 +2,8 @@
 
 > 目标：新增 `pkg/domains/message`，落地一对一私信的数据模型、发送、会话列表、消息历史、标记已读与删除会话（issue #238，总览 #30 的第 1 步）；
 > 补充按对方用户 ID 查会话（issue #246，见第九节）、未关注发送限制（issue #239，见第十节）、私信未读总数与 SSE 实时推送（issue #241，见第十一节）、发送幂等 client_msg_id（issue #248，见第十二节）、
-> 发送频率限制与内容安全（issue #242，见第十三节）。
-> 后续步骤建在这一步之上：私信权限设置（#240）、群聊（#31）。
+> 发送频率限制与内容安全（issue #242，见第十三节）、私信权限设置（issue #240，见第十四节）。
+> 后续步骤建在这一步之上：群聊（#31）。
 >
 > 基线：此前没有用户间私信。表结构见 `migrations/20261111134129_add_private_message.up.sql`，字段说明见 [pgsql-ddl/message.md](pgsql-ddl/message.md)，
 > 前端对接见 [api/message-api.md](api/message-api.md)。
@@ -18,6 +18,7 @@
 | 正文 | 1–2000 个字符（按 Unicode 字符计，与 PG `varchar` 计数一致；**issue 原文 1000，维护者 2026-11-11 决策改为 2000**）；入库前过 `utils.SanitizeForPg`，清洗后不能为空或只有空白；正文按原样保存，不去首尾空白 |
 | 接收方 | 状态正常的普通用户。不能发给自己；不存在 / 已禁用 / 已删除返回 404 |
 | 未关注发送限制（#239） | 对方**没关注我**、也**没在会话里发过消息**时，我在该会话累计最多发 5 条，第 6 条 403 `dm limit reached`；对方关注我立即解除，对方回复过一次永久解除。固定 5 条，不可配置。细则见第十节 |
+| 私信权限设置（#240） | 接收方设置谁可以给自己发私信：所有人（默认）/ 仅我关注的人 / 仅互相关注 / 关闭；**已有会话同样受约束，对方回复过也不豁免**；先看权限再看 5 条限制。细则见第十四节 |
 | 发送频率（#242） | 按发送者计：每分钟 20 条、每天 500 条、每天最多主动开启 20 个新会话（配置 `message.send_rate`，`<=0` 兜底这些默认值），超限 429；正文含外链放行（维护者 2026-11-11 确认）。细则见第十三节 |
 | 发送方 | 账号已禁用 / 已删除时不能发送（登录态只校验 token，发送时再查账号状态），403。细则见第十三节 |
 | 发送幂等（#248） | 发送可带客户端生成的 `client_msg_id`（可选，1–64 位 `[A-Za-z0-9_-]`）；同一发送人同一取值只落一条，重试返回第一次的那条消息（正文不同也忽略新正文），不改任何计数、不推送。细则见第十二节 |
@@ -43,6 +44,7 @@ pkg/domains/message/
   application/service.go            MessageService（由小接口组合）、RecipientChecker / UserBriefReader 端口、常量
   application/send.go               SendService：Send（校验 + 清洗 + 接收方判定 + 未关注发送限制）
   application/send_limit.go         未关注发送限制（#239）：UnfollowedSendLimit、FollowChecker 端口、SendVO
+  application/permission.go         私信权限设置（#240）：DMPermission、DMPermissionReader 端口、checkDMPermission、can_send（sendPermission）
   application/send_idempotent.go    发送幂等（#248）：MaxClientMsgIDLen、client_msg_id 校验
   application/conversation.go       ConversationService：会话列表（对方信息回填）/ 按对方查会话（#246）/ 标记已读 / 删除会话；
                                     列表项组装 toConversationItemVO 两处共用
@@ -53,7 +55,7 @@ pkg/domains/message/
   interfaces/http/routes.go         路由（全部需登录）
 pkg/composition/
   wire_message.go                   构造 + 路由注册
-  message_bridges.go                user → message 桥接（接收方状态、对方简要信息）；follow → message 桥接（关注关系，#239）
+  message_bridges.go                user → message 桥接（接收方状态、对方简要信息、私信权限设置 #240）；follow → message 桥接（关注关系，#239）
 ```
 
 ## 三、数据模型
@@ -149,18 +151,19 @@ DELETE /message/conversations/:id        UPDATE 成员行 SET cleared = last_rea
 | issue | 预留 |
 |---|---|
 | #239 未关注发送限制 | **已实现**，见第十节 |
-| #240 私信权限设置 | 接收方判定集中在 `RecipientChecker`（`application/send.go`）；权限设置可在 `user_setting` 加列（该表注释已预告），桥接器里一并判定，或新增端口 |
+| #240 私信权限设置 | **已实现**，见第十四节 |
 | #241 未读总数与实时推送 | **已实现，见第十一节** |
 | #242 频率限制与内容安全 | **已实现，见第十三节** |
 | #31 群聊 | `conversation.type=2`、`user_low/high` 为 NULL；`conversation_member.peer_id` 为 NULL、`deleted` 表示退出群聊；成员行的已读 / 未读 / 隐藏机制直接复用 |
 
 ## 八、范围外 / 未做
 
-- 权限设置（#240）。未读总数与实时推送（#241）见第十一节。AI 内容审核、举报私信、拉黑（#242 范围外）。
+- 未读总数与实时推送（#241）见第十一节。AI 内容审核、举报私信、拉黑（#242 范围外）。
 - 图片 / 文件消息、撤回、引用回复、消息搜索、拉黑、群聊（#31）。
 - 进入会话时自动创建空会话（会话仍只在首次发送时创建，#246 范围外）。
-- 「能否给对方发私信」的判定与置灰原因（`can_send`）：#246 的接口不返回；#239 只在发送时判定（发送响应带 `remaining_count`，满额时 403），
-  进入会话前预先展示「还能发几条」不在 #239 范围内。
+- 「能否给对方发私信」（`can_send` / `cannot_send_reason`）由 #240 加到 #246 的接口里（第十四节）；进入会话前预先展示「还能发几条」
+  （剩余条数）仍不返回，只在发送响应的 `remaining_count` 里。
+- 拉黑 / 屏蔽某个用户、陌生人消息折叠（「消息请求」收件箱）：#240 范围外。
 
 ## 九、按对方用户 ID 查会话（#246）
 
@@ -303,8 +306,9 @@ DELETE /message/conversations/:id        UPDATE 成员行 SET cleared = last_rea
    锁覆盖不到的情况只有「同键发往不同接收方」（锁的是不同会话行），由第 2 步唯一索引兜底：`DO NOTHING` 会等冲突事务提交，不报唯一冲突，不会 500。
 
 **应用层**：`SendService.SendWithClientMsgID(ctx, sender, receiver, content, clientMsgID)`；原 `Send` 等于 `clientMsgID=""`，签名不变。
-校验顺序：发给自己 → 正文 → `client_msg_id` 格式 → 接收方状态（#240 权限）→ 关注关系 → `SendDirect`。所以重放请求同样要先通过接收方 / 权限判定：
-原消息发出后对方被禁用或关闭了私信，重试得到的是对应的 404 / 403，而不是原消息。
+校验顺序：发给自己 → 正文 → `client_msg_id` 格式 → 接收方状态 → 发送方状态 / #240 权限 → 关注关系 → `SendDirect`。重放请求同样要先通过接收方状态判定：
+原消息发出后对方被禁用 / 删除，重试得到的是 404，而不是原消息。**#240 私信权限设置的拒绝例外**：原消息发出后对方改了设置（关闭 / 取关），
+同一个 `client_msg_id` 重试仍返回原消息（维护者 2026-11-24 确认，**覆盖本节原写法**「关闭了私信后重试得到 403」，见第十四节 14.2）。即重放只绕过权限判定，不绕过接收方状态判定。
 
 **与 #242 频率限制的关系**：频率限制在应用层、`SendDirect` 之前，重放请求会先经过它（本 issue 不改频率口径，是否把重放计入频率由 #242 决定）。
 #242 的口径：重放不消耗频率配额、也不会被频率限制拒绝，见第十三节 13.4 / 13.5。
@@ -366,7 +370,7 @@ Send
  ├─ normalizeContent（SanitizeForPg / 空白 / 2000 字符）→ 400
  ├─ RecipientChecker(receiver) → 404 / 403（机器人）
  ├─ checkSender：RecipientChecker(sender) 为 NotFound → 403 ErrSenderUnavailable        ← #242
- ├─ （#240 权限设置）
+ ├─ checkDMPermission：接收方私信权限设置 → 403（#240，见第十四节；不占频率额度）
  ├─ sendLimitFor：FollowChecker → limit（#239）
  ├─ acquireSendRate                                                                       ← #242
  │    ├─ limiter.Acquire：每分钟 / 每天超限 → 429 ErrSendRateLimited（不占额度）
@@ -410,3 +414,79 @@ Send
 | `domain.ErrSendRateLimited` | 429（208） | `message rate limit exceeded: at most {N} messages per minute` / `... per day` |
 | `domain.ErrNewConversationLimited` | 429（208） | `new conversation limit exceeded: at most {N} new conversations per day` |
 | `domain.ErrSenderUnavailable` | 403（203） | `Your account cannot send private messages` |
+
+## 十四、私信权限设置（#240）
+
+> 用户设置「谁可以给我发私信」。维护者 2026-11-11 确认：四个选项、存 `user_setting` 新列默认所有人；已有会话同样受约束、对方回复过不豁免；
+> 「我能否给对方发私信」放在 `GET /message/conversations/with/:user_id` 的响应里；先看权限再看 #239 的 5 条限制。
+> 维护者 2026-11-24 确认：权限检查在 `checkSender` 之后、`sendLimitFor` 之前（不占 #242 频率配额）；#248 幂等重放绕过权限拒绝、返回原消息；
+> `can_send` 不反映 #242 频率限制。
+
+### 14.1 选项与存储
+
+`domains.user_setting.dm_permission smallint NOT NULL DEFAULT 0`（迁移 `migrations/20261111194151_add_user_setting_dm_permission.up.sql`，
+只加带常量默认值的列，兼容旧版本应用；没有设置行 = 0）。经 `GET / PUT /user/settings` 的 `dm_permission` 读写，非法值 400。
+
+| 值 | 含义（从接收方视角） | 发送方 S 能给接收方 R 发的条件 |
+|---|---|---|
+| `0` | 所有人（默认） | 总是可以；之后照常走 #239 的 5 条限制 |
+| `1` | 仅我关注的人 | R 关注了 S（`IsFollowing(R, S)`） |
+| `2` | 仅互相关注 | R 关注了 S **且** S 关注了 R |
+| `3` | 关闭 | 不可以 |
+
+未知取值（应用层只写 0–3，理论上不会出现，例如新版本加了选项后回滚）按**关闭**处理。
+
+### 14.2 判断位置与顺序
+
+`application.SendWithClientMsgID`（`Send` 等于不带 `client_msg_id`）：自己 / 正文 / `client_msg_id` 格式校验 →
+**接收方状态**（`checkRecipient`：404 / 机器人 403）→ **发送方状态**（`checkSender`，#242）→ **私信权限**（`checkDMPermission`）→
+**5 条限制**（`sendLimitFor`）→ **频率配额**（`acquireSendRate`，#242）→ `SendDirect`（事务内 #248 重放判断 → #239 `checkSendLimit` → 写入）。
+权限拒绝时直接返回：不再查 5 条限制（「关闭」时连关注关系都不查），**不占用频率配额**（在 `acquireSendRate` 之前），不写库、不推送。
+
+**幂等重放（#248）绕过权限拒绝**（维护者 2026-11-24 确认，覆盖第十二节 #248 原写法「重放同样要先通过权限判定、得到 403」）：第一次发送时权限允许、消息已送达，之后对方改了设置（关闭 / 取关），
+同一个 `client_msg_id` 的重试**返回原消息**（不新增消息、不改计数 / 未读 / 最后消息、不推送），新的 `client_msg_id` 才返回 403。
+实现同 #242 的 `replayBypassesRateLimit`：只有被权限拒绝（三个权限哨兵错误）**且**带 `client_msg_id` 时，`replayBypassesDMPermission` 用
+`repo.HasClientMsgID` 按唯一索引查一次，命中就放行，交给 `SendDirect` 在事务内返回原消息；正常发送不多任何查询；查询出错按拒绝处理并记日志。
+**接收方状态的拒绝不放行**：对方被禁用 / 删除（404）或是机器人（403）时重放仍返回对应错误（第十二节原口径不变）。
+
+| 拒绝 | 哨兵错误 | HTTP |
+|---|---|---|
+| 仅我关注的人，R 没关注 S | `domain.ErrRecipientFollowingOnly` | 403 `This user only accepts private messages from people they follow` |
+| 仅互相关注，不是互关 | `domain.ErrRecipientMutualOnly` | 403 `This user only accepts private messages from mutual follows` |
+| 关闭 | `domain.ErrRecipientDMClosed` | 403 `This user has turned off private messages` |
+
+- **已有会话同样受约束，对方回复过也不豁免**：权限判断不看会话状态；设置只约束发给设置者的消息，设置者自己仍能给别人发（包括回复已有会话）。
+- 选项 1 / 2 放行的发送方一定被 R 关注，`sendLimitFor` 返回 0，5 条限制自然不生效。
+- 权限与关注关系都在事务外实时读（不缓存）：与改设置 / 关注 / 取关并发时，按任一先后顺序的结果都合理，不需要加锁（同 #239）。
+
+**跨域**：message 域声明端口 `application.DMPermissionReader`（返回 message 域自己的 `DMPermission` 枚举），由
+`pkg/composition/message_bridges.go` 的 `messageDMPermissionReader` 用 user 域 `SettingService.GetSettings` 桥接并映射取值；
+`wire_message.go` 的 `wireMessageDMPermission` 在 `server.go` 里用 setter 注入（未注入时不校验，等同所有人）。关注关系复用 #239 的 `FollowChecker`。
+
+### 14.3 can_send
+
+`GET /message/conversations/with/:user_id` 的响应在 `conversation` 之外平铺 `can_send`（bool）与 `cannot_send_reason`（string | null），
+**有没有会话都返回**。由 `sendPermission` 按与 `Send` 相同的顺序判断，原因与发送错误一一对应：
+
+| `cannot_send_reason` | 对应发送错误 |
+|---|---|
+| `recipient_not_found` | 404 `ErrRecipientNotFound` |
+| `recipient_unavailable` | 403 `ErrRecipientUnavailable`（机器人） |
+| `following_only` | 403 `ErrRecipientFollowingOnly` |
+| `mutual_only` | 403 `ErrRecipientMutualOnly` |
+| `dm_closed` | 403 `ErrRecipientDMClosed` |
+| `dm_limit_reached` | 403 `ErrSendLimitReached`（#239） |
+
+- **计入 5 条限制**（与发送接口同一口径）：所有人模式下对方没关注我、没回复过、我已发满 5 条时 `can_send=false`。
+  只读查询 `Repository.GetSendLimitState`（按 `uk_conversation_pair` 定位会话，左连双方成员行，不加锁；口径同事务内的 `sqlSendLimitState`）。
+- 接口原先不校验对方状态（#246）；现在为了 `can_send` 会读一次对方状态（`UserService.GetByID`，缓存优先），但仍**不因对方状态报错**，
+  `conversation` 的返回规则不变（对方被禁用 / 删除时 `peer=null`、`can_send=false`）。
+- `can_send` 是查询时刻的快照，发送仍以 `POST /message/send` 的结果为准。
+- **不反映 #242 的发送频率限制**（维护者 2026-11-24 确认：只看接收方状态 + 权限 + #239 未关注上限）：频率是发送方自身的短时额度，与「能不能给这个人发」无关，且会让每次进主页都多读 Redis；超限时发送返回 429。
+
+### 14.4 测试
+
+- 单测：`application/permission_test.go`（四个选项 × 四种关注关系的发送结果、判断顺序、权限拒绝不占频率配额、幂等重放绕过权限拒绝、can_send 各原因与 JSON）、user 域设置校验 / handler。
+- 集成：`pkg/composition/message_dm_permission_integration_test.go`（真实设置 + 真实关注：四个选项 × 关注关系组合下发送结果与 `can_send` 一致、
+  拒绝不建会话；已有会话且对方回复过不豁免；先权限后 5 条；对方改为关闭后同 `client_msg_id` 重放返回原消息且不改数据、新键 403）、`infrastructure/dm_permission_integration_test.go`（`GetSendLimitState`）、
+  `user/infrastructure/user_setting_dm_permission_integration_test.go`（新列按列 upsert）。

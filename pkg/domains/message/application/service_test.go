@@ -36,6 +36,10 @@ type fakeRepo struct {
 	gotPreview  int
 	gotSendLim  int
 	remaining   *int
+	// limitState / limitCalls：GetSendLimitState（#240 can_send，见 permission_test.go）。
+	limitState  domain.SendLimitState
+	limitErr    error
+	limitCalls  int
 	gotClientID *string
 	// replay 非 nil 时模拟命中发送幂等（#248）：返回它并标记 Replayed。
 	replay *domain.Message

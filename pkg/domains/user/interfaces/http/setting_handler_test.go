@@ -32,6 +32,7 @@ const (
 // memSettingRepo 内存版设置仓储。
 type memSettingRepo struct {
 	rows map[uuid.UUID]int16
+	dm   map[uuid.UUID]int16 // 私信权限（#240），nil 时按需建
 	err  error
 }
 
@@ -39,7 +40,18 @@ func (r *memSettingRepo) Get(_ context.Context, userID uuid.UUID) (*domain.UserS
 	if r.err != nil {
 		return nil, r.err
 	}
-	return &domain.UserSetting{UserID: userID, FollowListVisibility: r.rows[userID]}, nil
+	return &domain.UserSetting{UserID: userID, FollowListVisibility: r.rows[userID], DMPermission: r.dm[userID]}, nil
+}
+
+func (r *memSettingRepo) SetDMPermission(_ context.Context, userID uuid.UUID, v int16) error {
+	if r.err != nil {
+		return r.err
+	}
+	if r.dm == nil {
+		r.dm = map[uuid.UUID]int16{}
+	}
+	r.dm[userID] = v
+	return nil
 }
 
 func (r *memSettingRepo) SetFollowListVisibility(_ context.Context, userID uuid.UUID, v int16) error {
@@ -101,12 +113,16 @@ func TestSettingHandler_ReadWriteOwnSettingsOnly(t *testing.T) {
 
 	// 非法值 / 空请求 / 类型错误：400，设置不变
 	for label, tc := range map[string]struct{ body, msg string }{
-		"out of range": {`{"follow_list_visibility":2}`, "must be 0 (public) or 1 (private)"},
-		"negative":     {`{"follow_list_visibility":-1}`, "must be 0 (public) or 1 (private)"},
-		"null":         {`{"follow_list_visibility":null}`, "At least one setting"},
-		"empty":        {`{}`, "At least one setting"},
-		"wrong type":   {`{"follow_list_visibility":"private"}`, "Invalid request parameters"},
-		"not json":     {`{`, "Invalid request parameters"},
+		"out of range":  {`{"follow_list_visibility":2}`, "must be 0 (public) or 1 (private)"},
+		"negative":      {`{"follow_list_visibility":-1}`, "must be 0 (public) or 1 (private)"},
+		"null":          {`{"follow_list_visibility":null}`, "At least one setting"},
+		"empty":         {`{}`, "At least one setting"},
+		"wrong type":    {`{"follow_list_visibility":"private"}`, "Invalid request parameters"},
+		"not json":      {`{`, "Invalid request parameters"},
+		"dm too big":    {`{"dm_permission":4}`, "dm_permission must be 0 (everyone)"},
+		"dm negative":   {`{"dm_permission":-1}`, "dm_permission must be 0 (everyone)"},
+		"dm mixed":      {`{"follow_list_visibility":0,"dm_permission":7}`, "dm_permission must be 0 (everyone)"},
+		"dm wrong type": {`{"dm_permission":"closed"}`, "Invalid request parameters"},
 	} {
 		ac, rc = settingCtx(testUser, tc.body)
 		h.UpdateSettings(ac)
@@ -114,8 +130,21 @@ func TestSettingHandler_ReadWriteOwnSettingsOnly(t *testing.T) {
 			t.Errorf("%s: status=%d body=%s, want 400 containing %q", label, rc.Response.StatusCode(), rc.Response.Body(), tc.msg)
 		}
 	}
-	if repo.rows[uuid.MustParse(testUser)] != domain.FollowListPrivate {
-		t.Errorf("setting changed by an invalid request: %v", repo.rows)
+	if repo.rows[uuid.MustParse(testUser)] != domain.FollowListPrivate || repo.dm[uuid.MustParse(testUser)] != domain.DMPermissionEveryone {
+		t.Errorf("setting changed by an invalid request: %v %v", repo.rows, repo.dm)
+	}
+
+	// 私信权限（#240）：默认 0，可改为 0–3，读回一致
+	ac, rc = settingCtx(otherUser, "")
+	h.GetSettings(ac)
+	if !strings.Contains(string(rc.Response.Body()), `"dm_permission":0`) {
+		t.Errorf("default dm_permission: body=%s", rc.Response.Body())
+	}
+	ac, rc = settingCtx(otherUser, `{"dm_permission":2}`)
+	h.UpdateSettings(ac)
+	if rc.Response.StatusCode() != http.StatusOK || !strings.Contains(string(rc.Response.Body()), `"dm_permission":2`) ||
+		!strings.Contains(string(rc.Response.Body()), `"follow_list_visibility":0`) {
+		t.Fatalf("update dm_permission: status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
 
 	// 仓储错误：500

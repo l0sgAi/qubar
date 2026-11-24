@@ -19,6 +19,7 @@ type ConversationService interface {
 	// 两人之间没有会话时 Conversation 为 nil（不创建会话，会话仍只在首次发送时创建）；不校验对方用户状态。
 	// 会话被我删除（隐藏）且之后没有新消息时仍返回会话，但 LastMessage 为 nil。peerID 等于 userID 返回
 	// domain.ErrConversationWithSelf。只读：不改未读数、不改隐藏状态。
+	// 同时返回我现在能否给 peerID 发私信（#240，与 Send 同一口径与判断顺序，见 permission.go 的 sendPermission）。
 	GetConversationWithUser(ctx context.Context, userID, peerID uuid.UUID) (*PeerConversationVO, error)
 	// MarkRead 把会话内 userID 的未读清零（记录最后已读位置）。不是会话成员返回 domain.ErrConversationNotFound。
 	MarkRead(ctx context.Context, userID, conversationID uuid.UUID) error
@@ -51,8 +52,10 @@ type ConversationItemVO struct {
 }
 
 // PeerConversationVO 按对方用户 ID 查会话的结果。两人之间没有会话时 Conversation 为 null。
+// 内嵌「我能否给对方发私信」（#240，can_send / cannot_send_reason 平铺），有没有会话都返回。
 type PeerConversationVO struct {
 	Conversation *ConversationItemVO `json:"conversation"`
+	SendPermissionVO
 }
 
 // ConversationListVO 一页会话。HasMore 为 false 时 NextCursor 为空串。
@@ -104,9 +107,13 @@ func (s *messageServiceImpl) GetConversationWithUser(ctx context.Context, userID
 	if peerID == userID {
 		return nil, domain.ErrConversationWithSelf
 	}
+	perm, err := s.sendPermission(ctx, userID, peerID)
+	if err != nil {
+		return nil, err
+	}
 	entry, err := s.repo.GetDirectConversation(ctx, userID, peerID, PreviewChars)
 	if errors.Is(err, domain.ErrConversationNotFound) {
-		return &PeerConversationVO{}, nil
+		return &PeerConversationVO{SendPermissionVO: *perm}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -118,7 +125,7 @@ func (s *messageServiceImpl) GetConversationWithUser(ctx context.Context, userID
 		}
 	}
 	item := toConversationItemVO(entry, briefs)
-	return &PeerConversationVO{Conversation: &item}, nil
+	return &PeerConversationVO{Conversation: &item, SendPermissionVO: *perm}, nil
 }
 
 // toConversationItemVO 把仓储的会话行组装成会话列表项（会话列表与按对方查会话共用，保证两处口径一致）。
