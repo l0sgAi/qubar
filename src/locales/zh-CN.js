@@ -103,6 +103,11 @@ export default {
     circleInvites: '邀请成员',
     invite: '圈子邀请',
     myInvites: '圈子邀请',
+    following: '关注列表',
+    followers: '粉丝列表',
+    mutual: '互相关注',
+    messages: '私信',
+    chat: '聊天',
     // 动态标题模板：详情页数据加载成功后展示具体内容（见 utils/pageTitle.js）
     postDetailName: '{name}',
     circleDetailName: '{name}',
@@ -1228,6 +1233,93 @@ export default {
       empty: '未找到相关用户',
       limitTip: '最多可提及 10 人',
       suggestHint: "键入 {'@'} 可快速提及用户"
+    }
+  },
+
+  // 用户关注（后端 v0.9.0；B 线页面文案在本段追加）
+  follow: {
+    // 关注按钮：按 relation 取（utils/follow.js 的 relationLabelKey）
+    relation: {
+      none: '关注',
+      following: '已关注',
+      followedBy: '回关',
+      mutual: '互相关注'
+    },
+    unfollow: '取消关注',
+    followingCount: '关注',
+    followerCount: '粉丝',
+    listPrivate: '对方未公开关注和粉丝列表',
+    empty: {
+      following: '还没有关注任何人',
+      followers: '还没有粉丝',
+      mutual: '还没有互相关注的人'
+    },
+    settings: {
+      listVisibility: '公开我的关注和粉丝列表',
+      listVisibilityHint: '关闭后其他人只能看到数量，看不到名单'
+    },
+    // 错误文案：utils/follow.js 的 followErrorKey
+    error: {
+      limitReached: '关注人数已达上限',
+      self: '不能关注自己',
+      listPrivate: '对方未公开关注和粉丝列表',
+      userNotFound: '用户不存在',
+      loginRequired: '请先登录',
+      generic: '操作失败，请稍后重试'
+    }
+  },
+
+  // 私信（后端 v0.9.0；C 线页面文案在本段追加。顶层 messages 是通用提示，不要混用）
+  message: {
+    title: '私信',
+    entry: '私信',
+    send: '发送',
+    inputPlaceholder: '发私信…',
+    empty: '还没有私信',
+    emptyChat: '还没有消息，打个招呼吧',
+    deletedUser: '已注销用户',
+    newMessagesDivider: '以下为新消息',
+    loadOlder: '查看更早的消息',
+    deleteConversation: '删除会话',
+    deleteConfirm: '删除后对方不受影响；对方再发消息时会话会重新出现，只显示删除之后的消息。',
+    // remaining_count 为数字时的提示（未关注 5 条限制）
+    remaining: '对方关注你或回复前，还可发送 {count} 条',
+    newMessageFrom: '{name} 给你发了私信',
+    // 谁可以给我发私信（utils/message.js 的 DM_PERMISSION_OPTIONS）
+    permission: {
+      label: '谁可以给我发私信',
+      everyone: '所有人',
+      following: '仅我关注的人',
+      mutual: '仅互相关注',
+      closed: '关闭私信'
+    },
+    // 不能发送 / 发送失败：utils/message.js 的 dmReasonKey、dmSendErrorKey
+    error: {
+      recipientNotFound: '该用户不存在',
+      recipientUnavailable: '该用户不接收私信',
+      followingOnly: '对方只接收其关注的人的私信',
+      mutualOnly: '对方只接收互相关注的人的私信',
+      dmClosed: '对方已关闭私信',
+      dmLimitReached: '对方关注你或回复后可继续发送',
+      senderDisabled: '你的账号暂时无法发送私信',
+      conversationNotFound: '会话不存在',
+      rateLimited: '发送太频繁，请稍后再试',
+      contentEmpty: '消息不能为空',
+      contentTooLong: '消息不能超过 {max} 字',
+      network: '发送失败，请检查网络后重试',
+      unknown: '发送失败，请稍后重试'
+    }
+  },
+
+  // 帖子分享（后端 v0.9.0；D 线页面文案在本段追加）
+  share: {
+    button: '分享',
+    linkCopied: '链接已复制',
+    copyFailed: '复制失败，请手动复制链接',
+    // 错误文案：utils/share.js 的 shareErrorKey
+    error: {
+      notFound: '内容不可分享',
+      retry: '分享计数失败，请重试'
     }
   },
 

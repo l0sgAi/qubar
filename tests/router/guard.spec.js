@@ -35,7 +35,10 @@ const PROTECTED = [
   '/circle/1/moderation',
   '/circle/1/invites',
   '/invites',
-  '/circle/managed'
+  '/circle/managed',
+  '/follow/mutual',
+  '/messages',
+  '/messages/u1'
 ]
 
 const PUBLIC = [
@@ -50,7 +53,9 @@ const PUBLIC = [
   '/search',
   '/circle/1',
   '/invite/abc',
-  '/post/1'
+  '/post/1',
+  '/user/1/following',
+  '/user/1/followers'
 ]
 
 describe('路由表', () => {
@@ -67,6 +72,32 @@ describe('路由表', () => {
     expect(to.matched[0].redirect).toBeTypeOf('function')
     const target = router.resolve(to.matched[0].redirect(to))
     expect(target.fullPath).toBe('/circle/1/moderation?tab=reports&focus=p1')
+  })
+})
+
+describe('v0.9.0 关注 / 私信路由', () => {
+  const router = createRouter({ history: createMemoryHistory(), routes })
+
+  it.each([
+    ['/user/u1/following', 'user-following', { id: 'u1' }],
+    ['/user/u1/followers', 'user-followers', { id: 'u1' }],
+    ['/follow/mutual', 'follow-mutual', {}],
+    ['/messages', 'messages', {}],
+    ['/messages/u2', 'message-chat', { userId: 'u2' }]
+  ])('%s → %s', (path, name, params) => {
+    const to = router.resolve(path)
+    expect(to.name).toBe(name)
+    expect(to.params).toEqual(params)
+    expect(to.meta.titleKey).toMatch(/^title\./)
+  })
+
+  it('按路由名生成地址（B / C 用 name + params 跳转）', () => {
+    expect(router.resolve({ name: 'user-following', params: { id: 'u1' } }).fullPath).toBe('/user/u1/following')
+    expect(router.resolve({ name: 'message-chat', params: { userId: 'u2' } }).fullPath).toBe('/messages/u2')
+  })
+
+  it('/user/:id 仍指向用户主页（不被列表路由吞掉）', () => {
+    expect(router.resolve('/user/u1').name).toBe('user-detail')
   })
 })
 

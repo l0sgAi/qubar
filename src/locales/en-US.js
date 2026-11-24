@@ -103,6 +103,11 @@ export default {
     circleInvites: 'Invite Members',
     invite: 'Circle Invitation',
     myInvites: 'Circle Invitations',
+    following: 'Following',
+    followers: 'Followers',
+    mutual: 'Mutual Follows',
+    messages: 'Messages',
+    chat: 'Chat',
     // Dynamic title templates: show concrete content after data loads (see utils/pageTitle.js)
     postDetailName: '{name}',
     circleDetailName: '{name}',
@@ -1226,6 +1231,93 @@ export default {
       empty: 'No users found',
       limitTip: 'Mention up to 10 users',
       suggestHint: "Type {'@'} to mention someone"
+    }
+  },
+
+  // User follow (backend v0.9.0; workstream B appends page copy here)
+  follow: {
+    // Follow button label by relation (relationLabelKey in utils/follow.js)
+    relation: {
+      none: 'Follow',
+      following: 'Following',
+      followedBy: 'Follow back',
+      mutual: 'Mutual'
+    },
+    unfollow: 'Unfollow',
+    followingCount: 'Following',
+    followerCount: 'Followers',
+    listPrivate: 'This user keeps their following and follower lists private',
+    empty: {
+      following: 'Not following anyone yet',
+      followers: 'No followers yet',
+      mutual: 'No mutual follows yet'
+    },
+    settings: {
+      listVisibility: 'Show my following and follower lists',
+      listVisibilityHint: 'When off, others only see the counts, not the names'
+    },
+    // Error copy: followErrorKey in utils/follow.js
+    error: {
+      limitReached: 'You have reached the follow limit',
+      self: "You can't follow yourself",
+      listPrivate: 'This user keeps their following and follower lists private',
+      userNotFound: 'User not found',
+      loginRequired: 'Please log in first',
+      generic: 'Something went wrong. Please try again later'
+    }
+  },
+
+  // Direct messages (backend v0.9.0; workstream C appends page copy here. Top-level `messages` is generic toasts)
+  message: {
+    title: 'Messages',
+    entry: 'Message',
+    send: 'Send',
+    inputPlaceholder: 'Write a message…',
+    empty: 'No messages yet',
+    emptyChat: 'No messages yet. Say hi!',
+    deletedUser: 'Deleted user',
+    newMessagesDivider: 'New messages',
+    loadOlder: 'Load earlier messages',
+    deleteConversation: 'Delete conversation',
+    deleteConfirm: 'The other person is not affected. If they message you again, the conversation comes back with only the newer messages.',
+    // Shown when remaining_count is a number (5-message limit before they follow you)
+    remaining: 'You can send {count} more until they follow you or reply',
+    newMessageFrom: '{name} sent you a message',
+    // Who can message me (DM_PERMISSION_OPTIONS in utils/message.js)
+    permission: {
+      label: 'Who can message me',
+      everyone: 'Everyone',
+      following: 'People I follow',
+      mutual: 'Mutual follows only',
+      closed: 'No one'
+    },
+    // Cannot send / send failed: dmReasonKey, dmSendErrorKey in utils/message.js
+    error: {
+      recipientNotFound: 'This user does not exist',
+      recipientUnavailable: "This user can't receive messages",
+      followingOnly: 'This user only accepts messages from people they follow',
+      mutualOnly: 'This user only accepts messages from mutual follows',
+      dmClosed: 'This user has turned off messages',
+      dmLimitReached: 'You can send more once they follow you or reply',
+      senderDisabled: "Your account can't send messages right now",
+      conversationNotFound: 'Conversation not found',
+      rateLimited: "You're sending too fast. Please try again later",
+      contentEmpty: "Message can't be empty",
+      contentTooLong: 'Message must be {max} characters or fewer',
+      network: 'Failed to send. Check your connection and try again',
+      unknown: 'Failed to send. Please try again later'
+    }
+  },
+
+  // Post sharing (backend v0.9.0; workstream D appends page copy here)
+  share: {
+    button: 'Share',
+    linkCopied: 'Link copied',
+    copyFailed: 'Copy failed. Please copy the link manually',
+    // Error copy: shareErrorKey in utils/share.js
+    error: {
+      notFound: "This post can't be shared",
+      retry: "Couldn't record the share. Please try again"
     }
   },
 
