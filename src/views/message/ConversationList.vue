@@ -53,7 +53,7 @@
 
             <div v-if="loading" class="conv-loading"><NSpin size="small" /></div>
 
-            <button v-if="loadError && !loading" type="button" class="conv-retry" @click="loadConversations(!conversations.length)">
+            <button v-if="loadError && !loading" type="button" class="conv-retry" @click="loadConversations(failedReset)">
               {{ t('message.loadFailed') }}
             </button>
 
@@ -93,6 +93,10 @@ const hasMore = ref(true)
 let cursor = ''
 // 请求世代：刷新第一页时作废进行中的翻页请求
 let generation = 0
+let failedReset = false
+let refreshScheduled = false
+let disposed = false
+const pendingEvents = new Set()
 
 const peerName = (conv) => conv.peer?.username || t('message.deletedUser')
 
@@ -119,6 +123,7 @@ const loadConversations = async (reset = false) => {
     const data = res.data || {}
     const items = data.items || []
     if (reset) {
+      pendingEvents.clear()
       conversations.value = items
     } else {
       // 翻页期间有会话被顶到第一页时可能重复出现：按 conversation_id 去重
@@ -130,6 +135,8 @@ const loadConversations = async (reset = false) => {
   } catch (error) {
     if (gen !== generation) return
     console.error('加载私信会话失败:', error)
+    failedReset = reset
+    pendingEvents.clear()
     loadError.value = true
   } finally {
     if (gen === generation) {
@@ -139,22 +146,40 @@ const loadConversations = async (reset = false) => {
   }
 }
 
-// 收到新私信：命中的会话置顶并更新摘要；没命中（新会话 / 删除后重新出现）刷新第一页
-const { dmUnreadCount } = useUnreadNotice({
+// 同一帧的挂载、重连和新消息共用一次首屏拉取。已发出的旧翻页/快照即刻失效。
+const scheduleRefresh = () => {
+  if (refreshScheduled || disposed) return
+  generation++
+  refreshScheduled = true
+  nextTick(() => {
+    refreshScheduled = false
+    if (!disposed) loadConversations(true)
+  })
+}
+
+const { dmUnreadCount, dmSyncVersion } = useUnreadNotice({
   onDmMessage: (msg) => {
+    if (pendingEvents.has(msg.id)) return
     const { list, found } = bumpConversation(conversations.value, msg)
+    if (found && list === conversations.value) return
     if (found) conversations.value = list
-    else loadConversations(true)
+    if (!found || loading.value) {
+      pendingEvents.add(msg.id)
+      scheduleRefresh()
+    }
   }
 })
 
-// SSE 断开、靠轮询更新角标时收不到 dm-message：私信未读总数与列表对不上就刷新第一页
 let refreshTimer = null
-watch(dmUnreadCount, (count) => {
+watch([dmSyncVersion, dmUnreadCount], ([version, count], [previous]) => {
   clearTimeout(refreshTimer)
-  refreshTimer = setTimeout(() => {
-    if (!loading.value && count !== sumUnread(conversations.value)) loadConversations(true)
-  }, 1500)
+  if (version !== previous) {
+    scheduleRefresh()
+  } else {
+    refreshTimer = setTimeout(() => {
+      if (!loading.value && count !== sumUnread(conversations.value)) scheduleRefresh()
+    }, 1500)
+  }
 })
 
 const confirmDelete = (conv) => {
@@ -166,6 +191,8 @@ const confirmDelete = (conv) => {
     onPositiveClick: async () => {
       try {
         await deleteConversation(conv.conversation_id)
+        if (disposed) return
+        if (loading.value) scheduleRefresh()
         conversations.value = conversations.value.filter(c => c.conversation_id !== conv.conversation_id)
         message.success(t('message.deleted'))
         refreshDmUnreadCount()
@@ -199,9 +226,11 @@ const setupObserver = () => {
   observer.observe(loadMoreTrigger.value)
 }
 
-onMounted(() => loadConversations(true))
+onMounted(scheduleRefresh)
 
 onBeforeUnmount(() => {
+  disposed = true
+  generation++
   cleanupObserver()
   clearTimeout(refreshTimer)
 })

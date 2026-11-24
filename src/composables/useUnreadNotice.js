@@ -109,10 +109,10 @@ export function refreshDmUnreadCount() {
  * @param {Object} [options]
  * @param {Function} [options.onAuthExpired] - 服务端推送登录态失效时的回调（token 已清除）
  * @param {Function} [options.onDmMessage] - 收到 dm-message 时的回调（挂载时注册、卸载时注销）
- * @returns {{ unreadCount: Readonly<Ref<number>>, dmUnreadCount: Readonly<Ref<number>> }}
+ * @returns {{ unreadCount: Readonly<Ref<number>>, dmUnreadCount: Readonly<Ref<number>>, dmSyncVersion: Readonly<Ref<number>> }}
  */
 export function useUnreadNotice({ onAuthExpired, onDmMessage: dmHandler } = {}) {
-  const { unreadCount, dmUnreadCount } = getStream()
+  const { unreadCount, dmUnreadCount, dmSyncVersion } = getStream()
   let offDm = null
 
   onMounted(() => {
@@ -133,7 +133,7 @@ export function useUnreadNotice({ onAuthExpired, onDmMessage: dmHandler } = {}) 
     releaseUnreadNotice()
   })
 
-  return { unreadCount: readonly(unreadCount), dmUnreadCount: readonly(dmUnreadCount) }
+  return { unreadCount: readonly(unreadCount), dmUnreadCount: readonly(dmUnreadCount), dmSyncVersion: readonly(dmSyncVersion) }
 }
 
 // 仅供单测：重置单例

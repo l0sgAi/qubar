@@ -29,20 +29,26 @@ const POLL_INTERVAL = 30000
  *
  * @param {Object} [options]
  * @param {Function} [options.onAuthExpired] - 登录态失效回调（清 token 之后调用）
- * @returns {{ unreadCount: Ref<number>, dmUnreadCount: Ref<number>, onDmMessage: Function,
+ * @returns {{ unreadCount: Ref<number>, dmUnreadCount: Ref<number>, dmSyncVersion: Ref<number>, onDmMessage: Function,
  *   refreshDmUnread: Function, start: Function, stop: Function }}
  */
 export function useNoticeStream({ onAuthExpired } = {}) {
   const unreadCount = ref(0)
   const dmUnreadCount = ref(0)
+  // 首次建连不触发。重连和降级轮询可以漏掉未改变未读总数的操作（另一端已读或发送）。
+  const dmSyncVersion = ref(0)
+  let noticeRevision = 0
+  let dmRevision = 0
   const dmMessageHandlers = new Set()
   let es = null
   let pollingTimer = null
 
   const fetchNoticeUnread = async () => {
+    const revision = ++noticeRevision
+    const token = auth.getToken()
     try {
       const res = await getUnreadCount()
-      if (res.data) {
+      if (res.data && revision === noticeRevision && token === auth.getToken()) {
         unreadCount.value = res.data.unread_count || 0
       }
     } catch (error) {
@@ -50,10 +56,13 @@ export function useNoticeStream({ onAuthExpired } = {}) {
     }
   }
 
-  const fetchDmUnread = async () => {
+  const fetchDmUnread = async (poll = false) => {
+    const revision = ++dmRevision
+    const token = auth.getToken()
     try {
       const res = await getDmUnreadCount()
-      if (res.data) {
+      if (res.data && revision === dmRevision && token === auth.getToken()) {
+        if (poll) dmSyncVersion.value++
         dmUnreadCount.value = res.data.unread_count || 0
       }
     } catch (error) {
@@ -64,7 +73,7 @@ export function useNoticeStream({ onAuthExpired } = {}) {
   // 两个计数互不影响：一个失败不阻塞另一个
   const fetchOnce = async () => {
     if (!auth.isAuthenticated()) return
-    await Promise.all([fetchNoticeUnread(), fetchDmUnread()])
+    await Promise.all([fetchNoticeUnread(), fetchDmUnread(true)])
   }
 
   /** 立即拉一次私信未读数（标记已读 / 删除会话后、SSE 不可用时校正角标用）。未登录为空操作。 */
@@ -122,27 +131,36 @@ export function useNoticeStream({ onAuthExpired } = {}) {
       return
     }
     // EventSource 不能自定义 header，token 走 query（后端 header→query 兜底鉴权）
-    es = new EventSource(`${API_BASE}/notice/stream?satoken=${encodeURIComponent(token)}`)
+    const source = new EventSource(`${API_BASE}/notice/stream?satoken=${encodeURIComponent(token)}`)
 
-    es.addEventListener('unread-count', (e) => {
+    es = source
+    let interrupted = false
+    // 已关闭的连接可能还有排队中的事件；只接受当前连接的事件。
+    const listen = (name, handler) => source.addEventListener(name, event => {
+      if (es === source) handler(event)
+    })
+
+    listen('unread-count', (e) => {
       try {
         const data = JSON.parse(e.data)
+        noticeRevision++
         unreadCount.value = data.unread_count ?? 0
       } catch {
         // 坏帧忽略，下一帧覆盖
       }
     })
 
-    es.addEventListener('dm-unread', (e) => {
+    listen('dm-unread', (e) => {
       try {
         const data = JSON.parse(e.data)
+        dmRevision++
         dmUnreadCount.value = data.unread_count ?? 0
       } catch {
         // 坏帧忽略，下一帧覆盖
       }
     })
 
-    es.addEventListener('dm-message', (e) => {
+    listen('dm-message', (e) => {
       let msg
       try {
         msg = JSON.parse(e.data)
@@ -152,23 +170,30 @@ export function useNoticeStream({ onAuthExpired } = {}) {
       if (msg && msg.conversation_id) emitDmMessage(msg)
     })
 
-    es.addEventListener('auth-expired', () => {
+    listen('auth-expired', () => {
       closeEs()
       auth.clearToken()
       if (onAuthExpired) onAuthExpired()
     })
 
-    es.addEventListener('conn-evicted', () => {
+    listen('conn-evicted', () => {
       closeEs()
       startPolling()
     })
 
     // 建连成功 → 停轮询（两通道互备不互斥）
-    es.onopen = () => stopPolling()
+    source.onopen = () => {
+      if (es !== source) return
+      stopPolling()
+      if (interrupted) dmSyncVersion.value++
+      interrupted = false
+    }
 
-    es.onerror = () => {
+    source.onerror = () => {
+      if (es !== source) return
+      interrupted = true
       // CONNECTING：网络抖动，浏览器自动重连中，不干预
-      if (es && es.readyState === EventSource.CLOSED) {
+      if (source.readyState === EventSource.CLOSED) {
         closeEs()
         startPolling()
       }
@@ -184,9 +209,11 @@ export function useNoticeStream({ onAuthExpired } = {}) {
 
   /** 停止并释放（组件卸载/登出时调用）。 */
   const stop = () => {
+    noticeRevision++
+    dmRevision++
     closeEs()
     stopPolling()
   }
 
-  return { unreadCount, dmUnreadCount, onDmMessage, refreshDmUnread, start, stop }
+  return { unreadCount, dmUnreadCount, dmSyncVersion, onDmMessage, refreshDmUnread, start, stop }
 }
