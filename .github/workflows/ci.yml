@@ -189,7 +189,9 @@ jobs:
         with:
           fetch-depth: 0
       - name: 预演产品版本与组件范围
-        run: python3 scripts/test-product-release.py
+        run: |
+          python3 scripts/test-product-release.py
+          scripts/test-stage-product.sh
       - id: scope
         env:
           BASE_REF: ${{ github.base_ref }}

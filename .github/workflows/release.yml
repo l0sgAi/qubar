@@ -44,7 +44,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write # GitHub 只向有推送权限的令牌列出 Release 草稿
       actions: read
       pages: read
     outputs:
@@ -62,6 +62,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          persist-credentials: false
       - id: plan
         env:
           GH_TOKEN: ${{ github.token }}
@@ -95,16 +96,18 @@ jobs:
           PUBLISHED: ${{ steps.version.outputs.published }}
           PRODUCT: ${{ steps.plan.outputs.app == 'true' || steps.plan.outputs.web == 'true' }}
         run: |
-          drafts=$(gh release list --limit 100 --json tagName,isDraft --jq '.[] | select(.isDraft and (.tagName | test("^v[0-9]"))) | .tagName')
           reuse=false
-          for draft in $drafts; do
-            if [[ "$ROLLBACK" == true ]]; then break; fi
-            details=$(gh release view "$draft" --json targetCommitish,assets)
-            if jq -e 'any(.assets[]; .name == "candidate.json")' <<< "$details" >/dev/null; then
-              test "$draft" = "$NEXT" && test "$(jq -r .targetCommitish <<< "$details")" = "$GITHUB_SHA" || { echo "先完成待恢复候选 $draft"; exit 1; }
-              reuse=true
+          if [[ "$ROLLBACK" != true ]]; then
+            drafts=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '
+              .[] | select(.draft and (.tag_name | test("^v[0-9]")) and any(.assets[]; .name == "candidate.json" and .state == "uploaded"))
+              | [.tag_name, .target_commitish] | @tsv')
+            if [[ -n "$drafts" ]]; then
+              while IFS=$'\t' read -r tag sha; do
+                if [[ "$tag" != "$NEXT" || "$sha" != "$GITHUB_SHA" ]]; then echo "先完成待恢复候选 $tag"; exit 1; fi
+                reuse=true
+              done <<< "$drafts"
             fi
-          done
+          fi
           if [[ "$reuse" != true ]]; then test "$(git rev-parse origin/main)" = "$GITHUB_SHA"; fi
           if [[ "$PUBLISHED" == true ]]; then reuse=true; fi
           if [[ "$PRODUCT" == true ]]; then
