@@ -5,6 +5,9 @@ const api = vi.hoisted(() => ({ addEmailInvites: null, getEmailInvites: null, re
 const msg = vi.hoisted(() => ({ success: null, error: null, warning: null, info: null }))
 const dialogs = vi.hoisted(() => [])
 
+vi.mock('@/api/circle', () => ({
+  getCircleDetail: vi.fn(async id => ({ data: { id, name: id, join_type: 2, member_role: 30 } }))
+}))
 vi.mock('@/api/circleInvite', () => ({
   addEmailInvites: (...a) => api.addEmailInvites(...a),
   getEmailInvites: (...a) => api.getEmailInvites(...a),
@@ -22,7 +25,8 @@ vi.mock('naive-ui', async (importOriginal) => ({
 }))
 
 const { default: EmailInvitePanel } = await import('@/components/circle/EmailInvitePanel.vue')
-const { createTestI18n } = await import('../helpers/plugins')
+const { createTestI18n, createTestRouter } = await import('../helpers/plugins')
+const { default: CircleInvites } = await import('@/views/circle/CircleInvites.vue')
 
 const fail = (fields) => Promise.reject(Object.assign(new Error('backend english message'), fields))
 const row = (extra = {}) => ({
@@ -50,6 +54,16 @@ const mountPanel = async () => {
 
 const typeEmails = async (text) => {
   await wrapper.find('textarea').setValue(text)
+}
+
+function deferAdd() {
+  let resolve, reject
+  const promise = new Promise((onResolve, onReject) => {
+    resolve = onResolve
+    reject = onReject
+  })
+  api.addEmailInvites.mockReturnValueOnce(promise)
+  return { resolve, reject }
 }
 
 beforeEach(() => {
@@ -97,6 +111,66 @@ describe('EmailInvitePanel 添加', () => {
     expect(groups[2]).toContain('carol@example.com')
     // 有新增时刷新列表
     expect(api.getEmailInvites).toHaveBeenCalledTimes(2)
+  })
+
+  it('切换圈子后旧提交返回，不改新圈草稿、结果或列表', async () => {
+    const old = deferAdd()
+    await mountPanel()
+    await typeEmails('old@example.test')
+    await wrapper.get('.add-btn').trigger('click')
+    await wrapper.setProps({ circleId: 'c2' })
+    await typeEmails('new@example.test')
+    old.resolve({ data: { added: ['old@example.test'], ignored: [] } })
+    await flushPromises()
+
+    expect(wrapper.get('textarea').element.value).toBe('new@example.test')
+    expect(wrapper.find('.add-result').exists()).toBe(false)
+    expect(msg.success).not.toHaveBeenCalled()
+    expect(api.getEmailInvites).toHaveBeenCalledTimes(2)
+  })
+
+  it('切走再切回同一圈，迟到的 403 不提示、不解锁新提交', async () => {
+    const old = deferAdd()
+    const current = deferAdd()
+    await mountPanel()
+    await typeEmails('old@example.test')
+    await wrapper.get('.add-btn').trigger('click')
+    await wrapper.setProps({ circleId: 'c2' })
+    await wrapper.setProps({ circleId: 'c1' })
+    expect(wrapper.get('textarea').element.disabled).toBe(false)
+    await typeEmails('new@example.test')
+    await wrapper.get('.add-btn').trigger('click')
+
+    old.reject(Object.assign(new Error('Forbidden'), { status: 403 }))
+    await flushPromises()
+    expect(msg.error).not.toHaveBeenCalled()
+    expect(wrapper.emitted('forbidden')).toBeUndefined()
+    expect(wrapper.get('textarea').element.disabled).toBe(true)
+    current.resolve({ data: { added: ['new@example.test'], ignored: [] } })
+    await flushPromises()
+    expect(wrapper.get('textarea').element.disabled).toBe(false)
+    expect(wrapper.get('.add-result').text()).toContain('已添加 1 个邀请')
+  })
+
+  it('从 A 圈邀请页导航到 B，已卸载的 A 面板不弹成功提示或重拉列表', async () => {
+    const old = deferAdd()
+    const router = createTestRouter([{ path: '/circle/:id/invites' }])
+    await router.push('/circle/c1/invites?tab=email')
+    wrapper = mount(CircleInvites, { global: {
+      plugins: [router, createTestI18n()],
+      stubs: { AppShell: true, CircleAdminHeader: true, InviteLinkPanel: true }
+    } })
+    await flushPromises()
+    await typeEmails('old@example.test')
+    await wrapper.get('.add-btn').trigger('click')
+    await router.push('/circle/c2/invites?tab=email')
+    await flushPromises()
+    old.resolve({ data: { added: ['old@example.test'], ignored: [] } })
+    await flushPromises()
+
+    expect(api.getEmailInvites.mock.calls.map(([params]) => params.circle_id)).toEqual(['c1', 'c2'])
+    expect(msg.success).not.toHaveBeenCalled()
+    expect(wrapper.find('.add-result').exists()).toBe(false)
   })
 
   it('超过 50 个不请求，提示数量', async () => {

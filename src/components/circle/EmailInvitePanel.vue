@@ -128,7 +128,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { NButton, NEmpty, NIcon, NInput, NPagination, NTag, useDialog, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { Mail as MailIcon } from '@vicons/tabler'
@@ -256,12 +256,20 @@ const changePage = (p) => {
 
 const emailText = ref('')
 const adding = ref(false)
+let addVersion = 0
+
+// 旧请求仍可能在服务端完成；切圈或离开面板后不再处理它的返回。
+const resetAdd = () => {
+  addVersion++
+  adding.value = false
+}
 // 最近一次添加的结果：{ added, ignored }
 const addResult = ref(null)
 const emailCount = computed(() => parseEmailInput(emailText.value).length)
 const ignoredGroups = computed(() => groupIgnoredEmails(addResult.value?.ignored))
 
 const submitAdd = async () => {
+  if (adding.value) return
   const emails = parseEmailInput(emailText.value)
   if (emails.length === 0) {
     message.warning(t('circle.invite.email.emptyInput'))
@@ -271,9 +279,11 @@ const submitAdd = async () => {
     message.warning(t('circle.invite.email.tooMany', { n: emails.length, max: EMAIL_INVITE_MAX_BATCH }))
     return
   }
+  const version = addVersion
   adding.value = true
   try {
     const res = await addEmailInvites({ circle_id: props.circleId, emails })
+    if (version !== addVersion) return
     addResult.value = {
       added: res.data?.added || [],
       ignored: res.data?.ignored || []
@@ -286,9 +296,9 @@ const submitAdd = async () => {
       loadInvites()
     }
   } catch (error) {
-    handleError(error)
+    if (version === addVersion) handleError(error)
   } finally {
-    adding.value = false
+    if (version === addVersion) adding.value = false
   }
 }
 
@@ -317,8 +327,10 @@ const confirmRevoke = (item) => {
 }
 
 onMounted(loadInvites)
+onBeforeUnmount(resetAdd)
 
 watch(() => props.circleId, () => {
+  resetAdd()
   invites.value = []
   total.value = 0
   page.value = 1
