@@ -10,6 +10,7 @@
              动画本体只作用于各页 .main-content，见 main.css 的 .page-fade-* -->
         <router-view v-slot="{ Component, route }">
           <Transition
+            :key="sessionVersion"
             :name="shouldPageFade(route) ? 'page-fade' : undefined"
             mode="out-in"
             :duration="shouldPageFade(route) ? { enter: 220, leave: 160 } : 0"
@@ -35,6 +36,7 @@ import { darkTheme, zhCN, enUS } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { NConfigProvider, NGlobalStyle, NMessageProvider, NDialogProvider } from 'naive-ui'
 import LoginPromptModal from '@/components/auth/LoginPromptModal.vue'
+import { auth } from '@/utils/auth'
 import { applyPageTitle } from '@/utils/pageTitle'
 import MobileUnsupported from '@/views/MobileUnsupported.vue'
 import { useMobileShell } from '@/composables/useAppShell'
@@ -74,6 +76,19 @@ const clearCircleSearch = () => {
     avatarUrl: ''
   }
 }
+
+// 换号后让当前业务页重新读取该用户的数据。登录和 OAuth 回调自行完成跳转。
+const sessionVersion = ref(0)
+watch(() => auth.getToken(), () => {
+  clearCircleSearch()
+  const route = router.currentRoute.value
+  if (route.name === 'login' || route.name === 'success') return
+  if (route.meta.requiresAuth && !auth.isAuthenticated()) {
+    router.replace({ name: 'login' })
+  } else {
+    sessionVersion.value++
+  }
+})
 
 // 提供圈子搜索状态和方法
 provide('circleSearchState', readonly(circleSearchState))

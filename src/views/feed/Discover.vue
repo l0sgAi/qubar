@@ -41,6 +41,7 @@
           </div>
 
           <!-- 全空态 -->
+          <div v-else-if="firstFailed" class="discover-empty" role="alert">{{ t('discover.loadFailed') }}</div>
           <div v-else-if="isEmpty" class="discover-empty">{{ t('discover.empty') }}</div>
 
           <!-- ============ 探索流 Stream ============ -->
@@ -150,6 +151,7 @@ const postsToken = ref('')
 const postsHasMore = ref(false)
 const postsLoading = ref(false)
 
+const firstFailed = ref(false)
 const firstLoading = ref(true)
 const isEmpty = computed(() => !circles.value.length && !posts.value.length)
 
@@ -207,6 +209,7 @@ const transformPost = (p) => {
 
 // 首屏聚合：section=all，两分区各 size 条
 const fetchFirst = async () => {
+  firstFailed.value = false
   firstLoading.value = true
   try {
     const res = await getDiscover({ section: 'all', size: PAGE_SIZE })
@@ -226,6 +229,7 @@ const fetchFirst = async () => {
     circlesHasMore.value = cList.length > 0 || !!data.has_more
     postsHasMore.value = pList.length > 0 || !!data.has_more
   } catch (e) {
+    firstFailed.value = true
     console.error('获取发现内容失败:', e)
     message.error(e.message || t('discover.loadFailed'))
     circles.value = []
