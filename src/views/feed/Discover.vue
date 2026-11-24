@@ -199,7 +199,9 @@ const transformPost = (p) => {
     commentCount: p.comment_count || 0,
     collectCount: p.collect_count || 0,
     isLiked: !!p.is_liked,
-    isCollected: !!p.is_collected
+    isCollected: !!p.is_collected,
+    shareCount: p.share_count ?? null,
+    isShared: !!p.is_shared
   }
 }
 
