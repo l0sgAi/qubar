@@ -12,7 +12,7 @@ type Hot struct {
 type HotWeight struct {
 	PostLike    int `mapstructure:"post_like" json:"post_like" yaml:"post_like"`          // 帖子点赞
 	PostCollect int `mapstructure:"post_collect" json:"post_collect" yaml:"post_collect"` // 帖子收藏
-	PostShare   int `mapstructure:"post_share" json:"post_share" yaml:"post_share"`       // 帖子分享（TODO: 分享功能未实现）
+	PostShare   int `mapstructure:"post_share" json:"post_share" yaml:"post_share"`       // 帖子分享（首次分享累加，#232）
 	Comment     int `mapstructure:"comment" json:"comment" yaml:"comment"`                // 评论
 	CommentLike int `mapstructure:"comment_like" json:"comment_like" yaml:"comment_like"` // 评论点赞
 }

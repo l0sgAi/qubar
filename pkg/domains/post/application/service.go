@@ -17,6 +17,7 @@ import (
 	"interestBar/pkg/domains/post/domain"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/utils"
+	"interestBar/pkg/shared/mention"
 
 	"github.com/google/uuid"
 )
@@ -50,12 +51,8 @@ type UserFacade interface {
 }
 
 // AgentMentionScope 机器人账号的 @提及 可见范围（user 域投影列的跨域视图）。
-type AgentMentionScope struct {
-	// CircleID 绑定圈子ID；uuid.Nil=全局机器人。
-	CircleID uuid.UUID
-	// Mentionable 能否被 @：机器人停用或已删除时为 false。
-	Mentionable bool
-}
+// 与 comment 域共用 pkg/shared/mention 的同一个类型与剔除规则（mention.StripUnmentionableAgents）。
+type AgentMentionScope = mention.AgentScope
 
 // CircleBrief 圈子精简视图。
 type CircleBrief struct {
@@ -139,6 +136,7 @@ type PostListItem struct {
 	CommentCount int       `json:"comment_count"`
 	LikeCount    int       `json:"like_count"`
 	CollectCount int       `json:"collect_count"`
+	ShareCount   int       `json:"share_count"` // 分享数（Redis post:sharecnt 回填，口径同详情，#233）
 	IsPinned     int16     `json:"is_pinned"`
 	IsEssence    int16     `json:"is_essence"`
 	IsLock       int16     `json:"is_lock"`
@@ -199,6 +197,7 @@ type PostDetailVO struct {
 	CommentCount  int                   `json:"comment_count"`
 	LikeCount     int                   `json:"like_count"`
 	CollectCount  int                   `json:"collect_count"`
+	ShareCount    int                   `json:"share_count"` // 分享数（去重后的分享人数，#233）
 	IsPinned      int16                 `json:"is_pinned"`
 	IsEssence     int16                 `json:"is_essence"`
 	IsLock        int16                 `json:"is_lock"`
@@ -212,6 +211,7 @@ type PostDetailVO struct {
 	AuthorAvatar  string                `json:"author_avatar"`
 	IsLiked       bool                  `json:"is_liked"`
 	IsCollected   bool                  `json:"is_collected"`
+	IsShared      bool                  `json:"is_shared"` // 当前用户是否分享过（访客恒为 false，#233）
 
 	// @提及 用户列表（发帖时落库的最终名单，仅含未注销用户）。
 	// 缺失/为空时前端回退文本反查建链，不报错。
@@ -294,6 +294,16 @@ type PostService interface {
 	// 供 recommend / trending / discover 信息流回显；best-effort：单侧失败只记日志，返回已知结果。
 	// 访客（userID==uuid.Nil）返回空 map。
 	BatchCheckInteractions(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (liked, collected map[uuid.UUID]bool, err error)
+	// BatchCheckShared 批量查当前用户分享过哪些帖子（信息流 is_shared 回显，#233，见 share_count.go）。
+	// 访客返回空 map；best-effort：出错只记日志。
+	BatchCheckShared(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) map[uuid.UUID]bool
+	// BatchGetShareCounts 批量取帖子分享数（口径同详情 / 列表，供 circle 圈内帖子列表回填，#233）。
+	// best-effort：取不到的帖子不在结果里。
+	BatchGetShareCounts(ctx context.Context, postIDs []uuid.UUID) map[uuid.UUID]int
+	// BatchGetCachedStats 批量取 Redis post:stats 里的实时计数（view/comment/like/collect，口径同 applyStatsOverlay）。
+	// 供 circle 圈内帖子列表覆盖 ES 快照（#250）。一页一次 pipeline，不回种；
+	// best-effort：未命中的帖子不在结果里（调用方保留快照），Redis 出错只记日志、返回空 map。
+	BatchGetCachedStats(ctx context.Context, postIDs []uuid.UUID) map[uuid.UUID]domain.PostStatistics
 
 	// SetUserFacade 注入 user Facade（组装作者信息用）。
 	SetUserFacade(f UserFacade)
@@ -307,6 +317,8 @@ type PostService interface {
 	SetPostCountPort(p CirclePostCountPort)
 	// SetCollectCache 注入收藏状态缓存（详情页 is_collected 回显用）。
 	SetCollectCache(c domain.PostCollectCache)
+	// SetShareCountCache 注入分享数缓存（详情 / 列表 share_count 回填用，#233）。
+	SetShareCountCache(c domain.PostShareCountCache)
 	// SetHistoryRecorder 注入浏览历史记录器（详情页浏览 async 回调用）。
 	SetHistoryRecorder(r domain.HistoryRecorder)
 	// SetAgentTrigger 注入 AI 机器人回复触发端口（未注入则发帖 @机器人 不触发回复）。
@@ -386,6 +398,7 @@ type postServiceImpl struct {
 	statsCache    domain.PostStatsCache
 	likeCache     domain.PostLikeCache
 	collectCache  domain.PostCollectCache
+	shareCache    domain.PostShareCountCache // 可为 nil（分享数直接读 PG）
 	searcher      PostSearcher
 	publisher     domain.PostEventPublisher
 	userFacade    UserFacade
@@ -642,7 +655,7 @@ func (s *postServiceImpl) filterMentionUserIDs(ctx context.Context, actorID uuid
 		}
 	}
 
-	valid = s.stripUnmentionableAgents(ctx, valid, postCircleID)
+	valid = mention.StripUnmentionableAgents(ctx, s.userFacade, valid, postCircleID)
 
 	max := conf.Config.Notice.MentionMax
 	if max <= 0 {
@@ -652,29 +665,6 @@ func (s *postServiceImpl) filterMentionUserIDs(ctx context.Context, actorID uuid
 		valid = valid[:max]
 	}
 	return valid
-}
-
-// stripUnmentionableAgents 从 mention 候选中剔除不可 @ 的机器人：停用/已删除的机器人，
-// 以及绑定圈子 ≠ postCircleID 的圈内机器人静默移除；普通用户/可 @ 的全局机器人（map 无记录）保留。
-// 查询失败 fail-open 跳过剔除（正常用户已被 @选人列表过滤，兜底只防构造请求）。
-func (s *postServiceImpl) stripUnmentionableAgents(ctx context.Context, candidates []uuid.UUID, postCircleID uuid.UUID) []uuid.UUID {
-	if len(candidates) == 0 {
-		return candidates
-	}
-	scopes, err := s.userFacade.GetAgentMentionScopes(ctx, candidates)
-	if err != nil {
-		logger.Log.Warn("Failed to load agent mention scope, skip agent filtering: " + err.Error())
-		return candidates
-	}
-	kept := make([]uuid.UUID, 0, len(candidates))
-	for _, id := range candidates {
-		if scope, ok := scopes[id]; ok &&
-			(!scope.Mentionable || (scope.CircleID != uuid.Nil && scope.CircleID != postCircleID)) {
-			continue
-		}
-		kept = append(kept, id)
-	}
-	return kept
 }
 
 // checkMemberStatus 检查成员状态是否允许发帖。
@@ -731,13 +721,16 @@ func (s *postServiceImpl) GetPostDetail(ctx context.Context, userID, postID uuid
 	//   2. asyncIncrementView 把 uuid.Nil 写入 user:view:posts:{00000000-...} 污染历史池
 	//      + 以 uuid.Nil 作为 IncrViewCount 的去重 key。
 	// 登录用户走完整路径。
-	var isLiked, isCollected bool
+	var isLiked, isCollected, isShared bool
 	if userID != uuid.Nil {
 		// 点赞状态（缓存优先，miss 回源 DB）
 		isLiked = s.checkLiked(ctx, userID, postID)
 
 		// 收藏状态（缓存优先，miss 回源 DB）
 		isCollected = s.checkCollected(ctx, userID, postID)
+
+		// 分享状态（分享不可撤销，直接查 post_share 唯一索引）
+		isShared = s.checkShared(ctx, userID, postID)
 
 		// 异步增加浏览量（独立 goroutine，需自带 panic 恢复，避免拖垮服务）。
 		// 只统计已发布帖子：作者查看自己审核中 / 驳回的帖子不计浏览、热度与浏览历史（#117）。
@@ -775,6 +768,7 @@ func (s *postServiceImpl) GetPostDetail(ctx context.Context, userID, postID uuid
 		AuthorID:      post.UserID, AuthorName: authorName, AuthorAvatar: authorAvatar,
 		IsLiked:     isLiked,
 		IsCollected: isCollected,
+		IsShared:    isShared,
 	}
 
 	// @提及 用户列表（落库名单 → GetBriefs 过滤未注销；失败置空数组，前端回退文本反查）
@@ -793,6 +787,10 @@ func (s *postServiceImpl) GetPostDetail(ctx context.Context, userID, postID uuid
 			LikeCount: post.LikeCount, CollectCount: post.CollectCount,
 		})
 	}
+
+	// 分享数：与列表同一口径（Redis post:sharecnt，miss 用本次读到的 post.share_count 回种）
+	vo.ShareCount = int(s.resolveShareCounts(ctx, []uuid.UUID{postID},
+		map[uuid.UUID]int64{postID: int64(post.ShareCount)})[postID])
 
 	return vo, nil
 }
@@ -1196,6 +1194,7 @@ func (s *postServiceImpl) assemblePostList(ctx context.Context, raw *RawPostSear
 		})
 	}
 	s.applyStatsOverlay(ctx, posts)
+	s.applyShareCounts(ctx, posts, nil) // ES 文档不含 share_count，miss 回源 PG
 	return posts
 }
 
@@ -1209,18 +1208,35 @@ func (s *postServiceImpl) applyStatsOverlay(ctx context.Context, posts []PostLis
 	for _, p := range posts {
 		postIDs = append(postIDs, p.ID)
 	}
-	statsMap, err := s.statsCache.BatchGet(ctx, postIDs)
-	if err != nil || len(statsMap) == 0 {
-		return
-	}
+	statsMap := s.BatchGetCachedStats(ctx, postIDs)
 	for i := range posts {
-		if st, ok := statsMap[posts[i].ID]; ok && st != nil {
+		if st, ok := statsMap[posts[i].ID]; ok {
 			posts[i].ViewCount = st.ViewCount
 			posts[i].CommentCount = st.CommentCount
 			posts[i].LikeCount = st.LikeCount
 			posts[i].CollectCount = st.CollectCount
 		}
 	}
+}
+
+// BatchGetCachedStats 批量取 Redis post:stats 命中的实时计数；未命中的帖子不在结果里，不回种。
+// applyStatsOverlay 与 circle 圈内帖子列表（经 composition 桥接，#250）共用，保证同一口径。
+func (s *postServiceImpl) BatchGetCachedStats(ctx context.Context, postIDs []uuid.UUID) map[uuid.UUID]domain.PostStatistics {
+	out := make(map[uuid.UUID]domain.PostStatistics)
+	if len(postIDs) == 0 {
+		return out
+	}
+	statsMap, err := s.statsCache.BatchGet(ctx, postIDs)
+	if err != nil {
+		logger.Log.Error("Failed to batch get post stats from cache: " + err.Error())
+		return out
+	}
+	for id, st := range statsMap {
+		if st != nil {
+			out[id] = *st
+		}
+	}
+	return out
 }
 
 // GetMediaByPostIDs 批量获取帖子图片（供 circle 领域调用）。
@@ -1414,6 +1430,11 @@ func (s *postServiceImpl) assembleFromPosts(ctx context.Context, posts []domain.
 		})
 	}
 	s.applyStatsOverlay(ctx, result)
+	known := make(map[uuid.UUID]int64, len(posts))
+	for _, p := range posts {
+		known[p.ID] = int64(p.ShareCount)
+	}
+	s.applyShareCounts(ctx, result, known)
 	return result
 }
 

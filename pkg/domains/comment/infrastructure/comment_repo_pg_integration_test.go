@@ -1,11 +1,13 @@
 //go:build integration
 
 // comment_repo_pg_integration_test.go 评论仓储对开发栈 PostgreSQL 的集成测试（make test-integration）：
-// 回复计数事务、逻辑删除过滤、两种排序的 keyset 翻页与定位游标。
+// 回复计数事务、逻辑删除过滤、两种排序的 keyset 翻页、定位游标与游标 v2 的作用域校验。
 package infrastructure_test
 
 import (
+	"encoding/base64"
 	"errors"
+	"strconv"
 	"testing"
 
 	"interestBar/pkg/domains/comment/domain"
@@ -225,6 +227,9 @@ func TestCommentRepo_LocateCursorMatchesListPages(t *testing.T) {
 	}
 
 	for _, sort := range []int{sortByLikes, sortByTime} {
+		rootCursors := pageStartCursors(t, func(cursor string) ([]domain.Comment, string, bool, error) {
+			return repo.GetRootCommentsByCursor(ctx, postID, size, sort, cursor)
+		})
 		for _, target := range roots {
 			cursor, err := repo.LocateRootCursor(ctx, postID, sort, target, size)
 			if err != nil {
@@ -237,7 +242,14 @@ func TestCommentRepo_LocateCursorMatchesListPages(t *testing.T) {
 			if !containsID(page, target.ID) {
 				t.Fatalf("sort=%d: located root page does not contain target %s", sort, target.ID)
 			}
+			// 逐字节一致：定位游标 == 顺序翻页时拿到的、目标所在页的起始游标（上一页的 next_cursor）
+			if want := rootCursors[target.ID]; cursor != want {
+				t.Fatalf("sort=%d: located root cursor %q != list cursor %q", sort, cursor, want)
+			}
 		}
+		replyCursors := pageStartCursors(t, func(cursor string) ([]domain.Comment, string, bool, error) {
+			return repo.GetRepliesByCursor(ctx, root.ID, size, sort, cursor)
+		})
 		for _, target := range replies {
 			cursor, pageNo, err := repo.LocateReplyCursor(ctx, root.ID, sort, target, size)
 			if err != nil {
@@ -253,8 +265,112 @@ func TestCommentRepo_LocateCursorMatchesListPages(t *testing.T) {
 			if (pageNo == 1) != (cursor == "") {
 				t.Fatalf("sort=%d: page %d with cursor %q", sort, pageNo, cursor)
 			}
+			if want := replyCursors[target.ID]; cursor != want {
+				t.Fatalf("sort=%d: located reply cursor %q != list cursor %q", sort, cursor, want)
+			}
 		}
 	}
+}
+
+// pageStartCursors 顺序翻完整个列表，返回 评论ID → 它所在页的起始游标（首页为 ""）。
+func pageStartCursors(t *testing.T, fetch func(cursor string) ([]domain.Comment, string, bool, error)) map[uuid.UUID]string {
+	t.Helper()
+	starts := make(map[uuid.UUID]string)
+	cursor := ""
+	for range 100 {
+		items, next, hasMore, err := fetch(cursor)
+		if err != nil {
+			t.Fatalf("list with cursor %q: %v", cursor, err)
+		}
+		for _, c := range items {
+			starts[c.ID] = cursor
+		}
+		if !hasMore {
+			return starts
+		}
+		cursor = next
+	}
+	t.Fatal("pagination does not terminate")
+	return nil
+}
+
+// 游标 v2 的作用域校验（#209）：游标只在生成它的帖子 / 楼、同一排序下有效；v1 游标（无作用域信息）仍可用。
+func TestCommentRepo_CursorScopeAndV1Compat(t *testing.T) {
+	t.Parallel()
+	repo := infrastructure.NewCommentRepository(testkit.PG(t))
+	ctx := t.Context()
+	postA, postB := sharedomain.NewID(), sharedomain.NewID()
+	const size = 2
+
+	var rootsA []*domain.Comment
+	for i := range 5 {
+		rootsA = append(rootsA, newComment(t, repo, postA, nil, i))
+	}
+	for range 3 {
+		newComment(t, repo, postB, nil, 0)
+	}
+	rootA, otherRootA := rootsA[0], rootsA[1]
+	for i := range 4 {
+		newComment(t, repo, postA, &rootA.ID, i)
+		newComment(t, repo, postA, &otherRootA.ID, i)
+	}
+
+	for _, sort := range []int{sortByLikes, sortByTime} {
+		otherSort := 1 - sort
+		page1, rootCursor, hasMore, err := repo.GetRootCommentsByCursor(ctx, postA, size, sort, "")
+		if err != nil || !hasMore || rootCursor == "" {
+			t.Fatalf("sort=%d: root first page: cursor=%q hasMore=%v err=%v", sort, rootCursor, hasMore, err)
+		}
+		_, replyCursor, hasMore, err := repo.GetRepliesByCursor(ctx, rootA.ID, size, sort, "")
+		if err != nil || !hasMore || replyCursor == "" {
+			t.Fatalf("sort=%d: reply first page: cursor=%q hasMore=%v err=%v", sort, replyCursor, hasMore, err)
+		}
+
+		// 同作用域同排序：正常翻页
+		page2, _, _, err := repo.GetRootCommentsByCursor(ctx, postA, size, sort, rootCursor)
+		if err != nil || len(page2) != size {
+			t.Fatalf("sort=%d: root second page: %d items, err=%v", sort, len(page2), err)
+		}
+		if _, _, _, err := repo.GetRepliesByCursor(ctx, rootA.ID, size, sort, replyCursor); err != nil {
+			t.Fatalf("sort=%d: reply second page: %v", sort, err)
+		}
+
+		// 跨帖 / 跨楼 / 顶层与楼内混用 / 换排序：一律 ErrInvalidCursor
+		rejected := map[string]error{}
+		_, _, _, rejected["跨帖"] = repo.GetRootCommentsByCursor(ctx, postB, size, sort, rootCursor)
+		_, _, _, rejected["跨楼"] = repo.GetRepliesByCursor(ctx, otherRootA.ID, size, sort, replyCursor)
+		_, _, _, rejected["顶层游标用于楼内"] = repo.GetRepliesByCursor(ctx, rootA.ID, size, sort, rootCursor)
+		_, _, _, rejected["楼内游标用于顶层"] = repo.GetRootCommentsByCursor(ctx, postA, size, sort, replyCursor)
+		_, _, _, rejected["顶层换排序"] = repo.GetRootCommentsByCursor(ctx, postA, size, otherSort, rootCursor)
+		_, _, _, rejected["楼内换排序"] = repo.GetRepliesByCursor(ctx, rootA.ID, size, otherSort, replyCursor)
+		for name, err := range rejected {
+			if !errors.Is(err, domain.ErrInvalidCursor) {
+				t.Fatalf("sort=%d %s: want ErrInvalidCursor, got %v", sort, name, err)
+			}
+		}
+
+		// v1 游标（v2 上线前的格式，前端可能还持有）：与 v2 游标翻到同一页
+		last := page1[len(page1)-1]
+		v1 := `{"id":"` + last.ID.String() + `"}`
+		if sort == sortByLikes {
+			v1 = `{"id":"` + last.ID.String() + `","like_count":` + strconv.Itoa(last.LikeCount) + `}`
+		}
+		v1Page, _, _, err := repo.GetRootCommentsByCursor(ctx, postA, size, sort, base64.StdEncoding.EncodeToString([]byte(v1)))
+		if err != nil {
+			t.Fatalf("sort=%d: v1 cursor: %v", sort, err)
+		}
+		if !equalIDs(commentIDs(v1Page), commentIDs(page2)) {
+			t.Fatalf("sort=%d: v1 cursor page = %v, want %v", sort, commentIDs(v1Page), commentIDs(page2))
+		}
+	}
+}
+
+func commentIDs(items []domain.Comment) []uuid.UUID {
+	ids := make([]uuid.UUID, 0, len(items))
+	for _, c := range items {
+		ids = append(ids, c.ID)
+	}
+	return ids
 }
 
 func containsID(items []domain.Comment, id uuid.UUID) bool {

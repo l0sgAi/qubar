@@ -394,6 +394,7 @@ func openRedpanda() error {
 	for _, p := range []*string{
 		&rp.Topic, &rp.PostTopic, &rp.LikeEventTopic, &rp.CollectEventTopic, &rp.HistoryEventTopic,
 		&rp.PostHotTopic, &rp.PostInteractionTopic, &rp.NoticeEventTopic, &rp.PostModerationTopic,
+		&rp.ShareEventTopic,
 	} {
 		*p += suffix
 		rpTopics = append(rpTopics, *p)
@@ -438,6 +439,7 @@ func openRedpanda() error {
 		redpanda.InitPostInteractionProducer,
 		redpanda.InitNotificationEventProducer,
 		redpanda.InitPostModerationProducer,
+		redpanda.InitShareEventProducer,
 	} {
 		if err := initFn(); err != nil {
 			return err
@@ -462,6 +464,7 @@ func teardown() {
 			redpanda.ClosePostInteractionProducer,
 			redpanda.CloseNotificationEventProducer,
 			redpanda.ClosePostModerationProducer,
+			redpanda.CloseShareEventProducer,
 		} {
 			_ = closeFn()
 		}

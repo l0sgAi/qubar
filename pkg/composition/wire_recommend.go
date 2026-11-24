@@ -3,6 +3,7 @@ package composition
 
 import (
 	circleapp "interestBar/pkg/domains/circle/application"
+	followapp "interestBar/pkg/domains/follow/application"
 	postapp "interestBar/pkg/domains/post/application"
 	recommendapp "interestBar/pkg/domains/recommend/application"
 	recommendinfra "interestBar/pkg/domains/recommend/infrastructure"
@@ -13,18 +14,19 @@ import (
 // newRecommendService 构造 RecommendService。
 //
 // searcher/seed/feed 为 recommend 同域 infra（直构，走全局 ES/Redis 客户端）；
-// circle/postMeta/hydrator/checker 为跨域桥接器（包 post/circle service）。
-func newRecommendService(postSvc postapp.PostService, circleSvc circleapp.CircleService, vis circleapp.CircleVisibility) recommendapp.RecommendService {
+// circle/postMeta/hydrator/checker/followees 为跨域桥接器（包 post/circle/follow service）。
+func newRecommendService(postSvc postapp.PostService, circleSvc circleapp.CircleService, vis circleapp.CircleVisibility, followees followapp.FolloweeIDsService) recommendapp.RecommendService {
 	return recommendapp.NewRecommendService(
-		recommendinfra.NewHomeFeedSearcher(),        // HomeFeedSearcher
-		&recommendCircleLookup{delegate: circleSvc}, // CircleLookup
-		&recommendPostMetaReader{delegate: postSvc}, // PostMetaReader
-		recommendinfra.NewSeedReader(),              // SeedReader
-		&recommendPostHydrator{delegate: postSvc},   // PostHydrator
-		&postInteractionChecker{delegate: postSvc},  // InteractionChecker（缓存 + DB 回源）
-		recommendinfra.NewFeedCache(),               // FeedCache
-		recommendinfra.NewInterestCircleCache(),     // InterestCircleCache
-		vis,                                         // CircleVisibility（私密圈 must_not；方法签名一致，直接注入）
+		recommendinfra.NewHomeFeedSearcher(),          // HomeFeedSearcher
+		&recommendCircleLookup{delegate: circleSvc},   // CircleLookup
+		&recommendPostMetaReader{delegate: postSvc},   // PostMetaReader
+		recommendinfra.NewSeedReader(),                // SeedReader
+		&recommendPostHydrator{delegate: postSvc},     // PostHydrator
+		&postInteractionChecker{delegate: postSvc},    // InteractionChecker（缓存 + DB 回源）
+		recommendinfra.NewFeedCache(),                 // FeedCache
+		recommendinfra.NewInterestCircleCache(),       // InterestCircleCache
+		vis,                                           // CircleVisibility（私密圈 must_not；方法签名一致，直接注入）
+		&recommendFolloweeLookup{delegate: followees}, // FolloweeLookup（关注流：关注的用户 ID）
 	)
 }
 
