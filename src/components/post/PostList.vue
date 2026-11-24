@@ -21,6 +21,8 @@
       :like-count="post.likeCount"
       :comment-count="post.commentCount"
       :collect-count="post.collectCount"
+      :share-count="post.shareCount ?? null"
+      :is-shared="!!post.isShared"
       :show-circle="post.showCircle !== false"
     />
   </div>

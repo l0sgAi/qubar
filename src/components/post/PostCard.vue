@@ -14,6 +14,9 @@
     :view-count="viewCount"
     :like-count="likeCount"
     :comment-count="commentCount"
+    :share-count="shareCount"
+    :is-shared="isShared"
+    shareable
     more-menu
     :author-id="userId"
     :status="status"
@@ -108,6 +111,15 @@
         </NIcon>
         <span>{{ formatNumber(collectCount, STATS_COUNT_CAP) }}</span>
       </div>
+      <!-- 分享：只有已发布的帖子可分享（未发布的分享计数接口返回 404） -->
+      <ShareButton
+        v-if="status === 1"
+        :post-id="postId"
+        :title="title"
+        :share-count="shareCount"
+        :is-shared="isShared"
+        :count-cap="STATS_COUNT_CAP"
+      />
     </div>
   </NCard>
 </template>
@@ -120,6 +132,7 @@ import ImageCarousel from '@/components/common/ImageCarousel.vue'
 import SmartLink from '@/components/common/SmartLink.vue'
 import MobilePostItem from '@/components/post/MobilePostItem.vue'
 import PostMoreMenu from '@/components/post/PostMoreMenu.vue'
+import ShareButton from '@/components/post/ShareButton.vue'
 import { useMobileShell } from '@/composables/useAppShell'
 import { useFormatNumber, useFormatTime } from '@/utils/i18n'
 
@@ -203,6 +216,16 @@ const props = defineProps({
   collectCount: {
     type: Number,
     default: 0
+  },
+  // 分享数：null = 该列表接口没给（只显示分享图标）
+  shareCount: {
+    type: Number,
+    default: null
+  },
+  // 当前用户是否分享过：只有首页 / 热门 / 发现 / 详情返回，缺省按未分享
+  isShared: {
+    type: Boolean,
+    default: false
   },
   showCircle: {
     type: Boolean,

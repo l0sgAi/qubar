@@ -1347,6 +1347,7 @@ export default {
   // 帖子分享（后端 v0.9.0；D 线页面文案在本段追加）
   share: {
     button: '分享',
+    shared: '已分享',
     linkCopied: '链接已复制',
     copyFailed: '复制失败，请手动复制链接',
     // 错误文案：utils/share.js 的 shareErrorKey
