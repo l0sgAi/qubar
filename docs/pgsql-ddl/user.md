@@ -159,7 +159,7 @@ CREATE TABLE domains.user_setting (
 |---|---|
 | `user_id` | 主键，无 FK。用户首次修改设置时建行；**没有行视为全部设置取默认值** |
 | `follow_list_visibility` | 关注列表 / 粉丝列表可见性，一个开关同时控制两个列表：`0` = 公开（默认，访客可读），`1` = 私密（仅本人可看名单；关注数 / 粉丝数仍公开）。无 CHECK，取值由应用层校验 |
-| `dm_permission` | 谁可以给我发私信（#240，迁移 `20261111194151_add_user_setting_dm_permission`）：`0` = 所有人（默认，仍受私信未关注 5 条限制）、`1` = 仅我关注的人、`2` = 仅互相关注、`3` = 关闭。已有会话同样受约束。无 CHECK，取值由应用层校验；message 域经 `pkg/composition/message_bridges.go` 桥接读取。规则见 [message-design.md](../message-design.md) 第十二节 |
+| `dm_permission` | 谁可以给我发私信（#240，迁移 `20261111194151_add_user_setting_dm_permission`）：`0` = 所有人（默认，仍受私信未关注 5 条限制）、`1` = 仅我关注的人、`2` = 仅互相关注、`3` = 关闭。已有会话同样受约束。无 CHECK，取值由应用层校验；message 域经 `pkg/composition/message_bridges.go` 桥接读取。规则见 [message-design.md](../message-design.md) 第十四节 |
 | `create_time` | 首次修改设置的时间 |
 | `update_time` | 设置值实际变化时由应用层更新（写入相同的值不产生更新） |
 

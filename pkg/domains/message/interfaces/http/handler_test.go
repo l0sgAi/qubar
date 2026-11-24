@@ -39,13 +39,18 @@ type fakeSvc struct {
 	gotUser    uuid.UUID
 	gotTarget  uuid.UUID
 	gotContent string
+	gotClient  string
 	gotCursor  string
 	gotSize    int
 }
 
-func (f *fakeSvc) Send(_ context.Context, sender, receiver uuid.UUID, content string) (*application.SendVO, error) {
+func (f *fakeSvc) Send(ctx context.Context, sender, receiver uuid.UUID, content string) (*application.SendVO, error) {
+	return f.SendWithClientMsgID(ctx, sender, receiver, content, "")
+}
+
+func (f *fakeSvc) SendWithClientMsgID(_ context.Context, sender, receiver uuid.UUID, content, clientMsgID string) (*application.SendVO, error) {
 	f.calls++
-	f.gotUser, f.gotTarget, f.gotContent = sender, receiver, content
+	f.gotUser, f.gotTarget, f.gotContent, f.gotClient = sender, receiver, content, clientMsgID
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -55,6 +60,8 @@ func (f *fakeSvc) Send(_ context.Context, sender, receiver uuid.UUID, content st
 		RemainingCount: &remaining,
 	}, nil
 }
+
+func (f *fakeSvc) SetSendRateLimiter(domain.SendRateLimiter, func() domain.SendRateLimits) {}
 
 func (f *fakeSvc) ListConversations(_ context.Context, user uuid.UUID, cursor string, size int) (*application.ConversationListVO, error) {
 	f.calls++
@@ -90,6 +97,19 @@ func (f *fakeSvc) ListMessages(_ context.Context, user, conv uuid.UUID, cursor s
 	f.gotUser, f.gotTarget, f.gotCursor, f.gotSize = user, conv, cursor, size
 	return &application.MessageListVO{Items: []application.MessageVO{}}, f.err
 }
+
+func (f *fakeSvc) GetUnreadTotal(_ context.Context, user uuid.UUID) (int64, error) {
+	f.calls++
+	f.gotUser = user
+	if f.err != nil {
+		return 0, f.err
+	}
+	return 7, nil
+}
+
+func (f *fakeSvc) SetUnreadCache(domain.UnreadCache) {}
+
+func (f *fakeSvc) SetUnreadNotifier(application.UnreadNotifier) {}
 
 // newCtx 构造 AppContext：loginID 为空表示未登录；conv 非空时设路径参数 :conversation_id；
 // query 拼到 URI；body 非空时作为 JSON 请求体。
@@ -136,6 +156,9 @@ func TestSend_AuthBodyAndErrors(t *testing.T) {
 	}
 
 	tooLong := fmt.Errorf("%w: at most 2000 characters", domain.ErrContentTooLong)
+	rateMin := fmt.Errorf("%w: at most 20 messages per minute", domain.ErrSendRateLimited)
+	newConv := fmt.Errorf("%w: at most 20 new conversations per day", domain.ErrNewConversationLimited)
+	badClientID := fmt.Errorf("%w: at most 64 characters", domain.ErrInvalidClientMsgID)
 	for _, tc := range []struct {
 		err  error
 		want int
@@ -152,15 +175,34 @@ func TestSend_AuthBodyAndErrors(t *testing.T) {
 		{domain.ErrRecipientFollowingOnly, http.StatusForbidden, "only accepts private messages from people they follow"},
 		{domain.ErrRecipientMutualOnly, http.StatusForbidden, "only accepts private messages from mutual follows"},
 		{domain.ErrRecipientDMClosed, http.StatusForbidden, "has turned off private messages"},
+		{domain.ErrSenderUnavailable, http.StatusForbidden, "Your account cannot send private messages"},
+		{rateMin, http.StatusTooManyRequests, `"message":"message rate limit exceeded: at most 20 messages per minute"`},
+		{newConv, http.StatusTooManyRequests, `"message":"new conversation limit exceeded: at most 20 new conversations per day"`},
+		{badClientID, http.StatusBadRequest, "invalid client_msg_id: at most 64 characters"},
 		{errors.New("boom"), http.StatusInternalServerError, ""},
 	} {
 		svc = &fakeSvc{err: tc.err}
 		ac, rc = newCtx(testUser, "", "", okBody)
 		NewHandler(svc).Send(ac)
 		assertStatus(t, rc, tc.want, tc.body)
-		if svc.gotUser.String() != testUser || svc.gotTarget.String() != testPeer || svc.gotContent != "hi" {
-			t.Errorf("service got user=%s receiver=%s content=%q", svc.gotUser, svc.gotTarget, svc.gotContent)
+		if svc.gotUser.String() != testUser || svc.gotTarget.String() != testPeer || svc.gotContent != "hi" || svc.gotClient != "" {
+			t.Errorf("service got user=%s receiver=%s content=%q client=%q", svc.gotUser, svc.gotTarget, svc.gotContent, svc.gotClient)
 		}
+	}
+}
+
+// client_msg_id（#248）原样透传给 service（校验在 application 层），响应结构不变。
+func TestSend_ClientMsgIDPassthrough(t *testing.T) {
+	svc := &fakeSvc{}
+	body := fmt.Sprintf(`{"receiver_id":%q,"content":"hi","client_msg_id":"c-1_A"}`, testPeer)
+	ac, rc := newCtx(testUser, "", "", body)
+	NewHandler(svc).Send(ac)
+	assertStatus(t, rc, http.StatusOK, `"remaining_count":4`)
+	if svc.gotClient != "c-1_A" {
+		t.Errorf("client_msg_id = %q, want c-1_A", svc.gotClient)
+	}
+	if strings.Contains(string(rc.Response.Body()), "client_msg_id") {
+		t.Errorf("response should not echo client_msg_id: %s", rc.Response.Body())
 	}
 }
 
@@ -268,4 +310,26 @@ func TestGetConversationWithUser_ParamsAndErrors(t *testing.T) {
 			t.Errorf("service got user=%s peer=%s", svc.gotUser, svc.gotTarget)
 		}
 	}
+}
+
+func TestGetUnreadTotal(t *testing.T) {
+	svc := &fakeSvc{}
+	ac, rc := newCtx("", "", "", "")
+	NewHandler(svc).GetUnreadTotal(ac)
+	assertStatus(t, rc, http.StatusUnauthorized, "")
+	if svc.calls != 0 {
+		t.Fatal("service should not be called without login")
+	}
+
+	ac, rc = newCtx(testUser, "", "", "")
+	NewHandler(svc).GetUnreadTotal(ac)
+	assertStatus(t, rc, http.StatusOK, `"unread_count":7`)
+	if svc.gotUser.String() != testUser {
+		t.Errorf("service got user=%s", svc.gotUser)
+	}
+
+	svc = &fakeSvc{err: errors.New("boom")}
+	ac, rc = newCtx(testUser, "", "", "")
+	NewHandler(svc).GetUnreadTotal(ac)
+	assertStatus(t, rc, http.StatusInternalServerError, "")
 }

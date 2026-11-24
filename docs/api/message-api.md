@@ -1,15 +1,16 @@
 # 私信 API 对接文档（前端）
 
 > **功能**：一对一文本私信：发送、会话列表、消息历史、标记已读、删除会话。
-> **对应实现**：`pkg/domains/message/`（`application/send.go`、`conversation.go`、`history.go`，`interfaces/http/handler.go`），issue #238；按对方查会话 #246；未关注发送限制 #239（`application/send_limit.go`）；私信权限设置 #240（`application/permission.go`）。
+> **对应实现**：`pkg/domains/message/`（`application/send.go`、`conversation.go`、`history.go`，`interfaces/http/handler.go`），issue #238；按对方查会话 #246；未关注发送限制 #239（`application/send_limit.go`）；发送幂等 #248（`application/send_idempotent.go`）；私信权限设置 #240（`application/permission.go`）。
 > 设计见 [message-design.md](../message-design.md)。
-> **状态**：已交付私信核心（#238）、按对方用户 ID 查会话（#246）、未关注发送限制（#239）、私信权限设置（#240）。未读总数与实时推送（#241）、频率限制（#242）后续提供。
+> **状态**：已交付私信核心（#238）、按对方用户 ID 查会话（#246）、未关注发送限制（#239）、未读总数与实时推送（#241）、发送幂等（#248）、频率限制（#242）、私信权限设置（#240）。
 
 ---
 
 ## 0. TL;DR — 前端要做的事
 
 1. **发私信**：`POST /message/send`，带 `receiver_id` 和 `content`。第一次给某人发消息时自动建会话，响应里有 `conversation_id`。
+   **建议同时带 `client_msg_id`**（#248）：每条新消息生成一个 UUID，超时 / 网络错误重试时原样带上，服务端保证只发一条（见 §2.1）。
 2. **私信列表页**：`GET /message/conversations`，游标分页，按最后一条消息时间倒序；每项带对方信息、最后一条消息摘要、我的未读数。
 3. **从用户主页进私信**：`GET /message/conversations/with/:user_id` 拿 `conversation_id`；`conversation` 为 `null` 表示还没聊过，
    聊天页显示空白，用户发出第一条消息后从 `POST /message/send` 的响应里拿 `conversation_id`。
@@ -20,17 +21,21 @@
 7. AI 机器人账号不能收私信（403），机器人主页不要显示「私信」按钮。
 8. **未关注发送限制（#239）**：对方没关注你、也没回复过你时，你在这个会话最多发 5 条。发送响应的 `remaining_count` 是还能发几条
    （`null` = 不受限制）；第 6 条返回 403 `dm limit reached`，请提示「对方关注你或回复后可继续发送」。
-9. **私信权限设置（#240）**：用户在 `PUT /user/settings` 的 `dm_permission` 里设置谁可以给自己发私信。进入用户主页 / 聊天页时
+9. **私信角标**：`GET /message/unread-count` 拿未读总数；实时更新走已有的 `/notice/stream`（SSE）连接上的 `dm-unread` 事件（见 §3）。
+10. **新消息实时上屏**：同一 SSE 连接上的 `dm-message` 事件带新消息摘要（只推给接收方），见 §3。多端与断线重连后以拉取为准。
+11. **发送频率限制（#242）**：每个账号每分钟最多发 20 条、每天 500 条，每天最多主动开启 20 个新会话（给已有会话发消息不算）。
+   超限返回 HTTP 429（信封 `code` 208），`message` 写明是哪一项和上限，请提示「发送太频繁，请稍后再试」，不要自动重试。
+   账号被禁用 / 删除后发送返回 403 `Your account cannot send private messages`。
+12. **私信权限设置（#240）**：用户在 `PUT /user/settings` 的 `dm_permission` 里设置谁可以给自己发私信。进入用户主页 / 聊天页时
    看 `GET /message/conversations/with/:user_id` 的 `can_send`：`false` 时置灰输入框并按 `cannot_send_reason` 提示（枚举见 §2.2.1），不要等发送失败才提示。
    发送时被拒同样返回 403（见 §2.1 错误表）。
-10. 当前没有实时推送：新消息需要前端轮询会话列表或进入页面时刷新（#241 会提供）。
 
 ---
 
 ## 1. 统一约定
 
 - 全部接口需要登录（未登录 401）。
-- 响应信封 `{code, message, data}`，`code` 与 HTTP 状态码的对应同其他接口：`200` 成功、`201` 参数错误（HTTP 400）、`202` 未登录（401）、`203` 无权限（403）、`204` 不存在（404）、`500` 服务器错误。下文错误表写的是 HTTP 状态码。
+- 响应信封 `{code, message, data}`，`code` 与 HTTP 状态码的对应同其他接口：`200` 成功、`201` 参数错误（HTTP 400）、`202` 未登录（401）、`203` 无权限（403）、`204` 不存在（404）、`208` 请求过于频繁（429）、`500` 服务器错误。下文错误表写的是 HTTP 状态码。
 - `message` 是英文，前端请按 `code` + 自身文案渲染。
 - 列表接口都是游标分页：query 参数 `cursor`（上一页的 `next_cursor`，原样回传；不传表示第一页）、`size`（不传或 ≤0 取 20，超过 50 按 50）。
   响应里 `has_more=false` 时 `next_cursor` 为空串。游标是不透明字符串，不要解析或拼接；非法游标返回 400 `Invalid cursor`。
@@ -59,10 +64,21 @@
 |---|---|---|---|
 | `receiver_id` | string | 是 | 接收方用户 ID |
 | `content` | string | 是 | 正文：1–2000 个字符（按字符计，中文一个字算 1），不能只有空白 |
+| `client_msg_id` | string | 否 | 发送幂等键（#248）：1–64 个字符，只能是字母、数字、`-`、`_`（建议 UUID）。不传或空串表示不启用 |
 
 ```json
-{ "receiver_id": "019a5d2e-7c41-7b0e-9f3a-2f6c1d8e4b10", "content": "你好" }
+{ "receiver_id": "019a5d2e-7c41-7b0e-9f3a-2f6c1d8e4b10", "content": "你好", "client_msg_id": "4f6c2a1e-8d7b-4c3a-9e2f-1b0a9c8d7e6f" }
 ```
+
+**发送幂等（#248）**
+
+- 每条**新**消息生成一个新的 `client_msg_id`；请求超时、网络错误、5xx 时**用同一个 `client_msg_id` 重试**。不要把同一个键用于另一条消息。
+- 同一个账号用同一个 `client_msg_id` 再次请求：返回**第一次发出的那条消息**（同样的响应结构，`id` / `create_time` / `content` 都是原值），
+  不会多发一条，对方的未读数、你的发送计数都不会重复增加，也不会重复推送给对方。
+- 重试时正文不同也一样：服务端忽略新正文，返回原消息。
+- 已达未关注 5 条上限时，用同一个键重试第 5 条仍返回原消息（不是 403）；`remaining_count` 按当前状态重新计算（此时为 `0`）。
+- 重试不占发送频率额度（#242）；已达频率上限时重试已发出的消息同样返回原消息（不是 429）。
+- 响应不区分「新发送」与「重放」；用响应里的 `id` 去重本地消息即可。
 
 **响应 `data`**：`MessageVO`（见 §1）的全部字段，外加 `remaining_count`（#239）：
 
@@ -105,8 +121,18 @@
 | `3` | 关闭 | 没有人 |
 
 - **已有会话同样受约束**，对方回复过你也**不豁免**：设置优先。设置只约束发给设置者的消息，设置者自己仍能给别人发。
-- 判断顺序：接收方状态（不存在 / 机器人）→ 私信权限设置 → 未关注 5 条限制。权限拒绝时不再看 5 条限制。
+- 判断顺序：接收方状态（不存在 / 机器人）→ 发送方账号状态（#242）→ 私信权限设置 → 未关注 5 条限制 → 发送频率限制（#242）。
+  权限拒绝时不再看 5 条限制，也**不占频率额度**。
+- 用同一个 `client_msg_id` 重试（#248 重放）**同样先过权限判断**：原消息发出后对方关闭了私信 / 取关了你，重试得到对应的 403，而不是原消息。
 - 设置为 `1` / `2` 时能发消息的人一定被接收方关注了，所以不会再受 5 条限制（`remaining_count` 为 `null`）。
+**发送频率限制（#242）**
+
+- 按**发送者**计（多端、多实例共享计数），上限可配置，默认：每分钟 20 条、每天 500 条、每天最多主动开启 20 个新会话。
+- 「每分钟 / 每天」是从窗口内第一条消息起算的 1 分钟 / 24 小时，到期整体清零（不是自然日）。
+- 「新会话」= 这条消息新建了你和对方的会话。给已有会话发消息（包括对方先发起的会话、你删除过的会话）不算；当天新会话额度用完后仍可以在已有会话里发。
+- 只统计**发送成功**的消息：被拒绝的请求（参数错误、404、403、429）不占额度，也不会落库、不计入 `remaining_count`、不推送给对方。
+- 超限时 HTTP 429，`remaining_count` 不变；`message` 里的数字是当前配置的上限。
+- 用同一个 `client_msg_id` 重试（#248 重放）**不占频率额度**；已达上限时重试已发出的消息仍返回原消息（不是 429），新的 `client_msg_id` 才会 429。
 
 **错误**
 
@@ -116,15 +142,20 @@
 | 400 | `Cannot send message to yourself` | 发给自己 |
 | 400 | `Message content is empty` | 正文为空或只有空白 |
 | 400 | `message content is too long: at most 2000 characters` | 正文超过上限（数字为当前上限） |
+| 400 | `invalid client_msg_id: at most 64 characters` / `invalid client_msg_id: only letters, digits, '-' and '_' are allowed` | `client_msg_id` 超长或含不允许的字符 |
 | 401 | `Token not found` | 未登录 |
 | 403 | `This user cannot receive private messages` | 接收方是 AI 机器人账号 |
 | 403 | `dm limit reached` | 未关注发送限制：对方没关注你也没回复过你，你在该会话已发满 5 条。提示「对方关注你或回复后可继续发送」 |
+| 403 | `Your account cannot send private messages` | 你的账号已被禁用或删除（登录态仍有效时也拒绝，#242） |
 | 403 | `This user only accepts private messages from people they follow` | 私信权限（#240）：对方设置了「仅我关注的人」，而对方没关注你 |
 | 403 | `This user only accepts private messages from mutual follows` | 私信权限（#240）：对方设置了「仅互相关注」，而你们不是互相关注 |
 | 403 | `This user has turned off private messages` | 私信权限（#240）：对方关闭了私信 |
+| 404 | `No such user` | 接收方不存在、已禁用或已删除 |
+| 429 | `message rate limit exceeded: at most 20 messages per minute` | 每分钟发送条数超限（数字为当前上限） |
+| 429 | `message rate limit exceeded: at most 500 messages per day` | 每天发送条数超限 |
+| 429 | `new conversation limit exceeded: at most 20 new conversations per day` | 当天主动开启的新会话数已满，且这条消息会新建会话 |
 
 几个 403 的 `code` 都是 203，只能靠 `message` 区分；聊天页更推荐提前用 §2.2.1 的 `cannot_send_reason` 判断。
-| 404 | `No such user` | 接收方不存在、已禁用或已删除 |
 
 ### 2.2 GET /message/conversations — 会话列表
 
@@ -208,6 +239,7 @@
 | `dm_limit_reached` | 未关注发送限制（#239）：对方没关注你也没回复过你，你在该会话已发满 5 条 | 403 `dm limit reached` | 对方关注你或回复后可继续发送 |
 
 - `can_send` **计入了 5 条限制**（与发送接口一致：已发满时为 `false`、原因 `dm_limit_reached`）。
+- `can_send` **不反映发送频率限制**（#242 的每分钟 / 每天 / 新会话上限）：频率超限时发送返回 429，请按 §2.1 处理。
 - `can_send` 是查询时刻的结果：之后对方改设置 / 取关、或你在别的端发满 5 条，发送仍可能被拒，以 `POST /message/send` 的结果为准。
 
 ```json
@@ -297,3 +329,74 @@
 重复调用无副作用。响应 `data` 为 `null`。
 
 **错误**：400 `Invalid conversation id`、401、404 `No such conversation`。
+
+### 2.6 GET /message/unread-count — 私信未读总数
+
+我的各会话未读数之和（= 会话列表各项 `unread_count` 之和），用于私信入口角标。与 SSE `dm-unread` 事件同源同值；
+SSE 连接正常时不需要轮询本接口，连接不可用时按与消息中心相同的 30s 间隔轮询。
+
+**响应 `data`**
+
+```json
+{ "code": 200, "message": "Success", "data": { "unread_count": 3 } }
+```
+
+**错误**：401。
+
+---
+
+## 3. 实时推送（#241）
+
+私信**不单独建连接**，复用消息中心的 `GET /notice/stream`（SSE）。建连、鉴权、心跳、`auth-expired` / `conn-evicted`、降级策略
+全部见 [notice-stream-frontend-api.md](../notice-stream-frontend-api.md)；同一条连接上新增两个事件：
+
+### 3.1 `dm-unread` — 私信未读总数（全量）
+
+```text
+event: dm-unread
+id: 1762843800123-8
+data: {"unread_count":2}
+```
+
+- 连接建立时首包紧跟 `unread-count` 下发一条当前全量。
+- 收到新私信、标记已读、删除会话后推新值；1s 窗口内多次变化只推最终值，值没变不推。
+- 与消息中心的 `unread-count` **是两个独立的数**，互不覆盖：消息中心角标只认 `unread-count`，私信角标只认 `dm-unread`。
+
+### 3.2 `dm-message` — 新私信摘要（只推给接收方）
+
+```text
+event: dm-message
+id: 1762843800050-7
+data: {"id":"019a7b10-...","conversation_id":"019a7b10-...","sender_id":"019a5d2e-...","sender":{"id":"019a5d2e-...","username":"alice","avatar_url":"https://..."},"msg_type":1,"content":"你好","truncated":false,"create_time":"2026-11-11T14:30:00.123456+08:00"}
+```
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` / `conversation_id` / `sender_id` / `msg_type` / `create_time` | 同 `MessageVO` | |
+| `sender` | object \| null | 发送人 `{id, username, avatar_url}`；读取失败时为 `null`，用 `sender_id` 兜底 |
+| `content` | string | 正文的**前 100 个字符** |
+| `truncated` | bool | 正文超过 100 个字符被截断时为 `true`：需要拉消息历史（§2.3 第一页）拿全文 |
+
+前端建议：
+
+- **正在看这个会话**（`conversation_id` 相同）：`truncated=false` 时直接把它当 `MessageVO` 追加到消息列表底部（按 `id` 去重，
+  可能与拉取结果重复），然后调 §2.4 标记已读；`truncated=true` 时重新拉第一页。
+- **在会话列表页**：把对应会话顶到最前、更新 `last_message` 摘要，或直接下拉刷新列表。
+- **其他页面**：可用 `sender.username` + `content` 弹提示；角标以 `dm-unread` 为准，不要自己 +1。
+- 只推给接收方：我自己在别的端发出的消息**不会**推过来，其他端需要拉取。
+- 不保证送达：断线期间、多端、或连接很慢时可能收不到某条；重连后（首包 `dm-unread`）以拉取会话列表 / 历史为准。
+
+```js
+es.addEventListener('dm-unread', (e) => {
+  updateDmBadge(JSON.parse(e.data).unread_count) // 全量替换
+})
+es.addEventListener('dm-message', (e) => {
+  const msg = JSON.parse(e.data)
+  if (currentConversationId === msg.conversation_id) {
+    msg.truncated ? reloadLatestMessages() : appendMessage(msg)
+    markConversationRead(msg.conversation_id)
+  } else {
+    bumpConversation(msg) // 或刷新会话列表
+  }
+})
+```

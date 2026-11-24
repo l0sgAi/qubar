@@ -29,6 +29,9 @@ type SendRequest struct {
 	ReceiverID string `json:"receiver_id"`
 	// Content 正文：1–2000 个字符，不能只有空白。
 	Content string `json:"content"`
+	// ClientMsgID 可选，发送幂等键（#248）：客户端为每条消息生成一次（建议 UUID），超时重试时原样带上；
+	// 1–64 个 [A-Za-z0-9_-] 字符，不传或空串表示不启用幂等。
+	ClientMsgID string `json:"client_msg_id"`
 }
 
 // ListRequest 列表接口的 query 参数。
@@ -55,7 +58,7 @@ func (h *Handler) Send(c appctx.AppContext) {
 		httputil.BadRequest(c, "Invalid receiver_id")
 		return
 	}
-	vo, err := h.svc.Send(c, userID, receiverID, req.Content)
+	vo, err := h.svc.SendWithClientMsgID(c, userID, receiverID, req.Content, req.ClientMsgID)
 	if err != nil {
 		writeMessageError(c, err)
 		return
@@ -158,6 +161,21 @@ func (h *Handler) DeleteConversation(c appctx.AppContext) {
 
 // ===== 辅助函数 =====
 
+// GetUnreadTotal GET /message/unread-count —— 我的私信未读总数（各会话我的未读之和，#241）。
+// 与 SSE /notice/stream 的 dm-unread 事件同源同值；SSE 不可用时前端轮询本接口。
+func (h *Handler) GetUnreadTotal(c appctx.AppContext) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+	count, err := h.svc.GetUnreadTotal(c, userID)
+	if err != nil {
+		writeMessageError(c, err)
+		return
+	}
+	httputil.Success(c, map[string]int64{"unread_count": count})
+}
+
 func requireUserID(c appctx.AppContext) (uuid.UUID, bool) {
 	loginID, ok := c.LoginID()
 	if !ok || loginID == "" {
@@ -203,6 +221,9 @@ func writeMessageError(c appctx.AppContext, err error) {
 	case errors.Is(err, domain.ErrContentTooLong):
 		// message 带上限值，如 "message content is too long: at most 2000 characters"
 		httputil.BadRequest(c, err.Error())
+	case errors.Is(err, domain.ErrInvalidClientMsgID):
+		// message 带具体原因，如 "invalid client_msg_id: at most 64 characters"（#248）
+		httputil.BadRequest(c, err.Error())
 	case errors.Is(err, domain.ErrInvalidCursor):
 		httputil.BadRequest(c, "Invalid cursor")
 	case errors.Is(err, domain.ErrRecipientNotFound):
@@ -218,6 +239,11 @@ func writeMessageError(c appctx.AppContext, err error) {
 		httputil.Forbidden(c, "This user only accepts private messages from mutual follows")
 	case errors.Is(err, domain.ErrRecipientDMClosed):
 		httputil.Forbidden(c, "This user has turned off private messages")
+	case errors.Is(err, domain.ErrSenderUnavailable):
+		httputil.Forbidden(c, "Your account cannot send private messages")
+	case errors.Is(err, domain.ErrSendRateLimited), errors.Is(err, domain.ErrNewConversationLimited):
+		// message 带窗口与上限值，如 "message rate limit exceeded: at most 20 messages per minute"（#242）。
+		httputil.TooManyRequests(c, err.Error())
 	case errors.Is(err, domain.ErrConversationNotFound):
 		httputil.NotFound(c, "No such conversation")
 	default:

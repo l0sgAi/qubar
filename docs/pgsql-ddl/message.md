@@ -1,6 +1,6 @@
 # 私信：`conversation` / `conversation_member` / `message`
 
-> [返回目录](README.md)。权威 DDL 见 `migrations/20261111134129_add_private_message.up.sql`；设计见 [message-design.md](../message-design.md)（#238）。
+> [返回目录](README.md)。权威 DDL 见 `migrations/20261111134129_add_private_message.up.sql`、`migrations/20261111193813_add_message_client_msg_id.up.sql`（#248）；设计见 [message-design.md](../message-design.md)（#238）。
 > 三张表都不进 CDC（`-- cdc: none`），只在 PG 内读写。
 
 ## 会话表
@@ -71,6 +71,7 @@ CREATE TABLE domains.message (
     sender_id UUID NOT NULL,                    -- 发送者 (users.id)
     msg_type SMALLINT NOT NULL DEFAULT 1,       -- 1=文本
     content VARCHAR(2048) NOT NULL,             -- 正文 (应用层校验 1-2000 字符)
+    client_msg_id VARCHAR(64),                  -- 客户端消息ID (发送幂等键,#248;NULL=未提供)
     create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     deleted SMALLINT NOT NULL DEFAULT 0         -- 撤回等后续功能预留
@@ -78,7 +79,13 @@ CREATE TABLE domains.message (
 
 -- 消息历史：按会话向上翻旧消息
 CREATE INDEX idx_message_conversation ON domains.message (conversation_id, id DESC) WHERE deleted = 0;
+
+-- 发送幂等（#248）：同一发送人同一 client_msg_id 只落一条
+CREATE UNIQUE INDEX uk_message_sender_client_msg ON domains.message (sender_id, client_msg_id) WHERE client_msg_id IS NOT NULL;
 ```
 
 - `content` 列宽取 2048（2 的幂档位，覆盖 2000 字符上限）；上限由应用层 `MaxContentChars` 控制，调整上限在 2048 以内不需要改表。
+- `client_msg_id`（#248）：客户端生成的发送幂等键，1–64 位 `[A-Za-z0-9_-]`（应用层 `MaxClientMsgIDLen` 校验，列宽 64 即上限）。
+  `uk_message_sender_client_msg` 是部分唯一索引，只约束非 NULL：不带键的消息（含旧版本应用写入的）不受影响。
+  发送事务锁会话行后按它查重放，插入时作为 `ON CONFLICT … DO NOTHING` 的仲裁索引；设计见 [message-design.md](../message-design.md) 第十二节。
 - 审计列只保留 `create_time` / `update_time` / `deleted`：操作人恒为 `sender_id` / 成员本人，不设 `create_by` / `update_by`。

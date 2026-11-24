@@ -220,3 +220,18 @@ func TestPeerConversationVO_JSON(t *testing.T) {
 		}
 	}
 }
+
+// TestSend_DMPermissionDeniedUsesNoRateQuota 权限拒绝在频率限制（#242）之前：不占用配额、不退还、不写库。
+func TestSend_DMPermissionDeniedUsesNoRateQuota(t *testing.T) {
+	me, peer := sharedomain.NewID(), sharedomain.NewID()
+	repo := &fakeRepo{}
+	limiter := &fakeRateLimiter{decision: domain.SendRateDecision{}}
+	svc := newRateLimitedService(repo, limiter)
+	svc.SetDMPermissionReader(fakePermission{perm: DMPermissionClosed})
+	if _, err := svc.Send(t.Context(), me, peer, "hi"); !errors.Is(err, domain.ErrRecipientDMClosed) {
+		t.Fatalf("err = %v, want ErrRecipientDMClosed", err)
+	}
+	if limiter.acquires != 0 || len(limiter.releases) != 0 || repo.sendCalls != 0 {
+		t.Errorf("acquires=%d releases=%v sends=%d, want 0 / none / 0", limiter.acquires, limiter.releases, repo.sendCalls)
+	}
+}

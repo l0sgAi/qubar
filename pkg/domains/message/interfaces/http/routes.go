@@ -15,6 +15,7 @@ import (
 //	GET    /message/conversations/:conversation_id/messages 消息历史（新 → 旧，keyset 游标分页；仅会话成员）
 //	POST   /message/conversations/:conversation_id/read     标记会话已读
 //	DELETE /message/conversations/:conversation_id          删除会话（只对自己隐藏）
+//	GET    /message/unread-count                            我的私信未读总数（#241；实时推送走 /notice/stream 的 dm-unread）
 func RegisterRoutes(rg routing.RouterGroup, svc application.MessageService, authCheck routing.HandlerFunc) {
 	h := NewHandler(svc)
 
@@ -27,5 +28,6 @@ func RegisterRoutes(rg routing.RouterGroup, svc application.MessageService, auth
 		g.GET("/conversations/:conversation_id/messages", h.ListMessages)
 		g.POST("/conversations/:conversation_id/read", h.MarkRead)
 		g.DELETE("/conversations/:conversation_id", h.DeleteConversation)
+		g.GET("/unread-count", h.GetUnreadTotal)
 	}
 }

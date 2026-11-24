@@ -37,17 +37,26 @@ type fakeRepo struct {
 	gotSendLim  int
 	remaining   *int
 	// limitState / limitCalls：GetSendLimitState（#240 can_send，见 permission_test.go）。
-	limitState domain.SendLimitState
-	limitErr   error
-	limitCalls int
+	limitState  domain.SendLimitState
+	limitErr    error
+	limitCalls  int
+	gotClientID *string
+	// replay 非 nil 时模拟命中发送幂等（#248）：返回它并标记 Replayed。
+	replay *domain.Message
 }
 
-func (f *fakeRepo) SendDirect(_ context.Context, sender, _ uuid.UUID, msgType int16, content string, limit int) (*domain.SendResult, error) {
+func (f *fakeRepo) SendDirect(
+	_ context.Context, sender, _ uuid.UUID, msgType int16, content string, limit int, clientMsgID *string,
+) (*domain.SendResult, error) {
 	f.sendCalls++
 	f.gotContent = content
 	f.gotSendLim = limit
+	f.gotClientID = clientMsgID
 	if f.sendErr != nil {
 		return nil, f.sendErr
+	}
+	if f.replay != nil {
+		return &domain.SendResult{Message: f.replay, Remaining: f.remaining, Replayed: true}, nil
 	}
 	msg := &domain.Message{ID: sharedomain.NewID(), ConversationID: sharedomain.NewID(), SenderID: sender, MsgType: msgType, Content: content}
 	return &domain.SendResult{Message: msg, Remaining: f.remaining}, nil

@@ -28,6 +28,8 @@ var (
 	ErrInvalidCursor = errors.New("invalid cursor")
 	// ErrSendLimitReached 未关注发送限制（#239）：对方没关注我、也没在会话里回复过我，我在该会话已发满上限条数（handler 映射 403）。
 	ErrSendLimitReached = errors.New("dm limit reached")
+	// ErrInvalidClientMsgID 发送幂等键 client_msg_id 超长或含白名单以外的字符（#248，handler 映射 400）。
+	ErrInvalidClientMsgID = errors.New("invalid client_msg_id")
 	// ErrRecipientFollowingOnly 私信权限（#240）：接收方设置了「仅我关注的人」，而接收方没有关注发送方（handler 映射 403）。
 	ErrRecipientFollowingOnly = errors.New("recipient only accepts messages from people they follow")
 	// ErrRecipientMutualOnly 私信权限（#240）：接收方设置了「仅互相关注」，而双方不是互相关注（handler 映射 403）。
@@ -51,6 +53,12 @@ type SendResult struct {
 	// Remaining 发送限制生效时，本条发出后发送方在该会话还能再发的条数（0 = 已到上限，下一条会被拒绝）；
 	// 不受限制（limit ≤ 0，或对方在会话里发过消息）时为 nil。
 	Remaining *int
+	// Created 本次发送是否新建了会话（#242 新会话频率按它计数；会话已存在为 false）。
+	Created bool
+	// Replayed 为 true 表示命中发送幂等（#248）：发送方此前已用同一 client_msg_id 发过，Message 是第一次写入的那条消息，
+	// 本次没有写任何数据（不新增消息、不改计数 / 未读 / 最新消息）；调用方不应再触发发送后的副作用（推送等）。
+	// 此时 Remaining 按当前已发条数重新计算（= limit − sent_count，不再减本条），口径见 docs/message-design.md 第十二节。
+	Replayed bool
 }
 
 // ConversationEntry 会话列表里的一行：成员状态 + 最后一条消息（由一次 JOIN 查询得到，没有 N+1）。
@@ -85,7 +93,15 @@ type Repository interface {
 	// limit > 0 时启用未关注发送限制（#239）：锁住会话行之后、写消息之前，若接收方在会话里从未发过消息
 	// （接收方成员行不存在或 first_sent_time 为 NULL）且发送方 sent_count ≥ limit，返回 ErrSendLimitReached，事务回滚。
 	// 判断与 sent_count+1 都在会话行锁内，同一会话的并发发送不会突破上限。limit ≤ 0 表示不限制（调用方已确认对方关注了发送方）。
-	SendDirect(ctx context.Context, senderID, receiverID uuid.UUID, msgType int16, content string, limit int) (*SendResult, error)
+	//
+	// clientMsgID 非 nil 时启用发送幂等（#248）：锁住会话行之后、未关注发送限制检查之前，按 (senderID, *clientMsgID)
+	// 查已有消息，命中即返回它（Replayed=true），不写任何数据、不检查发送限制；未命中再走正常发送，
+	// 插入消息时以唯一索引 uk_message_sender_client_msg 兜底（并发重复时 DO NOTHING 并查回原消息，同样返回 Replayed=true）。
+	// 命中按发送人 + client_msg_id 判断，不比较接收方与正文。nil 表示不启用，行为与 #238 / #239 一致。
+	SendDirect(ctx context.Context, senderID, receiverID uuid.UUID, msgType int16, content string, limit int, clientMsgID *string) (*SendResult, error)
+	// HasClientMsgID 发送方是否已用 clientMsgID 发过消息（#248 幂等键，走 uk_message_sender_client_msg）。
+	// 只在发送被频率限制拒绝时调用（#242）：命中说明本次是幂等重放，不占频率配额、直接交给 SendDirect 返回原消息。
+	HasClientMsgID(ctx context.Context, senderID uuid.UUID, clientMsgID string) (bool, error)
 	// GetMember 返回 userID 在会话里的成员行；不是成员（或会话不存在）返回 ErrConversationNotFound。
 	GetMember(ctx context.Context, conversationID, userID uuid.UUID) (*ConversationMember, error)
 	// ListConversations 按最后一条消息倒序返回 userID 可见的会话（有消息、且最后一条在隐藏截止位置之后），最多 limit 条。
@@ -107,6 +123,8 @@ type Repository interface {
 	// 之后对方再发消息，会话重新出现在 userID 的列表里，只显示截止位置之后的消息。
 	// 不是成员返回 ErrConversationNotFound。
 	Hide(ctx context.Context, conversationID, userID uuid.UUID) error
+	// SumUnread 返回 userID 的私信未读总数：各会话（成员行未退出）未读数之和（#241）。
+	SumUnread(ctx context.Context, userID uuid.UUID) (int64, error)
 	// GetSendLimitState 只读地返回 senderID 给 receiverID 发消息时的未关注发送限制状态（按 OrderPair 命中 uk_conversation_pair，不加锁），
 	// 口径与 SendDirect 事务内的限制判断一致。两人之间没有会话时返回零值状态（不是错误）。
 	GetSendLimitState(ctx context.Context, senderID, receiverID uuid.UUID) (*SendLimitState, error)

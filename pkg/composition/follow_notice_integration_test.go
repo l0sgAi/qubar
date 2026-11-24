@@ -156,8 +156,8 @@ func TestFollowNotice_FollowUnfollowRefollow(t *testing.T) {
 		t.Fatal("stream hub rejected the connection")
 	}
 	defer hub.Remove(b, conn.ID)
-	if first, err := hub.Snapshot(ctx, b); err != nil || first.Count != 0 {
-		t.Fatalf("initial snapshot = %+v err=%v, want unread 0", first, err)
+	if firsts, err := hub.Snapshot(ctx, b); err != nil || len(firsts) != 1 || firsts[0].Count != 0 {
+		t.Fatalf("initial snapshot = %+v err=%v, want unread 0", firsts, err)
 	}
 
 	// 1. 首次关注：1 行未读，recipient = 被关注者，actor = 关注者，没有帖子 / 评论 / 快照
