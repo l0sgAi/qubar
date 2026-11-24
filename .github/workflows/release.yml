@@ -46,6 +46,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      pages: read
     outputs:
       app: ${{ steps.plan.outputs.app }}
       web: ${{ steps.plan.outputs.web }}
@@ -88,6 +89,7 @@ jobs:
       - id: draft
         env:
           GH_TOKEN: ${{ github.token }}
+          WEB: ${{ steps.plan.outputs.web }}
           NEXT: ${{ steps.version.outputs.next }}
           ROLLBACK: ${{ inputs.rollback }}
           PUBLISHED: ${{ steps.version.outputs.published }}
@@ -110,6 +112,10 @@ jobs:
             # 真实用户流程由受保护的环境审核，缺少审核人则在部署前停止。
             gh api "repos/$GITHUB_REPOSITORY/environments/product-acceptance" --jq '.protection_rules' |
               jq -e 'any(.[]; .type == "required_reviewers" and (.reviewers | length) > 0)' >/dev/null
+          fi
+          if [[ "$WEB" == true ]]; then
+            gh api "repos/$GITHUB_REPOSITORY/pages" |
+              jq -e '.cname == "qubar.site" and .build_type == "workflow" and .https_enforced' >/dev/null
           fi
           echo "reuse=$reuse" >> "$GITHUB_OUTPUT"
 
