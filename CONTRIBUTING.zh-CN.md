@@ -5,6 +5,10 @@
 感谢你对 Qubar 感兴趣！欢迎提交 bug 报告、想法、文档修正和代码。
 本文说明从克隆仓库到 PR 合并需要知道的事。
 
+## Web 前端
+
+前端位于 [web/](web/README.zh-CN.md)。使用 Node 20.20.2，依次运行 `npm --prefix web ci` 和 `npm --prefix web run dev`。提交前运行 `npm --prefix web run check`。本地 API 默认为 `http://localhost:8888`。
+
 ## 开始之前
 
 - **小改动**（错别字、文档、明显的 bug）：直接提 PR。

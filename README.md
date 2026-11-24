@@ -4,6 +4,10 @@
 
 A modern interest-based community backend written in Go with DDD (Domain-Driven Design), similar to Baidu Tieba / Reddit.
 
+## Web frontend
+
+Use Node 20.20.2 and run `npm --prefix web ci`, then `npm --prefix web run dev`. Run `npm --prefix web run check` before submitting. The local API defaults to `http://localhost:8888`. See the [frontend guide](web/README.md).
+
 ## ✨ Features
 
 Qubar is a full-featured interest community platform offering:

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="545" height="530" viewBox="-0.5 -0.5 545 530">
+  <g>
+    <!-- 使用mask实现大圆减小圆的月牙效果 -->
+    <defs>
+      <mask id="crescentMask">
+        <rect x="-0.5" y="-0.5" width="545" height="530" fill="white"/>
+        <!-- 内部白色区域将被挖空 -->
+        <ellipse cx="284" cy="280" rx="210" ry="210" fill="black"/>
+      </mask>
+    </defs>
+    
+    <!-- 绿色月牙主体 -->
+    <ellipse cx="250" cy="250" rx="250" ry="250" fill="#00FF69" mask="url(#crescentMask)"/>
+    
+    <!-- Q的尾部 -->
+    <path d="M 404.99 260 C 339.99 334.02 339.99 445.98 404.99 520 C 469.99 445.98 469.99 334.02 404.99 260 Z" 
+          fill="#00FF69" 
+          transform="rotate(-45,405,390)"/>
+  </g>
+</svg>

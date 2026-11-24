@@ -24,7 +24,9 @@ CI / 运维 ─► Cloudflare Access(ssh.qubar.site) ───────┘ ss
 
 ## 发布流程（日常）
 
-develop → main 合并（PR merge）→ `release.yml`：
+产品版本同时记录 API 镜像 digest 和 Pages 静态包。首次接管、变更矩阵、用户流程验收及恢复见[统一发布手册](../docs/ops/product-release.md)。
+
+`release.yml` 中的后端部署步骤如下。
 
 1. `deploy/**` 有变更 → **infra**：`terraform apply` → `ansible-playbook site.yml`（幂等）
 2. 应用代码有变更 → **test → build**：`ghcr.io/l0sgai/qubar:<sha>`（linux/amd64）
@@ -32,7 +34,7 @@ develop → main 合并（PR merge）→ `release.yml`：
    `db-migrate.sh`（以 `qubar_owner` 跑 `migrate up`，再重跑 `grants.sql` 补授权、把新 CDC 表加进 `dbz_pub`）。
    **失败则不发布应用**，线上旧版本不受影响
 4. **deploy**：经 CF Access SSH → `deploy-app.sh <image>`（`compose up --wait` 等健康检查，失败自动回滚上一版）
-   → `register-connectors.sh`（幂等）→ 外网冒烟 `https://api-next.qubar.site/healthz`。
+   → `register-connectors.sh`（幂等）→ 外网冒烟 `https://api.qubar.site/healthz`。
    只有 infra / 迁移变更时也会运行（不换镜像），以便重新注册 connector
 
 回滚：Actions → release → Run workflow → 勾 `rollback`；或服务器上 `/opt/qubar/bin/deploy-app.sh --rollback`。

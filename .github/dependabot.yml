@@ -46,3 +46,12 @@ updates:
     groups:
       actions-minor-patch:
         update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /web
+    target-branch: develop
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
