@@ -1,0 +1,61 @@
+name: Claude Review
+
+on:
+  # 指向 main 的非草稿 PR：打开、推送新提交、转为 ready 时自动 review
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, ready_for_review, reopened]
+
+permissions:
+  contents: read
+
+# 同一 PR 推送新提交时取消旧的 review，避免重复消耗额度
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: review
+    # 草稿 PR 不 review；fork PR 拿不到 secrets，直接跳过
+    if: |
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Claude review
+        uses: anthropics/claude-code-action@v1
+        with:
+          # 二选一配置即可：API Key 按量计费；OAuth Token（claude setup-token）占用 Pro/Max 订阅额度
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            你是这个 Vue 3 + Naive UI 前端项目的代码审查者，请 review 这个 PR，用中文回复。
+
+            步骤：
+            1. 用 `gh pr view` 和 `gh pr diff` 了解改动；需要上下文时直接读仓库里的相关文件，顺着调用方/被调用方确认影响范围。
+            2. 改动涉及组件样式、Naive UI 组件覆盖、主题、动画或 src/locales/ 下的 i18n 文案时，
+               先读 .claude/skills/frontend-constraints/SKILL.md（及其 references/），按其中约束检查。
+            3. 重点关注：正确性 bug、边界条件、异步/竞态与资源释放（定时器、EventSource、监听器）、
+               安全问题、明显的性能问题，以及改动是否有对应测试。
+            4. 只报告有把握的问题，不要对代码风格做吹毛求疵的评论；没有问题就直说。
+
+            输出：
+            - 具体问题用 `mcp__github_inline_comment__create_inline_comment` 发行内评论，说明问题、触发场景和修改建议。
+            - 最后用 `gh pr comment ${{ github.event.pull_request.number }} --edit-last --create-if-none --body "<总结>"`
+              发一条总结（问题列表按严重程度排序，或注明未发现问题）；同一 PR 多次 review 时更新这条评论而不是新建。
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Read,Grep,Glob"

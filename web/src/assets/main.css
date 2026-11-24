@@ -1,0 +1,868 @@
+:root {
+  /* 深色模式配色方案 */
+  --bg-primary: #0a0e27;
+  --bg-secondary: #161927;
+  --bg-tertiary: #13121f;
+
+  --text-primary: #ffffff;
+  --text-secondary: #b4b4c4;
+  --text-tertiary: #8b8b9e;
+
+  --primary-gradient: linear-gradient(135deg, #66eac2 0%, #22b36a 100%);
+  --theme-color: #60F8BBDD;
+  --accent-color: #040505;
+  --accent-secondary: #764ba2;
+
+  --glass-bg: rgba(18, 20, 28, 0.689);
+  --glass-border: rgba(255, 255, 255, 0.08);
+
+  /* 布局尺寸 */
+  --header-height: 64px;
+
+  /* 移动端门户（断点 ≤ 768px，与 src/constants/breakpoints.js 一致；
+   * 断点三档见 docs/mobile-adaptation-plan.md 5.1）。
+   * 移动端外框启用时 --header-height 的覆盖见下方 html.mobile-shell */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --mobile-topbar-height: 48px;
+  --tabbar-height: 56px;
+  /* 帖子详情页底部「说点什么…」输入条（不含安全区） */
+  --compose-bar-height: 56px;
+
+  /* 圈子未设置封面时的默认 banner（CircleDetail 头部与 CircleHeaderPreview 共用）：
+   * 珊瑚橙 → 向日葵黄 → 薄荷绿的斜向渐变，叠两枚半透明白色圆点，与宣传页「城市骑行」示例一致 */
+  --circle-cover-default:
+    radial-gradient(circle at 20% 120%, rgba(255, 255, 255, 0.25) 0 18%, transparent 19%),
+    radial-gradient(circle at 85% -20%, rgba(255, 255, 255, 0.2) 0 22%, transparent 23%),
+    linear-gradient(120deg, #ff8a65 0%, #ffc94d 55%, #66eac2 100%);
+
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.6);
+
+  --google-btn-bg: #1e2130;
+  --google-btn-border: #2d3142;
+  --google-btn-text: #e8eaed;
+}
+
+/* 移动端外框启用时（App.vue 同步的 html.mobile-shell）：顶栏换成移动顶栏高度（含刘海安全区），
+ * 各页 margin-top / calc(... var(--header-height) ...) 无需改动即可适配 */
+html.mobile-shell {
+  --header-height: calc(var(--mobile-topbar-height) + var(--safe-top));
+}
+
+/* 触屏：去掉点击高亮块；交互元素去掉双击缩放延迟 */
+html.mobile-shell body {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html.mobile-shell a,
+html.mobile-shell button,
+html.mobile-shell [role='button'] {
+  touch-action: manipulation;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+body {
+  min-height: 100vh;
+  background: var(--bg-primary);
+  background-image:
+    radial-gradient(ellipse at 0% 0%, rgba(102, 126, 234, 0.15) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 0%, rgba(118, 75, 162, 0.15) 0%, transparent 50%),
+    radial-gradient(ellipse at 100% 0%, rgba(102, 126, 234, 0.1) 0%, transparent 50%);
+  background-size: cover;
+  background-attachment: fixed;
+  position: relative;
+  color: var(--text-primary);
+}
+
+/* 背景动态装饰圆球 - 深色模式优化 */
+.orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(100px);
+  z-index: 0;
+  animation: float 10s infinite ease-in-out;
+  opacity: 0.5;
+}
+
+.orb-1 {
+  width: 400px;
+  height: 400px;
+  background: radial-gradient(circle, rgba(102, 126, 234, 0.4) 0%, transparent 70%);
+  top: -100px;
+  left: -100px;
+}
+
+.orb-2 {
+  width: 500px;
+  height: 500px;
+  background: radial-gradient(circle, rgba(118, 75, 162, 0.4) 0%, transparent 70%);
+  bottom: -150px;
+  right: -150px;
+  animation-delay: 2s;
+}
+
+.orb-3 {
+  width: 300px;
+  height: 300px;
+  background: radial-gradient(circle, rgba(102, 126, 234, 0.3) 0%, transparent 70%);
+  top: 30%;
+  left: 15%;
+  animation-delay: 4s;
+  opacity: 0.4;
+}
+
+@keyframes float {
+  0% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(20px) rotate(5deg);
+  }
+  100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 滚动条样式 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(102, 126, 234, 0.5);
+}
+
+.md-editor-preview .md-editor-code .md-editor-code-head,
+.md-editor-preview .md-editor-code .md-editor-code-header {
+  z-index: 10 !important;
+}
+
+/* =========================================================
+ * 全局下拉菜单主题样式
+ * 由于 NDropdown 默认 render-to-body=true，菜单被传送到 <body>，
+ * 无法被组件 <style scoped> 的 :deep() 选中，必须写在全局样式表。
+ * 覆盖所有经 AppDropdown（src/components/common/AppDropdown.vue）渲染的下拉。
+ * 设计：暗色玻璃拟态 + 大圆角 + 主题绿高亮 + 整行铺满 hover + 弹性进入动画。
+ * ========================================================= */
+
+/* 菜单容器：暗色玻璃 + 圆角 + 阴影（组合按钮式）。
+ * padding 归零，选项高亮从首行顶到容器上缘、末行顶到下缘；
+ * overflow: hidden 让高亮层随容器 16px 圆角自动裁切，首尾选项圆角贴合。 */
+.n-dropdown-menu {
+  background: rgba(22, 22, 38, 0.82) !important;
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 16px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(0, 0, 0, 0.04) !important;
+}
+
+/* 菜单进入/离开动画 */
+.n-dropdown-menu.fade-in-scale-up-transition-enter-active,
+.n-dropdown-menu.fade-in-scale-up-transition-leave-active {
+  transition: opacity 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+              transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
+}
+
+.n-dropdown-menu.fade-in-scale-up-transition-enter-from,
+.n-dropdown-menu.fade-in-scale-up-transition-leave-to {
+  opacity: 0;
+  transform: scale(0.92) translateY(-6px);
+}
+
+/* 菜单选项基础样式：整行铺满（组合按钮式）。
+ * Naive UI 的 hover 高亮层是 .n-dropdown-option-body::before，
+ * 原生几何为 left/right: 4px + border-radius: var(--n-border-radius)（约 3px），
+ * 即"两侧留缝的小圆角条"，与容器 16px 大圆角视觉断裂。
+ * 这里把 body 与 ::before 的圆角都清零、::before 左右归零，
+ * 高亮变为铺满整行的矩形；首尾选项的圆角由容器 overflow: hidden 裁切贴合。
+ * 注意：仍不要直接给 body 设 background，保持由 ::before + CSS 变量驱动。 */
+.n-dropdown-option .n-dropdown-option-body {
+  border-radius: 0 !important;
+  transition: color 0.18s ease;
+}
+
+.n-dropdown-option .n-dropdown-option-body::before {
+  left: 0 !important;
+  right: 0 !important;
+  border-radius: 0 !important;
+}
+
+/* 用 Naive UI 的 CSS 变量喂给整行 ::before 高亮，覆盖默认的中性灰 hover。
+ * 菜单/选项各设一组；颜色机制不变，仅几何改为铺满（见上方规则）。 */
+.n-dropdown-menu,
+.n-dropdown-option .n-dropdown-option-body {
+  --n-option-color-hover: rgba(102, 234, 194, 0.14) !important;
+  --n-option-color-active: rgba(102, 234, 194, 0.18) !important;
+  --n-option-text-color-hover: #8af0d0 !important;
+}
+
+.n-dropdown-option-body__label {
+  color: rgba(255, 255, 255, 0.85) !important;
+  font-size: 0.9rem;
+}
+
+.n-dropdown-option-body__prefix {
+  color: rgba(255, 255, 255, 0.65) !important;
+}
+
+/* hover 文字色（由变量驱动的整行高亮在上一条规则里） */
+.n-dropdown-option:hover .n-dropdown-option-body__label {
+  color: #8af0d0 !important;
+}
+
+.n-dropdown-option:hover .n-dropdown-option-body__prefix {
+  color: rgba(138, 240, 208, 0.9) !important;
+}
+
+/* 已选中/禁用态（如当前语言）：以主题绿微底标识。
+ * 同样走整行 ::before，几何与 hover 高亮一致。 */
+.n-dropdown-option--disabled .n-dropdown-option-body {
+  --n-option-color-hover: rgba(102, 234, 194, 0.08) !important;
+  cursor: default;
+}
+
+.n-dropdown-option--disabled .n-dropdown-option-body::before {
+  background-color: rgba(102, 234, 194, 0.08) !important;
+}
+
+.n-dropdown-option--disabled .n-dropdown-option-body__label {
+  color: #8af0d0 !important;
+  font-weight: 600;
+}
+
+/* 分隔线：横向铺满（容器 padding 为 0，与整行选项一致）。
+ * margin 必须带 !important——Naive 运行时注入的 .n-dropdown-divider
+ * 自带 margin: 4px 0，注入顺序在全局样式表之后，不加会被覆盖。 */
+.n-dropdown-divider {
+  background: rgba(255, 255, 255, 0.08) !important;
+  margin: 0 !important;
+  height: 1px;
+}
+
+/* 语言切换器自定义 label：当前语言加 ✓ 图标对齐 */
+.lang-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.lang-option .lang-check {
+  margin-left: auto;
+  color: #66eac2;
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.lang-option.is-active .lang-check {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* =========================================================
+ * 全局对话框（NDialog / useDialog）主题样式
+ * NDialog 由 NDialogProvider 管理，DOM 被传送到 <body> 下，
+ * 因此覆盖样式必须写在全局，scoped 的 :deep() 无法命中。
+ * 覆盖 AppHeader 退出登录确认弹窗等所有 useDialog 调用。
+ * 设计：暗色玻璃拟态 + 大圆角 + 弹性进入动画 + 主题绿按钮。
+ * ========================================================= */
+
+/* 遮罩：加深 + 轻微模糊，聚焦弹窗内容 */
+.n-modal-mask {
+  background: rgba(8, 8, 18, 0.6) !important;
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+/* 对话框容器：暗色玻璃 + 大圆角 */
+.n-dialog {
+  background: rgba(22, 22, 38, 0.88) !important;
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 20px !important;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55) !important;
+  overflow: hidden;
+}
+
+/* 移动端：对话框 / 卡片弹窗不超出屏幕（组件内联写死的 width 也需覆盖） */
+@media (max-width: 768px) {
+  .n-dialog.n-modal,
+  .n-card.n-modal {
+    width: calc(100vw - 32px) !important;
+    max-width: calc(100vw - 32px) !important;
+  }
+}
+
+/* 标题：白色高对比，稍大字重 */
+.n-dialog__title {
+  color: #ffffff !important;
+  font-weight: 600 !important;
+}
+
+/* 内容文字：次要白 */
+.n-dialog__content {
+  color: rgba(255, 255, 255, 0.78) !important;
+}
+
+/* 图标：警告用琥珀，错误用红，成功用主题绿，信息用蓝青 */
+.n-dialog__icon {
+  color: rgba(255, 255, 255, 0.85) !important;
+}
+
+/* 关闭按钮 */
+.n-dialog__close {
+  color: rgba(255, 255, 255, 0.55) !important;
+  transition: color 0.2s ease, background 0.2s ease !important;
+}
+
+.n-dialog__close:hover {
+  color: rgba(255, 255, 255, 0.9) !important;
+  background: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* 按钮区：留出间距，右对齐 */
+.n-dialog__action {
+  margin-top: 4px !important;
+}
+
+/* 弹窗内的按钮（确认/取消）：大圆角 + 主题色，呼应整体玻璃风格。
+ * NButton 圆角由内部 --n-border-radius 控制，且按钮被 teleport 到
+ * <body> 下（弹窗本身已 teleport），故必须在全局用 !important 覆盖。 */
+.n-dialog__action .n-button,
+.n-modal .n-card__action .n-button {
+  border-radius: 12px !important;
+}
+
+/* 确认（positive）按钮：主题绿实底 */
+.n-dialog__action .n-button--primary-type,
+.n-modal .n-card__action .n-button--primary-type {
+  --n-border-radius: 12px !important;
+  background: rgba(102, 234, 194, 0.18) !important;
+  border: 1px solid rgba(102, 234, 194, 0.5) !important;
+  color: #8af0d0 !important;
+  transition: background 0.2s ease, border-color 0.2s ease !important;
+}
+
+.n-dialog__action .n-button--primary-type:hover,
+.n-modal .n-card__action .n-button--primary-type:hover {
+  background: rgba(102, 234, 194, 0.28) !important;
+  border-color: rgba(102, 234, 194, 0.7) !important;
+}
+
+/* 取消（negative）按钮：透明描边 */
+.n-dialog__action .n-button--default-type,
+.n-dialog__action .n-button--tertiary-type,
+.n-modal .n-card__action .n-button--default-type,
+.n-modal .n-card__action .n-button--tertiary-type {
+  --n-border-radius: 12px !important;
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  color: rgba(255, 255, 255, 0.8) !important;
+  transition: background 0.2s ease, border-color 0.2s ease !important;
+}
+
+.n-dialog__action .n-button--default-type:hover,
+.n-dialog__action .n-button--tertiary-type:hover,
+.n-modal .n-card__action .n-button--default-type:hover,
+.n-modal .n-card__action .n-button--tertiary-type:hover {
+  background: rgba(255, 255, 255, 0.1) !important;
+  border-color: rgba(255, 255, 255, 0.2) !important;
+}
+
+/* 对话框与模态共用遮罩已在上方 .n-modal-mask 定义。
+ * Naive UI 的 useDialog 弹窗底层即为 NModal，进入动画复用
+ * 下方 .n-modal.fade-in-scale-up-transition-* 规则。 */
+
+/* =========================================================
+ * 全局模态框（NModal + preset="card"）主题样式
+ * NModal 默认 render-to-body=true，DOM 传送到 <body>。
+ * 覆盖 ImageCropperModal/CreateCircleModal/ForgotPasswordModal/
+ * UserProfile 编辑/改密弹窗等所有 NModal。
+ * preset="card" 内部渲染 NCard，故需同时覆盖 .n-card。
+ * ========================================================= */
+
+/* 模态容器：暗色玻璃，圆角较对话框更大 */
+.n-modal-body-wrapper .n-modal {
+  background: transparent !important;
+}
+
+/* preset card 渲染的卡片本体 */
+.n-modal .n-card,
+.n-card.n-modal {
+  background: rgba(22, 22, 38, 0.88) !important;
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 20px !important;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55) !important;
+  color: rgba(255, 255, 255, 0.85) !important;
+  overflow: hidden;
+}
+
+/* 卡片标题区 */
+.n-modal .n-card-header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+.n-modal .n-card-header__title {
+  color: #ffffff !important;
+  font-weight: 600 !important;
+}
+
+.n-modal .n-card-header__close {
+  color: rgba(255, 255, 255, 0.55) !important;
+  transition: color 0.2s ease, background 0.2s ease !important;
+}
+
+.n-modal .n-card-header__close:hover {
+  color: rgba(255, 255, 255, 0.9) !important;
+  background: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* 卡片内容区 */
+.n-modal .n-card__content {
+  color: rgba(255, 255, 255, 0.82) !important;
+}
+
+/* 卡片底部操作区 */
+.n-modal .n-card__action {
+  background: transparent !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+/* 模态进入/离开动画：复用 fade-in-scale-up（与下拉一致） */
+.n-modal.fade-in-scale-up-transition-enter-active {
+  transition: opacity 0.24s cubic-bezier(0.4, 0, 0.2, 1),
+              transform 0.24s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
+}
+
+.n-modal.fade-in-scale-up-transition-leave-active {
+  transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+              transform 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.n-modal.fade-in-scale-up-transition-enter-from,
+.n-modal.fade-in-scale-up-transition-leave-to {
+  opacity: 0;
+  transform: scale(0.94) translateY(-8px);
+}
+
+/* =========================================================
+ * 全局消息（NMessage / useMessage）主题样式
+ * NMessage 由 NMessageProvider 管理，Teleport 到 <body>。
+ * 覆盖全项目 ~88 处 message.success/error/info/warning 调用。
+ * 设计：暗色玻璃胶囊 + 左侧类型色条 + 弹入动画。
+ * ========================================================= */
+
+/* 消息容器：暗色玻璃胶囊 */
+.n-message {
+  background: rgba(22, 22, 38, 0.92) !important;
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4) !important;
+  color: rgba(255, 255, 255, 0.9) !important;
+  overflow: hidden;
+  position: relative;
+}
+
+/* 左侧类型色条（4px，覆盖 padding-left 留位） */
+.n-message::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* 各类型色条颜色 */
+.n-message--info-type::before { background: #60a5fa; }
+.n-message--success-type::before { background: #66eac2; }
+.n-message--warning-type::before { background: #fbbf24; }
+.n-message--error-type::before { background: #f87171; }
+.n-message--loading-type::before { background: rgba(138, 240, 208, 0.7); }
+
+/* 消息图标：与色条同色系，更醒目 */
+.n-message--success-type .n-message__icon { color: #66eac2 !important; }
+.n-message--error-type .n-message__icon { color: #f87171 !important; }
+.n-message--warning-type .n-message__icon { color: #fbbf24 !important; }
+.n-message--info-type .n-message__icon { color: #60a5fa !important; }
+.n-message--loading-type .n-message__icon { color: #8af0d0 !important; }
+
+/* 消息文字 */
+.n-message__content {
+  color: rgba(255, 255, 255, 0.9) !important;
+}
+
+/* 消息进入动画：从上滑入 + 淡入（高度展开由组件处理，这里补充位移） */
+.n-message.fade-in-height-expand-transition-enter-active {
+  transition: opacity 0.24s cubic-bezier(0.4, 0, 0.2, 1),
+              transform 0.24s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
+}
+
+.n-message.fade-in-height-expand-transition-leave-active {
+  transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+              transform 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.n-message.fade-in-height-expand-transition-enter-from {
+  opacity: 0;
+  transform: translateY(-12px) scale(0.96);
+}
+
+/* =========================================================
+ * 全局气泡（NTooltip / NPopover）主题样式
+ * NPopover 默认 render-to-body=true，DOM 传送到 <body>。
+ * 覆盖 LoginCard 的三个第三方登录 tooltip 等。
+ * 设计：紧凑暗色玻璃 + 小圆角 + 弹性进入。
+ * ========================================================= */
+
+.n-popover.n-tooltip,
+.n-popover {
+  background: rgba(22, 22, 38, 0.92) !important;
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 10px !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4) !important;
+}
+
+.n-popover .n-popover__content,
+.n-popover .base-wave,
+.n-tooltip .n-tooltip__content {
+  color: rgba(255, 255, 255, 0.88) !important;
+}
+
+/* 气泡箭头：与背景同色，保持玻璃一致 */
+.n-popover:not(.n-tooltip) .n-popover-arrow,
+.n-tooltip .n-popover-arrow {
+  background: rgba(22, 22, 38, 0.92) !important;
+}
+
+/* 气泡进入动画 */
+.n-popover.popover-transition-enter-active {
+  transition: opacity 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+              transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
+}
+
+.n-popover.popover-transition-enter-from {
+  opacity: 0;
+  transform: scale(0.92);
+}
+
+/* @提及 选人面板（MentionPicker 的 NPopover 面板传送到 body，样式必须全局） */
+.mention-picker {
+  width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mention-results {
+  max-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mention-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.mention-user:hover {
+  background: rgba(102, 234, 194, 0.14);
+}
+
+.mention-user.selected {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.mention-user-name {
+  font-size: 13px;
+  line-height: 1.3;
+  color: rgba(255, 255, 255, 0.88);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 用户名 + 邮箱两行容器：min-width:0 让内部 ellipsis 在 flex 行内生效 */
+.mention-user-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.mention-user-email {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mention-tip {
+  padding: 12px 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.mention-limit {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-align: right;
+}
+
+/* 编辑器内联 @ 弹窗（MentionTrigger）：比按钮版稍宽防中文名/邮箱截断；键盘高亮类 */
+.mention-suggest {
+  width: 300px;
+}
+
+.mention-user.active {
+  background: rgba(102, 234, 194, 0.14);
+}
+
+/* =========================================================
+ * 正文中的 @提及 链接（MentionPreview 链接化产物）
+ * 主题绿高亮 + 虚线下划线；hover 提亮；压过 md-editor 预览的 a 样式
+ * ========================================================= */
+.post-mention {
+  color: #63e2b7;
+  font-weight: 500;
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(99, 226, 183, 0.45);
+  transition: color 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+              border-bottom-color 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  cursor: pointer;
+}
+
+.post-mention:hover {
+  color: #8af0d0;
+  border-bottom-color: rgba(138, 240, 208, 0.9);
+}
+
+.md-editor-previewWrapper a.post-mention,
+.md-editor-preview a.post-mention {
+  color: #63e2b7;
+  text-decoration: none;
+}
+
+.md-editor-previewWrapper a.post-mention:hover,
+.md-editor-preview a.post-mention:hover {
+  color: #8af0d0;
+  border-bottom-color: rgba(138, 240, 208, 0.9);
+}
+
+/* 编辑器内 @提及 token 高亮（CM6 Decoration.mark，注入见 utils/mentionHighlight.js） */
+.cm-editor .cm-mention-token {
+  color: #63e2b7;
+  font-weight: 500;
+}
+
+/* @提及 弹窗行尾角色标签：普通=灰、管理员=琥珀、机器人=主题绿描边。
+ * 面板 teleport 到 <body>，样式必须写全局（项目规则）。 */
+.mention-role {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 999px;
+  transition: background 0.2s cubic-bezier(0.4, 0, 0.2, 1), color 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.mention-role--user {
+  color: var(--text-tertiary);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.mention-role--admin {
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.4);
+  background: rgba(251, 191, 36, 0.12);
+}
+
+.mention-role--agentBot {
+  color: #63e2b7;
+  border: 1px solid rgba(102, 234, 194, 0.4);
+  background: rgba(102, 234, 194, 0.12);
+}
+
+/* =========================================================
+ * 页面级路由过渡：由路由 meta.pageFade 标记的页面
+ * （圈子管理各页、帖子详情、发帖页）进出时淡入淡出。
+ * App.vue 常驻 Transition，按离开/进入页动态开启动画。
+ * 关键点：只动画各页的 .main-content，页面根节点不做 opacity/transform——
+ * 顶栏/侧栏是 fixed 定位的根子元素，动画根节点会把它们一并淡出，
+ * 且 transform/opacity 会临时改变 fixed 后代的定位基准导致跳位。
+ * 换场时机由 App.vue 的 :duration 显式驱动（时长需与此处一致）。
+ * 进入带轻微回弹、离开用标准缓动，与下拉/弹窗动画同语言。
+ * ========================================================= */
+.page-fade-enter-active .main-content {
+  animation: page-fade-in 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.page-fade-leave-active .main-content {
+  animation: page-fade-out 0.16s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@keyframes page-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes page-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* =========================================================
+ * 移动端回复抽屉（CommentList 的 NDrawer.reply-sheet）
+ * NDrawer 传送到 body，容器样式只能写在全局。
+ * ========================================================= */
+.n-drawer-container:has(.reply-sheet) > .n-drawer-mask {
+  background: rgba(8, 8, 18, 0.6);
+}
+
+.n-drawer.reply-sheet {
+  background: rgba(22, 22, 38, 0.92);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.n-drawer.reply-sheet .n-drawer-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.n-drawer.reply-sheet .n-drawer-header__main {
+  flex: 1;
+  min-width: 0;
+}
+
+.n-drawer.reply-sheet .reply-sheet-body {
+  padding: 0 16px 16px;
+}
+
+/* 回复抽屉底部的「回复 @作者」输入条，底部让出 Home Indicator 安全区 */
+.n-drawer.reply-sheet .n-drawer-footer {
+  padding: 0 16px var(--safe-bottom);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* =========================================================
+ * 移动端评论输入抽屉（MobileCommentComposer 的 NDrawer.comment-composer）
+ * 与回复抽屉同一套玻璃样式；高度随内容（height="auto"），
+ * 键盘弹出时由 useKeyboardInset 以内联 bottom 抬到键盘上方。
+ * 遮罩禁止触摸滚动，避免 iOS 上滑动穿透到背后页面。
+ * ========================================================= */
+.n-drawer-container:has(.comment-composer) > .n-drawer-mask {
+  background: rgba(8, 8, 18, 0.5);
+  touch-action: none;
+}
+
+.n-drawer.comment-composer {
+  max-height: 80%;
+  background: rgba(22, 22, 38, 0.92);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+
+/* =========================================================
+ * 移动端举报抽屉（ReportPostModal 的 NDrawer.report-sheet）
+ * 与评论输入抽屉同一套玻璃样式；内联 bottom / max-height 随键盘调整，
+ * 抽屉与内容包裹层都是纵向 flex，面板中段（理由 + 说明）在内部滚动。
+ * ========================================================= */
+.n-drawer-container:has(.report-sheet) > .n-drawer-mask {
+  background: rgba(8, 8, 18, 0.5);
+  touch-action: none;
+}
+
+.n-drawer.report-sheet {
+  display: flex;
+  flex-direction: column;
+  background: rgba(22, 22, 38, 0.92);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+
+.n-drawer.report-sheet > .n-drawer-content-wrapper {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
