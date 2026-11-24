@@ -19,3 +19,13 @@ func newUserService(deps *Deps) userapp.UserService {
 func registerUser(root routing.RouterGroup, svc userapp.UserService, authCheck, optionalCheck routing.HandlerFunc) {
 	userhttp.RegisterRoutes(root, svc, authCheck, optionalCheck)
 }
+
+// newUserSettingService 构造用户设置服务（个人中心开关类设置；follow 域经桥接读取列表隐私开关）。
+func newUserSettingService(deps *Deps) userapp.SettingService {
+	return userapp.NewSettingService(userinfra.NewSettingRepository(deps.DB.Get()))
+}
+
+// registerUserSetting 注册用户设置路由。
+func registerUserSetting(root routing.RouterGroup, svc userapp.SettingService, authCheck routing.HandlerFunc) {
+	userhttp.RegisterSettingRoutes(root, svc, authCheck)
+}

@@ -144,6 +144,14 @@ func initPipelines() {
 		}
 	}
 
+	// 8.17.2 Init Share event Redpanda producer（帖子首次分享事件，#232；声望 #234 / #235 消费，本期无消费者）
+	if err := redpanda.InitShareEventProducer(); err != nil {
+		logger.Log.Error("Failed to initialize share event producer: " + err.Error())
+		logger.Log.Warn("Share events cannot be published; POST /post/share will return 503 on first share.")
+	} else {
+		logger.Log.Info("Share event producer initialized successfully")
+	}
+
 	// 8.18 Start Item CF syncer（定时算 post↔post 共现相似度 → cf:item ZSET；P1）
 	// 仅在 CF 开关打开时启动；依赖 post_interaction 表有数据（P0 灌数）。
 	if conf.Config.Recommend.CF.Enabled {

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"interestBar/pkg/domains/like/domain"
 	"interestBar/pkg/domains/like/infrastructure"
@@ -153,37 +154,76 @@ func TestPostLikeCache_ConcurrentLikes(t *testing.T) {
 	}
 }
 
+// legacyCommentStatsKey #207 前评论点赞 Lua 写入的计数 Hash；现已无写入方，只用于断言不再产生 / 不再续期。
+func legacyCommentStatsKey(commentID uuid.UUID) string { return "comment:stats:" + commentID.String() }
+
+// 评论点赞只维护用户点赞 ZSET，不再写 comment:stats:{id}（#207：评论 like_count 只以 PG 为准）。
 func TestCommentLikeCache_SetIsIdempotent(t *testing.T) {
 	t.Parallel()
 	testkit.Redis(t)
 	ctx := t.Context()
 	cache := infrastructure.NewCommentLikeCache()
 	user, commentID := sharedomain.NewID(), sharedomain.NewID()
-	statsKey := redispkg.GetCommentStatsKey(commentID)
-	testkit.CleanupKeys(t, statsKey, redispkg.GetUserCommentLikeListKey(user))
+	zsetKey, statsKey := redispkg.GetUserCommentLikeListKey(user), legacyCommentStatsKey(commentID)
+	testkit.CleanupKeys(t, statsKey, zsetKey)
 
-	if err := redispkg.UpdateCommentStatistics(ctx, commentID, 2); err != nil {
-		t.Fatalf("seed comment stats: %v", err)
-	}
 	for i, s := range []struct {
-		liked     bool
-		want      domain.ToggleResult
-		wantCount int
+		liked bool
+		want  domain.ToggleResult
 	}{
-		{true, domain.ToggleResultLiked, 3},
-		{true, domain.ToggleResultUnchanged, 3},
-		{false, domain.ToggleResultUnliked, 2},
+		{true, domain.ToggleResultLiked},
+		{true, domain.ToggleResultUnchanged},
+		{false, domain.ToggleResultUnliked},
+		{false, domain.ToggleResultUnchanged},
+		{true, domain.ToggleResultLiked},
 	} {
 		got, err := cache.Set(ctx, user, commentID, s.liked)
 		if err != nil || got != s.want {
 			t.Fatalf("step %d Set(%v) = %d, %v; want %d", i, s.liked, got, err, s.want)
 		}
-		if n := hashInt(t, statsKey, "like_count"); n != s.wantCount {
-			t.Fatalf("step %d like_count = %d, want %d", i, n, s.wantCount)
+		_, zerr := redispkg.Client.ZScore(ctx, zsetKey, commentID.String()).Result()
+		if inZset := zerr == nil; inZset != s.liked {
+			t.Fatalf("step %d ZSCORE in ZSET = %v (%v), want %v", i, inZset, zerr, s.liked)
+		}
+		if n := redispkg.Client.Exists(ctx, statsKey).Val(); n != 0 {
+			t.Fatalf("step %d %s exists, want no comment stats hash", i, statsKey)
 		}
 	}
+	if ttl := redispkg.Client.TTL(ctx, zsetKey).Val(); ttl <= 0 {
+		t.Fatalf("%s TTL = %v, want renewed positive TTL", zsetKey, ttl)
+	}
 	checked, err := redispkg.BatchCheckCommentLiked(ctx, user, []uuid.UUID{commentID})
-	if err != nil || checked.Hits[commentID] {
-		t.Fatalf("BatchCheckCommentLiked after unlike = %v, %v; want not liked", checked.Hits, err)
+	if err != nil || !checked.Hits[commentID] {
+		t.Fatalf("BatchCheckCommentLiked after re-like = %v, %v; want liked", checked.Hits, err)
+	}
+}
+
+// 线上残留的 comment:stats:{id}（#207 前写入，带 43min TTL）：点赞 / 取消既不改它也不续期，到期自然消失。
+func TestCommentLikeCache_LeavesLegacyStatsUntouched(t *testing.T) {
+	t.Parallel()
+	testkit.Redis(t)
+	ctx := t.Context()
+	cache := infrastructure.NewCommentLikeCache()
+	user, commentID := sharedomain.NewID(), sharedomain.NewID()
+	statsKey := legacyCommentStatsKey(commentID)
+	testkit.CleanupKeys(t, statsKey, redispkg.GetUserCommentLikeListKey(user))
+
+	const legacyTTL = time.Minute
+	if err := redispkg.Client.HSet(ctx, statsKey, "like_count", 7).Err(); err != nil {
+		t.Fatalf("seed legacy stats: %v", err)
+	}
+	if err := redispkg.Client.Expire(ctx, statsKey, legacyTTL).Err(); err != nil {
+		t.Fatalf("expire legacy stats: %v", err)
+	}
+	for _, liked := range []bool{true, false} {
+		if _, err := cache.Set(ctx, user, commentID, liked); err != nil {
+			t.Fatalf("Set(%v): %v", liked, err)
+		}
+	}
+	if n := hashInt(t, statsKey, "like_count"); n != 7 {
+		t.Fatalf("legacy like_count = %d, want untouched 7", n)
+	}
+	if ttl := redispkg.Client.TTL(ctx, statsKey).Val(); ttl <= 0 || ttl > legacyTTL {
+		t.Fatalf("legacy TTL = %v, want original <= %v (not renewed)", ttl, legacyTTL)
 	}
 }

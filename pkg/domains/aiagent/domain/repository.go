@@ -58,6 +58,9 @@ type AgentRepository interface {
 	// auto_config.auto_reply.enabled=true），全局与圈内机器人都在内（作用域由调用方按 CircleID 收口）。
 	// 供自动回复扫描器每轮加载（设计见 docs/agent-auto-reply-design.md）。
 	ListAutoReplyEnabled(ctx context.Context) ([]AiAgent, error)
+	// ListAutoPostEnabled 获取开启了自动发帖的启用**全局**机器人（未删除、status=1、circle_id IS NULL、
+	// auto_config.auto_post.enabled=true）。圈内机器人自动发帖是 #102 的范围，这里不加载。
+	ListAutoPostEnabled(ctx context.Context) ([]AiAgent, error)
 	// ExistsByLinkedUserID 检查某系统用户是否为机器人的关联账号（未删除）。
 	// 供评论触发钩子反查，机器人自己的评论不再触发关键词回复（防回环）。
 	// 不加 circle 过滤：防回环口径应覆盖全部机器人（含圈子级，语义前瞻正确）。

@@ -173,9 +173,9 @@ post_stats(post_id uuid PK, view_count, comment_count, like_count, collect_count
 | 阶段 | 内容 | 改动范围 | 风险 | 状态 |
 |---|---|---|---|---|
 | **B1** | `comment_count` 改为与浏览量同一条批量 UPDATE（`post_statistics`，15 min），落库时按明细表重算（幂等），落库后校准 Redis | 代码（post / comment 域、`redpanda` 消费者），无迁移、无 `deploy/` | 中 | 本次 PR |
-| **B2-a** | 热度关闭条数触发：`post_hot_flush_messages: 0`；点赞 / 收藏窗口 10 s → 30–60 s | 生产配置 Secret（维护者操作），`configs/*.yaml` 默认值同步 | 低 | 待决策（窗口取值） |
-| **B2-b** | 方案 1：`post_stats` 独立表 + 读路径回落 + ES 白名单去计数 | 迁移 + 代码 + `deploy/`，全部 `risk:high`，拆成 M1 / R1 / R2 / D1 多个 PR | 中高 | 待决策 |
-| **B2-c**（可选） | `post` 从 `REPLICA IDENTITY FULL` 改 DEFAULT：每次 UPDATE 不再写整条旧行 | 迁移；需确认 Debezium / sink 不依赖 `before`（当前 sink 只取 `after`） | 中 | 待决策 |
+| **B2-a** | 热度关闭条数触发：`post_hot_flush_messages: 0`；点赞 / 收藏窗口 10 s → 60 s | 生产配置 Secret（维护者操作），`configs/*.yaml` 默认值同步 | 低 | 已决策（2026-11-09），默认值已同步；生产待维护者改 Secret 并 `force_infra` 发版 |
+| **B2-b** | 方案 1：`post_stats` 独立表 + 读路径回落 + ES 白名单去计数 | 迁移 + 代码 + `deploy/`，全部 `risk:high`，拆成 M1 / R1 / R2 / D1 多个 PR | 中高 | 暂缓：B2-a 上线后生产写场景压测，WAL / ES 积压仍是瓶颈再启动 |
+| **B2-c**（可选） | `post` 从 `REPLICA IDENTITY FULL` 改 DEFAULT：每次 UPDATE 不再写整条旧行 | 迁移；需确认 Debezium / sink 不依赖 `before`（当前 sink 只取 `after`） | 中 | 不做：见 D5 |
 | 验收 | 生产写场景压测对比：`pg_stat_user_tables.n_tup_upd`（post / post_stats）、复制槽积压（`pg_current_wal_lsn() - confirmed_flush_lsn`）、ES post sink 消费积压、ES indexing rate / CPU | 生产 | — | 需维护者安排，agent 不执行 |
 
 B1 的设计要点（详见 B1 PR）：
@@ -201,6 +201,17 @@ B1 的设计要点（详见 B1 PR）：
 | D7 | 浏览量是否一起进 `post_stats` | 一起 / 留在 `post` | 一起；浏览量是最高频的计数 |
 
 ---
+
+### 决策记录（2026-11-09，维护者确认）
+
+| # | 结论 | 说明 |
+|---|---|---|
+| D1 | **先只做方案 3**；方案 1 暂缓 | 方案 3 无迁移、无代码即可去掉约 90% 的 post UPDATE。当前没有真实流量，方案 1 多出的约 8 个百分点不值四五个 `risk:high` PR 与切换校准；B2-a 上线后在生产压一次写场景，WAL / ES 积压仍是瓶颈再启动。方案 2 不做 |
+| D2 | 随 D1 暂缓 | 做方案 1 时倾向「ES 不再承载计数，列表 Redis 未命中回落 PG」 |
+| D3 | `post_hot_flush_messages: 0` | 只按 13 min 时间窗口 flush（`batch_consumer.go` 仅在阈值 `> 0` 时按条数触发） |
+| D4 | 点赞 / 收藏窗口 **60 s** | 读路径以 Redis 为准不受影响；代价是进程被杀时重投窗口变大，collect 增量可能重复计一次（现状同样存在，窗口变大） |
+| D5 | **保留 `REPLICA IDENTITY FULL`** | 改 DEFAULT 后，UPDATE 未改动的 TOAST 列在 Debezium 事件里会被替换为占位值 `__debezium_unavailable_value`；ES post sink 按 `after` 整行 upsert，白名单含 `summary` / `media_extra`，超长时会把占位值写进 ES。方案 1 落地后 post 的 UPDATE 已很少，改 DEFAULT 的收益也不再明显 |
+| D6 / D7 | 随 D1 暂缓 | 做方案 1 时倾向：contract 至少隔一个发布周期再定；浏览量一起进 `post_stats` |
 
 ## 五、一致性 / 边界 / 风险
 

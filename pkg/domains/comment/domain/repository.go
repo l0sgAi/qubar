@@ -11,17 +11,21 @@ import (
 type CommentRepository interface {
 	// Create 创建评论（事务内：插入评论 + 如为回复则递增根评论 reply_count）。
 	Create(ctx context.Context, comment *Comment) error
-	// GetByID 根据 ID 获取评论（未删除）。未找到返回 ErrCommentNotFound。
+	// GetByID 根据 ID 获取评论（未删除，不看 status）。未找到返回 ErrCommentNotFound。
+	// 读路径（详情 / 定位 / 回复列表）须再用 Comment.Visible 判定可见性。
 	GetByID(ctx context.Context, commentID uuid.UUID) (*Comment, error)
-	// GetRootCommentsByCursor 游标分页获取帖子的顶层评论。
+	// GetRootCommentsByCursor 游标分页获取帖子的顶层评论（仅可见评论，见 VisibleCondition）。
 	// sort: 0=按点赞倒序, 1=按时间倒序。
 	// 返回评论列表、下一页游标、是否有更多、错误。
+	// cursor 为空取首页；游标非法，或不是该帖顶层列表在同一 sort 下产出的（v2 游标，#209），返回 ErrInvalidCursor 包装错误。
 	GetRootCommentsByCursor(ctx context.Context, postID uuid.UUID, size, sort int, cursor string) ([]Comment, string, bool, error)
-	// GetRepliesByCursor 游标分页获取某条评论的子回复。
+	// GetRepliesByCursor 游标分页获取某条评论的子回复（仅可见评论，见 VisibleCondition）。
 	// sort: 0=按点赞倒序, 1=按时间倒序（与 GetRootCommentsByCursor 同一套排序键映射）。
+	// 游标校验同上：须是该楼（rootID）回复列表在同一 sort 下产出的。
 	GetRepliesByCursor(ctx context.Context, rootID uuid.UUID, size, sort int, cursor string) ([]Comment, string, bool, error)
 	// LocateRootCursor 计算顶层列表的定位游标：把它作为列表接口的 cursor 传入时，
 	// 返回页（页大小 size）包含 target。target 在首页时返回 ""。
+	// 游标与 GetRootCommentsByCursor 翻到同一页时返回的下一页游标逐字节一致（LocateReplyCursor 同理）。
 	// sort 语义同 GetRootCommentsByCursor；target 必须是该帖的顶层评论。
 	LocateRootCursor(ctx context.Context, postID uuid.UUID, sort int, target *Comment, size int) (string, error)
 	// LocateReplyCursor 计算回复列表的定位游标与页码（从 1 开始，按页大小 size 计）：
@@ -68,14 +72,6 @@ type AutoReplyCommentRow struct {
 	LikeCount    int        `gorm:"column:like_count"`
 	ReplyCount   int        `gorm:"column:reply_count"`
 	PostCircleID uuid.UUID  `gorm:"column:post_circle_id"`
-}
-
-// CommentStatsCache 评论统计信息缓存（like_count）。
-type CommentStatsCache interface {
-	// Exists 检查统计 Hash 是否存在。
-	Exists(ctx context.Context, commentID uuid.UUID) (bool, error)
-	// Set 设置统计信息（用于从 DB 恢复）。
-	Set(ctx context.Context, commentID uuid.UUID, likeCount int) error
 }
 
 // LikeCheck 用户评论点赞 ZSET 批查结果。

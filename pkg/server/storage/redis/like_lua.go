@@ -15,11 +15,14 @@ import (
 // 修改 ZSET 与 like_count；已处于期望态则 no-op 返回 0。方向不再由有损的 ZSET 推断，
 // 调用方需先解析真实状态（ZSET miss 时回源 DB 并回填）。
 //
+// KEYS[3]（统计 Hash）可选：帖子传 post:stats（读路径真值）；评论不传，
+// 评论 like_count 只以 PG 为准（#184 计数方案 A，#207），脚本只维护点赞状态 ZSET。
+//
 // 返回：1=新赞（+1）/ -1=取消（-1）/ 0=未变化。
 const likeSetScript = `
-local statsKey = KEYS[1]
-local zsetKey = KEYS[2]
-local loadedKey = KEYS[3]
+local zsetKey = KEYS[1]
+local loadedKey = KEYS[2]
+local statsKey = KEYS[3]
 local targetId = ARGV[1]
 local now = tonumber(ARGV[2])
 local maxSize = tonumber(ARGV[3])
@@ -32,7 +35,9 @@ local result = 0
 if want == 1 then
     if not score then
         redis.call('ZADD', zsetKey, now, targetId)
-        redis.call('HINCRBY', statsKey, 'like_count', 1)
+        if statsKey then
+            redis.call('HINCRBY', statsKey, 'like_count', 1)
+        end
         -- Evict oldest entries if ZSET exceeds max size
         local zsetSize = tonumber(redis.call('ZCARD', zsetKey))
         if zsetSize > maxSize then
@@ -47,16 +52,20 @@ if want == 1 then
 else
     if score then
         redis.call('ZREM', zsetKey, targetId)
-        local newCount = redis.call('HINCRBY', statsKey, 'like_count', -1)
-        if tonumber(newCount) < 0 then
-            redis.call('HSET', statsKey, 'like_count', 0)
+        if statsKey then
+            local newCount = redis.call('HINCRBY', statsKey, 'like_count', -1)
+            if tonumber(newCount) < 0 then
+                redis.call('HSET', statsKey, 'like_count', 0)
+            end
         end
         result = -1
     end
 end
 
 -- Renew TTL; 完整加载标记与 ZSET 同一脚本内同 TTL 续期（标记不存在时 no-op）
-redis.call('EXPIRE', statsKey, ttl)
+if statsKey then
+    redis.call('EXPIRE', statsKey, ttl)
+end
 redis.call('EXPIRE', zsetKey, ttl)
 redis.call('EXPIRE', loadedKey, ttl)
 return result
@@ -90,21 +99,22 @@ func InitLikeLuaScripts() error {
 }
 
 // SetCommentLike 原子设置评论点赞状态（liked=true 赞 / false 取消）。
+// 只维护用户点赞 ZSET，不写任何计数缓存：评论 like_count 由 like 消费者按行状态迁移落库到 PG（#207）。
 func SetCommentLike(ctx context.Context, userID, commentID uuid.UUID, liked bool) (LikeSetResult, error) {
-	return executeLikeSet(ctx, GetCommentStatsKey(commentID), GetUserCommentLikeListKey(userID), GetUserCommentLikeLoadedKey(userID), commentID, liked)
+	return executeLikeSet(ctx, []string{GetUserCommentLikeListKey(userID), GetUserCommentLikeLoadedKey(userID)}, commentID, liked)
 }
 
-// SetPostLike 原子设置帖子点赞状态（liked=true 赞 / false 取消）。
+// SetPostLike 原子设置帖子点赞状态（liked=true 赞 / false 取消），同时增减 post:stats 的 like_count。
 func SetPostLike(ctx context.Context, userID, postID uuid.UUID, liked bool) (LikeSetResult, error) {
-	return executeLikeSet(ctx, GetPostStatsKey(postID), GetUserPostLikeListKey(userID), GetUserPostLikeLoadedKey(userID), postID, liked)
+	return executeLikeSet(ctx, []string{GetUserPostLikeListKey(userID), GetUserPostLikeLoadedKey(userID), GetPostStatsKey(postID)}, postID, liked)
 }
 
-func executeLikeSet(ctx context.Context, statsKey, zsetKey, loadedKey string, targetID uuid.UUID, liked bool) (LikeSetResult, error) {
+// executeLikeSet 执行 likeSetScript。keys 依次为 [ZSET, 完整加载标记, 可选的统计 Hash]。
+func executeLikeSet(ctx context.Context, keys []string, targetID uuid.UUID, liked bool) (LikeSetResult, error) {
 	want := 0
 	if liked {
 		want = 1
 	}
-	keys := []string{statsKey, zsetKey, loadedKey}
 	// targetId 以 UUID 字符串形式作为 ARGV 传入(Lua 中 ZADD/ZSCORE 的 member)
 	args := []interface{}{targetID.String(), time.Now().UnixMilli(), likeZsetMaxSize, int64(postStatsTTL.Seconds()), want}
 

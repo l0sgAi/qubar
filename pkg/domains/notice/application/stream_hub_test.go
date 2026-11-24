@@ -116,10 +116,14 @@ func TestStreamHubCoalesceAndDedup(t *testing.T) {
 	}
 
 	// 连接建立首事件（Snapshot）记为已推送。
-	first, err := h.Snapshot(context.Background(), uid)
+	firsts, err := h.Snapshot(context.Background(), uid)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(firsts) != 1 {
+		t.Fatalf("snapshot events = %d, want 1 (only notice channel has a reader)", len(firsts))
+	}
+	first := firsts[0]
 	if first.Count != 1 {
 		t.Fatalf("snapshot count = %d, want 1", first.Count)
 	}
@@ -180,11 +184,11 @@ func TestStreamHubPublishWithoutConn(t *testing.T) {
 	h.sweep()
 
 	conn, _ := h.Add(uid)
-	first, err := h.Snapshot(context.Background(), uid)
+	firsts, err := h.Snapshot(context.Background(), uid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Count != 7 {
+	if first := firsts[0]; first.Count != 7 {
 		t.Fatalf("snapshot count = %d, want 7", first.Count)
 	}
 	// sweep 不应再向新连接补推同值。

@@ -267,3 +267,62 @@ func TestPostCommentCount_RetryAndRedeliveryDoNotDoubleCount(t *testing.T) {
 		t.Fatalf("redelivery rewrote the post row (xmin %s → %s); unchanged recount must be skipped", xminBefore, xminAfter)
 	}
 }
+
+// TestPostCommentCount_ExcludesInvisible 重算口径是可见评论数（#208）：审核中（status=2）/ 隐藏（status=3）
+// 的评论与回复不计入；状态恢复正常后再次重算计入。
+func TestPostCommentCount_ExcludesInvisible(t *testing.T) {
+	t.Parallel()
+	db := testkit.PG(t)
+	testkit.Redis(t)
+	testkit.Redpanda(t)
+
+	postID := newCommentCountPost(t, db)
+	var ids []uuid.UUID
+	for range 5 {
+		id, err := addComment(db, postID)
+		if err != nil {
+			t.Fatalf("add comment: %v", err)
+		}
+		ids = append(ids, id)
+	}
+	// 不可见根评论下的可见回复：按行计数，仍计入（与根评论删除的既有口径一致）。
+	replyID := sharedomain.NewID()
+	if err := db.Exec("INSERT INTO domains.comment (id, post_id, user_id, root_id, content) VALUES (?, ?, ?, ?, ?)",
+		replyID, postID, sharedomain.NewID(), ids[1], "集成测试回复").Error; err != nil {
+		t.Fatalf("insert reply: %v", err)
+	}
+	if err := redpanda.PublishPostCommentCount(postID, 1); err != nil {
+		t.Fatalf("publish reply: %v", err)
+	}
+	setStatus := func(id uuid.UUID, status int) {
+		t.Helper()
+		if err := db.Exec("UPDATE domains.comment SET status = ? WHERE id = ?", status, id).Error; err != nil {
+			t.Fatalf("set status: %v", err)
+		}
+	}
+	setStatus(ids[0], 2) // 审核中
+	setStatus(ids[1], 3) // 隐藏
+
+	c := redpanda.NewPostStatsConsumerForTest(&recordingCommitter{}, nil)
+	for _, m := range postStatsMessages(t, postID, 6) {
+		c.Add(m)
+	}
+	c.Flush()
+	if got := commentCount(t, db, postID); got != 4 {
+		t.Fatalf("comment_count = %d, want 4 (3 visible comments + 1 visible reply, review / hidden excluded)", got)
+	}
+
+	// 审核通过：状态恢复正常并发布变化事件，重算后计入。
+	setStatus(ids[0], 1)
+	if err := redpanda.PublishPostCommentCount(postID, 1); err != nil {
+		t.Fatalf("publish approve: %v", err)
+	}
+	msgs := postStatsMessages(t, postID, 7)
+	for _, m := range msgs[6:] {
+		c.Add(m)
+	}
+	c.Flush()
+	if got := commentCount(t, db, postID); got != 5 {
+		t.Fatalf("comment_count after approve = %d, want 5", got)
+	}
+}

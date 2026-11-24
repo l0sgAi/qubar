@@ -31,6 +31,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	// 先构造各领域 Service（不立即注册路由，因为要互注 Facade）
 	userSvc := newUserService(deps)
 	userFacade := userapp.NewUserFacade(userSvc)
+	userSettingSvc := newUserSettingService(deps)
 
 	circleSvc, circleRepo, memberRepo := newCircleService(deps)
 	circleFacade := circleapp.NewCircleFacade(circleRepo)
@@ -41,8 +42,15 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	commentSvc := newCommentService(deps)
 	likeSvc := newLikeService(deps)
 	collectSvc := newCollectService(deps)
+	shareSvc := newShareService(deps)
 	historySvc := newHistoryService(deps)
 	noticeSvc := newNoticeService(deps)
+	// follow 只读依赖 user（目标用户校验、列表项简要信息、列表隐私开关），构造时直接注入。
+	followSvc := newFollowService(deps, userFacade, userSettingSvc)
+	// message（私信）只读依赖 user（接收方状态校验、会话列表对方简要信息）与 follow（未关注发送限制），构造时直接注入。
+	messageSvc := newMessageService(deps, userSvc, userFacade, followSvc)
+	// message 读 user 的私信权限设置（#240，谁可以给我发私信）。
+	wireMessageDMPermission(messageSvc, userSettingSvc)
 
 	// 互注跨领域 Facade
 	// circle 需要 user Facade + post 媒体查询器
@@ -75,6 +83,9 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	collectSvc.SetPostTarget(&collectPostTarget{delegate: postSvc})
 	collectSvc.SetPostFetcher(&collectPostFetcher{delegate: postSvc})
 
+	// share 需要 post 查询端口（可分享校验：已发布 + 可见性 + 作者 / 圈子，#232）
+	shareSvc.SetPostTarget(&sharePostTarget{delegate: postSvc})
+
 	// history 需要 post 组装端口（「最近浏览」列表 ES 查询）;post 需要 history 记录器（详情页 async 回调）
 	historySvc.SetPostFetcher(&historyPostFetcher{delegate: postSvc})
 	postSvc.SetHistoryRecorder(&postHistoryRecorder{delegate: historySvc})
@@ -85,15 +96,17 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 
 	// SSE 未读数推流 hub：注入 notice service + Redpanda consumer hook（见 wire_notice.go）。
 	streamHub := newNoticeStreamHub(noticeSvc)
+	// 私信未读总数接入同一个 hub（第二个计数通道 dm-unread + 新消息摘要 dm-message，#241）。
+	wireMessageStream(messageSvc, streamHub)
 
 	// 跨领域 Facade 注入完成。如遗漏注入，相关领域会在请求时表现为空数据/校验失败，
 	// 这里打一条启动日志便于排查（强类型断言成本过高，用日志替代 panic，见 review P2-2）。
 	if logger.Log != nil {
-		logger.Log.Info("cross-domain facades injected: circle<-user/post, post<-user/circle, comment<-user/post, like<-post/comment, collect<-post, history<-post, notice<-user/post")
+		logger.Log.Info("cross-domain facades injected: circle<-user/post, post<-user/circle, comment<-user/post, like<-post/comment, collect<-post, share<-post, history<-post, notice<-user/post, follow<-user, message<-user")
 	}
 
-	// recommend 需要 post（hydrate + circle_id 反查）+ circle（joined IDs），均为只读消费者，无反向注入。
-	recommendSvc := newRecommendService(postSvc, circleSvc, circleVisibility)
+	// recommend 需要 post（hydrate + circle_id 反查）+ circle（joined IDs）+ follow（关注的用户 ID），均为只读消费者，无反向注入。
+	recommendSvc := newRecommendService(postSvc, circleSvc, circleVisibility, followSvc)
 
 	// trending 需要 post（hydrate + 交互态）+ circle（GetByIDs）+ user（GetBriefs），均为只读消费者。
 	trendingSvc := newTrendingService(postSvc, circleRepo, userFacade)
@@ -140,14 +153,18 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	registerCategory(root, deps, authCheck, OptionalLoginFn)
 	registerStorage(root, deps, authCheck)
 	registerUser(root, userSvc, authCheck, OptionalLoginFn)
+	registerUserSetting(root, userSettingSvc, authCheck)
 	registerAuth(root, deps, authCheck)
 	registerCircle(root, circleSvc, authCheck, OptionalLoginFn)
 	registerPost(root, postSvc, authCheck, OptionalLoginFn)
 	registerComment(root, commentSvc, authCheck, OptionalLoginFn)
 	registerLike(root, likeSvc, authCheck)
 	registerCollect(root, collectSvc, authCheck)
+	registerShare(root, shareSvc, authCheck)
 	registerHistory(root, historySvc, authCheck)
 	registerNotice(root, noticeSvc, authCheck)
+	registerFollow(root, followSvc, authCheck, OptionalLoginFn)
+	registerMessage(root, messageSvc, authCheck)
 	registerRecommend(root, recommendSvc, authCheck, OptionalLoginFn)
 	registerTrending(root, trendingSvc, authCheck, OptionalLoginFn)
 	registerDiscover(root, discoverSvc, authCheck)
@@ -156,8 +173,10 @@ func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	// 启动 Discover pool syncer（需要 discoverSvc 复用 RebuildPool；其它无依赖 syncer 在 apps/server.go）。
 	go redpanda.StartDiscoverSyncerWithRetry(discoverSvc)
 
-	// 启动机器人自动回复扫描器（需要 replySvc 执行扫描；aiagent.autonomy.enabled=false 时不启动）。
-	go redpanda.StartAgentAutoReplySyncerWithRetry(replySvc)
+	// 启动机器人自主行为扫描器：每轮先自动回复（replySvc）再自动发帖（#101，未配 hot_circle_id 时空转）；
+	// aiagent.autonomy.enabled=false 时不启动。
+	autoPostSvc := newAgentAutoPostService(deps, postSvc)
+	go redpanda.StartAgentAutoReplySyncerWithRetry(agentAutonomyScanner{ReplyService: replySvc, AutoPostService: autoPostSvc})
 
 	// 启动帖子 AI 审核 worker（#117）：仅 moderation 启用时；未启用时发帖直接发布，不需要 worker。
 	if conf.Config.Moderation.Active() {
