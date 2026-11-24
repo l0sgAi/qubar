@@ -73,6 +73,14 @@ describe('Notifications', () => {
     expect(items[2].find('.notice-avatar').text()).toBe('有')
   })
 
+  it('类型 12 缺 actor 时保留通知文案，隐藏回关与主页链接', async () => {
+    const wrapper = await mountWith([{ id: 'n12', notice_type: 12, is_read: true }])
+    const item = wrapper.get('.notice-item')
+    expect(item.get('.notice-text').text()).toBe('有人关注了你')
+    expect(item.attributes('href')).toBeUndefined()
+    expect(item.find('.notice-follow-btn').exists()).toBe(false)
+  })
+
   it('「审核」tab 请求数字类型 7,8,9,10,11', async () => {
     const wrapper = await mountPage()
     const reviewTab = wrapper.findAll('.notice-tab').find(el => el.text() === '审核')

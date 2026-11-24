@@ -6,7 +6,11 @@ import {
   invitePath,
   inviteUrl,
   acceptInviteErrorKey,
-  isInviteInvalidError
+  isInviteInvalidError,
+  parseEmailInput,
+  groupIgnoredEmails,
+  isInviteHandledError,
+  respondInviteErrorKey
 } from '@/constants/circleInvite'
 
 const link = (extra = {}) => ({ revoked: false, expired: false, max_uses: null, used_count: 0, ...extra })
@@ -71,5 +75,57 @@ describe('acceptInviteErrorKey / isInviteInvalidError', () => {
     expect(isInviteInvalidError({ status: 404 })).toBe(true)
     expect(isInviteInvalidError({ code: 203, status: 403 })).toBe(false)
     expect(isInviteInvalidError(undefined)).toBe(false)
+  })
+})
+
+describe('parseEmailInput', () => {
+  it('按换行 / 逗号（含全角）/ 分号 / 空白分隔，去掉空项，不去重不校验', () => {
+    expect(parseEmailInput(' Alice@Example.com\nbob@example.com ,carol@example.com，dan@x.io;eve@x.io；bad\n\n alice@example.com ')).toEqual([
+      'Alice@Example.com', 'bob@example.com', 'carol@example.com', 'dan@x.io', 'eve@x.io', 'bad', 'alice@example.com'
+    ])
+  })
+
+  it('空输入返回空数组', () => {
+    expect(parseEmailInput('')).toEqual([])
+    expect(parseEmailInput(' \n , ')).toEqual([])
+    expect(parseEmailInput(undefined)).toEqual([])
+  })
+})
+
+describe('groupIgnoredEmails', () => {
+  it('按 invalid / duplicate / already_invited 顺序分组，只保留非空组', () => {
+    expect(groupIgnoredEmails([
+      { email: 'a@x.io', reason: 'already_invited' },
+      { email: 'bad', reason: 'invalid' },
+      { email: 'a@x.io', reason: 'already_invited' },
+      { email: 'Bad2', reason: 'invalid' }
+    ])).toEqual([
+      { reason: 'invalid', emails: ['bad', 'Bad2'] },
+      { reason: 'already_invited', emails: ['a@x.io', 'a@x.io'] }
+    ])
+  })
+
+  it('未知原因归入 invalid；空 / 缺省返回空数组', () => {
+    expect(groupIgnoredEmails([{ email: 'x', reason: 'weird' }])).toEqual([{ reason: 'invalid', emails: ['x'] }])
+    expect(groupIgnoredEmails([])).toEqual([])
+    expect(groupIgnoredEmails(undefined)).toEqual([])
+  })
+})
+
+describe('isInviteHandledError / respondInviteErrorKey', () => {
+  it('409 / 207 视为已处理', () => {
+    expect(isInviteHandledError({ code: 207 })).toBe(true)
+    expect(isInviteHandledError({ status: 409 })).toBe(true)
+    expect(isInviteHandledError({ code: 204 })).toBe(false)
+  })
+
+  it.each([
+    [{ code: 204 }, 'circle.invite.mine.error.invalid'],
+    [{ status: 404 }, 'circle.invite.mine.error.invalid'],
+    [{ code: 203 }, 'circle.invite.mine.error.banned'],
+    [{ status: 403 }, 'circle.invite.mine.error.banned'],
+    [new Error('Network Error'), 'circle.invite.mine.error.generic']
+  ])('%o → %s', (error, key) => {
+    expect(respondInviteErrorKey(error)).toBe(key)
   })
 })

@@ -1,6 +1,7 @@
 export default {
   // 通用
   common: {
+    retry: '重试',
     appName: '趣吧',
     search: '搜索',
     searchPlaceholder: '搜索兴趣圈、帖子...',
@@ -102,6 +103,12 @@ export default {
     managedCircles: '我管理的圈子',
     circleInvites: '邀请成员',
     invite: '圈子邀请',
+    myInvites: '圈子邀请',
+    following: '关注列表',
+    followers: '粉丝列表',
+    mutual: '互相关注',
+    messages: '私信',
+    chat: '聊天',
     // 动态标题模板：详情页数据加载成功后展示具体内容（见 utils/pageTitle.js）
     postDetailName: '{name}',
     circleDetailName: '{name}',
@@ -339,6 +346,78 @@ export default {
           banned: '你已被该圈子拉黑，无法加入',
           invalid: '邀请已失效',
           generic: '加入失败，请稍后重试'
+        }
+      },
+      tabs: {
+        link: '邀请链接',
+        email: '邮箱邀请'
+      },
+      email: {
+        title: '邮箱邀请',
+        desc: '按注册邮箱邀请指定用户。系统不会发送邮件，对方登录后在「圈子邀请」里确认加入；还没注册的邮箱注册后也能看到',
+        placeholder: '每行一个邮箱，也可以用逗号分隔，一次最多 50 个',
+        count: '{n} / {max}',
+        add: '添加邀请',
+        emptyInput: '请输入要邀请的邮箱',
+        tooMany: '一次最多添加 {max} 个邮箱，当前 {n} 个',
+        addedCount: '已添加 {n} 个邀请',
+        noneAdded: '没有新增邀请',
+        ignoredTitle: '以下邮箱未添加',
+        ignored: {
+          invalid: '格式不正确',
+          duplicate: '本次重复填写',
+          already_invited: '已有待接受或已接受的邀请'
+        },
+        filter: {
+          all: '全部',
+          pending: '待接受',
+          accepted: '已接受',
+          rejected: '已拒绝',
+          revoked: '已撤销'
+        },
+        invitedBy: '{name} 邀请',
+        createdAt: '邀请于 {time}',
+        updatedAt: '更新于 {time}',
+        unknownInviter: '未知用户',
+        empty: '还没有邮箱邀请',
+        emptyFiltered: '没有该状态的邀请',
+        loadFailed: '邮箱邀请加载失败',
+        revoke: '撤销',
+        revokeTitle: '撤销邮箱邀请',
+        revokeContent: '撤销后 {email} 将看不到这条邀请。确定撤销吗？',
+        revoked: '已撤销邀请',
+        error: {
+          handled: '该邀请已处理',
+          notPrivate: '只有私密圈可以添加邮箱邀请',
+          badRequest: '邮箱数量需要在 1 ~ 50 个之间',
+          notFound: '该邀请不存在，列表已刷新',
+          generic: '操作失败，请稍后重试'
+        }
+      },
+      // 我的邀请：后端不发邮件、没有站内通知，这里是被邀请人唯一的入口
+      mine: {
+        title: '圈子邀请',
+        navEntry: '圈子邀请',
+        desc: '圈主或管理员按你的注册邮箱发出的邀请会出现在这里',
+        entryPending: '你有 {n} 个待接受的圈子邀请',
+        entryNone: '暂无待接受的圈子邀请',
+        entryAction: '去查看',
+        invitedBy: '{name} 邀请你加入',
+        unknownInviter: '圈子管理员',
+        accept: '接受',
+        reject: '拒绝',
+        rejectTitle: '拒绝邀请',
+        rejectContent: '拒绝后这条邀请不再显示，确定不加入「{name}」吗？',
+        accepted: '已加入「{name}」',
+        alreadyMember: '你已经是该圈子成员',
+        rejected: '已拒绝邀请',
+        empty: '暂无待接受的圈子邀请',
+        loadFailed: '邀请加载失败，请稍后重试',
+        retry: '重试',
+        error: {
+          invalid: '邀请已失效',
+          banned: '你已被该圈子拉黑，无法加入',
+          generic: '操作失败，请稍后重试'
         }
       }
     },
@@ -814,7 +893,6 @@ export default {
       empty: '本圈还没有机器人，点击「新建机器人」创建第一个',
       emptySearch: '没有匹配的机器人',
       loadFailed: '加载圈内机器人失败',
-      replyNotLive: '圈内机器人暂不会回复圈内帖子（关键词/手动触发均未生效），当前仅保存配置；回复能力将在后续版本开放。',
       credentialsOwnerOnly: 'API 协议、自定义地址与 API Key 仅圈主可修改；如需调整请联系圈主'
     },
     searchPlaceholder: '搜索机器人名称',
@@ -824,6 +902,41 @@ export default {
     deleteSuccess: '已删除',
     deleteConfirm: '确定删除「{name}」吗？删除后不可恢复（软删，无恢复接口）',
     statusUpdateFailed: '状态更新失败',
+    autoPost: {
+      section: '自动发帖',
+      enabled: '向热点圈自动发帖',
+      hint: '平台须开启自主行为，并配置热点圈和搜索服务。',
+      interval: '尝试间隔（分钟）',
+      daily: '每天最多尝试次数',
+      hours: '活跃时段（UTC+8）',
+      allDay: '全天',
+      start: '开始小时',
+      end: '结束小时（不含）',
+      topics: '搜索关键词（留空使用平台默认）',
+      errInterval: '间隔须为 0 至 10080 的整数，启用时至少 10 分钟。',
+      errDaily: '每日上限须为 0 至 48 的整数，启用时至少 1 次。',
+      errHours: '起始小时须为 0 至 23，结束小时须为 1 至 24。允许跨零点，起止时间须不同。',
+      errTopics: '最多 10 个不同的关键词，每个须为 1 至 50 个字符。'
+    },
+    manualReply: {
+      action: '手动回复',
+      title: '让「{name}」回复帖子',
+      target: '帖子 UUID 或链接',
+      circleHint: '选择本圈已发布、可回复的帖子。生成评论可能需要几十秒。',
+      globalHint: '选择已发布、可回复的帖子。生成评论可能需要几十秒。',
+      invalid: '请输入有效的帖子 UUID 或详情页链接。',
+      success: '评论已发布。',
+      viewComment: '查看生成的评论',
+      checkPost: '打开帖子核对评论',
+      close: '关闭',
+      uncertain: '尚未确认回复结果。请先到帖子中核对，再决定是否重新发起。',
+      unavailable: '请确认机器人已启用手动模式，帖子已发布且未锁定。',
+      forbidden: '当前账号没有触发这个机器人的权限。',
+      notFound: '机器人或帖子不存在，或帖子不在该机器人的管理范围内。',
+      conflict: '机器人或帖子状态已变化。请刷新列表后核对。',
+      rateLimit: '已达到机器人的回复频率限制，请稍后再试。',
+      failed: '回复生成失败。请检查机器人配置及服务状态。'
+    },
     triggerModes: {
       all: '全部新帖',
       keyword: '关键词触发',
@@ -839,6 +952,7 @@ export default {
       actions: '操作'
     },
     form: {
+      createEnabledHint: '机器人创建后默认启用，可在管理列表中停用。',
       sectionBasic: '基本信息',
       sectionApi: '模型接入',
       sectionTrigger: '触发与限频',
@@ -1050,10 +1164,12 @@ export default {
       goRegister: '注册新账号',
       continueGuest: '暂不登录，继续浏览',
       actions: {
+        message: '发私信',
         like: '点赞',
         collect: '收藏',
         comment: '发表评论',
-        join: '加入圈子'
+        join: '加入圈子',
+        follow: '关注用户'
       }
     }
   },
@@ -1122,6 +1238,7 @@ export default {
       comment: '评论',
       reply: '回复',
       mention: '提及',
+      follow: '关注',
       review: '审核'
     },
     readAll: '全部已读',
@@ -1147,7 +1264,10 @@ export default {
       postRejected: '你的帖子《{snippet}》未通过审核',
       postReported: '本圈帖子《{snippet}》被举报，请及时复核',
       postSelfHarm: '本圈 {actor} 的帖子《{snippet}》疑似有自伤 / 轻生倾向，请关注',
-      postRemoved: '你的帖子《{snippet}》被举报，经圈主 / 管理员复核已下架'
+      postRemoved: '你的帖子《{snippet}》被举报，经圈主 / 管理员复核已下架',
+      follow: '{actor} 关注了你',
+      // 关注者已注销 / 禁用（actor 缺省）
+      followAnonymous: '有人关注了你'
     },
     mention: {
       button: '提及',
@@ -1155,6 +1275,121 @@ export default {
       empty: '未找到相关用户',
       limitTip: '最多可提及 10 人',
       suggestHint: "键入 {'@'} 可快速提及用户"
+    }
+  },
+
+  // 用户关注（后端 v0.9.0；B 线页面文案在本段追加）
+  follow: {
+    // 关注按钮：按 relation 取（utils/follow.js 的 relationLabelKey）
+    relation: {
+      none: '关注',
+      following: '已关注',
+      followedBy: '回关',
+      mutual: '互相关注'
+    },
+    unfollow: '取消关注',
+    followingCount: '关注',
+    followerCount: '粉丝',
+    listPrivate: '对方未公开关注和粉丝列表',
+    empty: {
+      following: '还没有关注任何人',
+      followers: '还没有粉丝',
+      mutual: '还没有互相关注的人'
+    },
+    settings: {
+      groupTitle: '隐私设置',
+      listVisibility: '公开我的关注和粉丝列表',
+      listVisibilityHint: '关闭后其他人只能看到数量，看不到名单',
+      loadFailed: '设置加载失败',
+      saved: '已保存',
+      saveFailed: '保存失败，请稍后重试'
+    },
+    mutualEntry: '互关',
+    you: '我',
+    retry: '重试',
+    loadFailed: '列表加载失败',
+    noMore: '没有更多了',
+    listOwner: '{name} 的关注与粉丝',
+    followBack: '回关',
+    // 错误文案：utils/follow.js 的 followErrorKey
+    error: {
+      limitReached: '关注人数已达上限',
+      self: '不能关注自己',
+      listPrivate: '对方未公开关注和粉丝列表',
+      userNotFound: '用户不存在',
+      loginRequired: '请先登录',
+      generic: '操作失败，请稍后重试'
+    }
+  },
+
+  // 私信（后端 v0.9.0；C 线页面文案在本段追加。顶层 messages 是通用提示，不要混用）
+  message: {
+    title: '私信',
+    entry: '私信',
+    send: '发送',
+    inputPlaceholder: '发私信…',
+    empty: '还没有私信',
+    emptyChat: '还没有消息，打个招呼吧',
+    deletedUser: '已注销用户',
+    newMessagesDivider: '以下为新消息',
+    loadOlder: '查看更早的消息',
+    deleteConversation: '删除会话',
+    deleteConfirm: '删除后对方不受影响；对方再发消息时会话会重新出现，只显示删除之后的消息。',
+    // remaining_count 为数字时的提示（未关注 5 条限制）
+    remaining: '对方关注你或回复前，还可发送 {count} 条',
+    newMessageFrom: '{name} 给你发了私信',
+    // 非私信页收到新私信时的提示（DmToastListener）
+    newMessageToast: '{name}：{content}',
+    someone: '有人',
+    // 会话列表：我发的最后一条加前缀
+    ownPreview: '我：{content}',
+    loadFailed: '加载失败，点击重试',
+    deleted: '会话已删除',
+    deleteFailed: '删除失败，请稍后重试',
+    retry: '重试',
+    charCount: '{count} / {max}',
+    cannotMessageSelf: '不能给自己发私信',
+    peerDeleted: '对方账号已注销，无法发送私信',
+    // 谁可以给我发私信（utils/message.js 的 DM_PERMISSION_OPTIONS）
+    permission: {
+      label: '谁可以给我发私信',
+      everyone: '所有人',
+      following: '仅我关注的人',
+      mutual: '仅互相关注',
+      closed: '关闭私信',
+      desc: '修改后立即生效，不满足条件的人在聊天页会看到原因',
+      saved: '私信设置已更新',
+      saveFailed: '保存失败，请稍后重试',
+      loadFailed: '读取私信设置失败'
+    },
+    // 不能发送 / 发送失败：utils/message.js 的 dmReasonKey、dmSendErrorKey
+    error: {
+      recipientNotFound: '该用户不存在',
+      recipientUnavailable: '该用户不接收私信',
+      followingOnly: '对方只接收其关注的人的私信',
+      mutualOnly: '对方只接收互相关注的人的私信',
+      dmClosed: '对方已关闭私信',
+      dmLimitReached: '对方关注你或回复后可继续发送',
+      senderDisabled: '你的账号暂时无法发送私信',
+      conversationNotFound: '会话不存在',
+      rateLimited: '发送太频繁，请稍后再试',
+      contentEmpty: '消息不能为空',
+      contentTooLong: '消息不能超过 {max} 字',
+      network: '发送失败，请检查网络后重试',
+      unknown: '发送失败，请稍后重试'
+    }
+  },
+
+  // 帖子分享（后端 v0.9.0；D 线页面文案在本段追加）
+  share: {
+    button: '分享',
+    shared: '已分享',
+    linkCopied: '链接已复制',
+    copyFailed: '复制失败，请手动复制链接',
+    // 错误文案：utils/share.js 的 shareErrorKey
+    error: {
+      notFound: '内容不可分享',
+      retry: '分享计数失败，请重试'
     }
   },
 
@@ -1171,7 +1406,7 @@ export default {
   feed: {
     refreshed: '推荐已刷新',
     empty: '暂无内容',
-    emptyFollowing: '还没有加入圈子，去发现感兴趣的圈子吧',
+    emptyFollowing: '这里会显示你加入的圈子和关注的人发的帖子，去加入圈子或关注感兴趣的人吧',
     loadFailed: '加载失败',
     loginRequiredTab: '此内容需要登录后查看'
   },

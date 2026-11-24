@@ -66,3 +66,65 @@ export function acceptInviteErrorKey(error) {
 export function isInviteInvalidError(error) {
   return codeIs(error, 204, 404)
 }
+
+// ---------- 邮箱邀请 ----------
+
+// 一次最多录入的邮箱数（后端 1–50，超出 400）
+export const EMAIL_INVITE_MAX_BATCH = 50
+
+// 邮箱邀请状态（与后端枚举一致，勿改数值）
+export const EMAIL_INVITE_STATUS = {
+  PENDING: 0,
+  ACCEPTED: 1,
+  REVOKED: 2,
+  REJECTED: 3
+}
+
+// 状态 → 文案 key 后缀
+export const EMAIL_INVITE_STATUS_KEY = {
+  [EMAIL_INVITE_STATUS.PENDING]: 'pending',
+  [EMAIL_INVITE_STATUS.ACCEPTED]: 'accepted',
+  [EMAIL_INVITE_STATUS.REVOKED]: 'revoked',
+  [EMAIL_INVITE_STATUS.REJECTED]: 'rejected'
+}
+
+// 被忽略原因（展示顺序）
+export const EMAIL_IGNORED_REASONS = ['invalid', 'duplicate', 'already_invited']
+
+/**
+ * 解析批量录入的邮箱：按换行、逗号（含全角）、分号、空白分隔，去掉空项。
+ * 不在前端去重 / 校验格式，交给后端在 ignored 里按原因返回。
+ */
+export function parseEmailInput(text) {
+  return String(text || '')
+    .split(/[\s,，;；]+/)
+    .map(s => s.trim())
+    .filter(Boolean)
+}
+
+/** 把 ignored 按原因分组，只返回有内容的组：[{ reason, emails }] */
+export function groupIgnoredEmails(ignored) {
+  const groups = Object.fromEntries(EMAIL_IGNORED_REASONS.map(r => [r, []]))
+  for (const item of ignored || []) {
+    const reason = EMAIL_IGNORED_REASONS.includes(item?.reason) ? item.reason : 'invalid'
+    groups[reason].push(item.email)
+  }
+  return EMAIL_IGNORED_REASONS
+    .filter(r => groups[r].length > 0)
+    .map(r => ({ reason: r, emails: groups[r] }))
+}
+
+/** 撤销邮箱邀请返回 409：邀请已被接受或拒绝 */
+export function isInviteHandledError(error) {
+  return codeIs(error, 207, 409)
+}
+
+/**
+ * POST /circle/invite/email/respond 失败 → i18n key。
+ * 404：邀请失效（撤销 / 已拒绝 / 圈子不可用等，不区分原因）；403：被拉黑，邀请保持待接受。
+ */
+export function respondInviteErrorKey(error) {
+  if (codeIs(error, 204, 404)) return 'circle.invite.mine.error.invalid'
+  if (codeIs(error, 203, 403)) return 'circle.invite.mine.error.banned'
+  return 'circle.invite.mine.error.generic'
+}

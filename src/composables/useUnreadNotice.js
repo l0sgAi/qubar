@@ -9,6 +9,9 @@ import { useNoticeStream } from '@/composables/useNoticeStream'
 // - 全部消费方卸载 → 延迟 STOP_GRACE_MS 后 stop：页面切换（旧页卸载 → 新页挂载）期间不断连，
 //   避免每次跳转都重建 SSE；离开到无消费方的页面（如登录页）则最终停止
 // - 主动登出 → stopUnreadNotice() 立即停止
+//
+// 私信（后端 v0.9.0）：同一条连接还提供私信未读数 dmUnreadCount（与 unreadCount 独立）和 dm-message 事件，
+// 见 useNoticeStream.js。私信页 / 导航角标通过 useUnreadNotice() 或下方的 onDmMessage / refreshDmUnreadCount 使用。
 
 export const STOP_GRACE_MS = 3000
 
@@ -83,19 +86,38 @@ export function stopUnreadNotice() {
   if (!stream) return
   stream.stop()
   stream.unreadCount.value = 0
+  stream.dmUnreadCount.value = 0
+}
+
+/**
+ * 注册 dm-message 回调（不随组件生命周期，需自行注销）。组件内优先用 useUnreadNotice({ onDmMessage })。
+ * 只注册回调，不会建立连接：连接由导航栏等消费方持有。
+ * @param {Function} handler - (msg) => void，msg 见 useNoticeStream 的 onDmMessage
+ * @returns {Function} 注销函数
+ */
+export function onDmMessage(handler) {
+  return getStream().onDmMessage(handler)
+}
+
+/** 立即拉一次私信未读数（标记已读 / 删除会话后调用；SSE 正常时 dm-unread 约 1s 内也会推新值）。 */
+export function refreshDmUnreadCount() {
+  return getStream().refreshDmUnread()
 }
 
 /**
  * 组件内使用：挂载时 acquire、卸载时 release。
  * @param {Object} [options]
  * @param {Function} [options.onAuthExpired] - 服务端推送登录态失效时的回调（token 已清除）
- * @returns {{ unreadCount: Readonly<Ref<number>> }}
+ * @param {Function} [options.onDmMessage] - 收到 dm-message 时的回调（挂载时注册、卸载时注销）
+ * @returns {{ unreadCount: Readonly<Ref<number>>, dmUnreadCount: Readonly<Ref<number>>, dmSyncVersion: Readonly<Ref<number>> }}
  */
-export function useUnreadNotice({ onAuthExpired } = {}) {
-  const { unreadCount } = getStream()
+export function useUnreadNotice({ onAuthExpired, onDmMessage: dmHandler } = {}) {
+  const { unreadCount, dmUnreadCount, dmSyncVersion } = getStream()
+  let offDm = null
 
   onMounted(() => {
     if (onAuthExpired) authExpiredHandlers.push(onAuthExpired)
+    if (dmHandler) offDm = getStream().onDmMessage(dmHandler)
     acquireUnreadNotice()
   })
 
@@ -104,10 +126,14 @@ export function useUnreadNotice({ onAuthExpired } = {}) {
       const i = authExpiredHandlers.lastIndexOf(onAuthExpired)
       if (i !== -1) authExpiredHandlers.splice(i, 1)
     }
+    if (offDm) {
+      offDm()
+      offDm = null
+    }
     releaseUnreadNotice()
   })
 
-  return { unreadCount: readonly(unreadCount) }
+  return { unreadCount: readonly(unreadCount), dmUnreadCount: readonly(dmUnreadCount), dmSyncVersion: readonly(dmSyncVersion) }
 }
 
 // 仅供单测：重置单例

@@ -34,7 +34,7 @@
 
     <NSpin :show="loading && (!posts.length || refreshing)">
       <div class="posts-list" :class="{ 'posts-list--loading': loading && (!posts.length || refreshing) }">
-        <div v-if="!loading && posts.length === 0" class="empty-state">
+        <div v-if="!loading && !loadFailed && posts.length === 0" class="empty-state">
           <NIcon size="64" :depth="3">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
               <path d="M19 20H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v1m2 13a2 2 0 0 1-2-2V7m2 13a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z"/>
@@ -61,6 +61,9 @@
               :view-count="post.views"
               :like-count="post.likes"
               :comment-count="post.comments"
+              :share-count="post.shareCount"
+              :status="post.status"
+              :shareable="post.status === 1"
               :tone="post.tone"
               flush>
               <template v-if="post.status !== undefined && post.status !== 1" #meta>
@@ -146,15 +149,25 @@
                   </NIcon>
                   {{ formatNumber(post.views) }}
                 </span>
+                <ShareButton
+                  v-if="post.status === 1"
+                  :post-id="post.id"
+                  :title="post.title"
+                  :share-count="post.shareCount"
+                />
               </div>
             </div>
           </NCard>
           </template>
         </div>
 
+        <div v-if="loadFailed" class="list-footer" role="alert">
+          {{ t('feed.loadFailed') }}
+          <NButton size="small" @click="fetchPosts(!!searchAfter)">{{ t('common.retry') }}</NButton>
+        </div>
         <!-- 无限滚动哨兵 -->
         <div ref="sentinel" class="scroll-sentinel"></div>
-        <div v-if="posts.length" class="list-footer">
+        <div v-if="posts.length && !loadFailed" class="list-footer">
           <span v-if="loading" class="footer-text">{{ t('common.loading') }}</span>
           <span v-else-if="!hasMore" class="footer-text">{{ t('common.noMore') }}</span>
         </div>
@@ -170,6 +183,7 @@ import { useI18n } from 'vue-i18n'
 import { getMyPosts, getUserPosts } from '@/api/post'
 import { useFormatTime, useFormatNumber } from '@/utils/i18n'
 import ImageCarousel from '@/components/common/ImageCarousel.vue'
+import ShareButton from '@/components/post/ShareButton.vue'
 import MobilePostItem from '@/components/post/MobilePostItem.vue'
 import AppDropdown from '@/components/common/AppDropdown.vue'
 import SmartLink from '@/components/common/SmartLink.vue'
@@ -213,6 +227,7 @@ const loading = ref(false)
 // 整页刷新态（首次加载 / 关键字搜索 / 清空搜索）：与「追加下一页」区分，
 // 用于在列表已有数据时也展示 loading 覆盖层
 const refreshing = ref(false)
+const loadFailed = ref(false)
 
 // 列表与分页状态（两种接口共用，响应结构一致）
 const PAGE_SIZE = 10
@@ -231,7 +246,7 @@ const transformPost = (p) => ({
   authorAvatar: p.author_avatar || '',
   circleName: p.circle_name || '',
   images: p.images || [],
-  status: p.status,
+  status: p.status ?? (props.userId ? 1 : undefined),
   tone: getPostStatusInfo(p.status).tone,
   isPinned: p.is_pinned,
   isEssence: p.is_essence,
@@ -239,6 +254,7 @@ const transformPost = (p) => ({
   comments: p.comment_count || 0,
   likes: p.like_count || 0,
   views: p.view_count || 0,
+  shareCount: p.share_count ?? null,
   collects: p.collect_count || 0
 })
 
@@ -246,6 +262,7 @@ const transformPost = (p) => ({
 // 数据源由 userId 决定 —— /post/my（我的）或 /post/user/:userId（他人）
 const fetchPosts = async (append = false) => {
   if (loading.value) return
+  loadFailed.value = false
   loading.value = true
   // 非追加（首页 / 新搜索）属于整页刷新，触发 loading 覆盖层
   refreshing.value = !append
@@ -274,6 +291,7 @@ const fetchPosts = async (append = false) => {
       emit('total-change', data.total || 0)
     }
   } catch (error) {
+    loadFailed.value = true
     console.error('获取帖子列表失败:', error)
     message.error(error.message || t('common.operationFailed'))
   } finally {
@@ -310,11 +328,11 @@ const setupObserver = () => {
     observer.disconnect()
     observer = null
   }
-  if (!sentinel.value || !hasMore.value || loading.value) return
+  if (!sentinel.value || !hasMore.value || loading.value || loadFailed.value) return
 
   observer = new IntersectionObserver(
     (entries) => {
-      if (entries[0].isIntersecting && hasMore.value && !loading.value) {
+      if (entries[0].isIntersecting && hasMore.value && !loading.value && !loadFailed.value) {
         fetchPosts(true)
       }
     },

@@ -52,24 +52,6 @@
 
             <!-- 操作按钮组 -->
             <div class="action-buttons">
-              <!-- 免打扰按钮（移动端门户不提供，见 docs/mobile-adaptation-plan.md 2.3） -->
-              <NButton
-                v-if="circleDetail.is_joined && !mobileShell"
-                size="large"
-                quaternary
-                round
-                @click="handleToggleDisturb"
-                :type="circleDetail.member_is_disturb ? 'warning' : 'default'"
-              >
-                <template #icon>
-                  <NIcon>
-                    <BellOffIcon v-if="circleDetail.member_is_disturb" />
-                    <BellIcon v-else />
-                  </NIcon>
-                </template>
-                {{ circleDetail.member_is_disturb ? t('circle.disturbOn') : t('circle.disturbOff') }}
-              </NButton>
-
               <!-- 创建帖子按钮（移动端不支持发帖） -->
               <NButton
                 v-if="circleDetail.is_joined && !mobileShell"
@@ -164,14 +146,11 @@
                 {{ isButtonHovered ? t('circle.leaveCircle') : t('circle.joined') }}
               </NButton>
 
-              <!-- 更多选项下拉菜单 -->
-              <AppDropdown :options="moreOptions" @select="handleMoreSelect">
-                <NButton size="large" quaternary round>
-                  <template #icon>
-                    <NIcon><MoreIcon /></NIcon>
-                  </template>
-                </NButton>
-              </AppDropdown>
+              <NButton size="large" quaternary round :aria-label="t('circle.shareCircle')" @click="handleShare">
+                <template #icon>
+                  <NIcon><ShareIcon /></NIcon>
+                </template>
+              </NButton>
             </div>
           </div>
         </div>
@@ -191,11 +170,15 @@
           <NTabs v-else v-model:value="activeTab" type="segment" animated>
             <NTabPane name="hot" :tab="t('post.hottest')">
               <div class="posts-list">
-                <div v-if="hotPosts.length === 0 && !hotLoading" class="empty-state">
+                <div v-if="hotPosts.length === 0 && !hotLoading && !postsFailed.hot" class="empty-state">
                   <p>{{t('post.noPosts')}}</p>
                 </div>
                 <div v-else>
                   <PostList :posts="hotPosts" />
+                </div>
+                <div v-if="postsFailed.hot" class="empty-state" role="alert">
+                  {{ t('feed.loadFailed') }}
+                  <NButton size="small" @click="fetchPosts('hot', !!hotSearchAfter)">{{ t('common.retry') }}</NButton>
                 </div>
                 <div ref="hotSentinel" class="load-sentinel"></div>
                 <!-- 首次加载用骨架屏；追加翻页保留底部小 spinner -->
@@ -207,11 +190,15 @@
             </NTabPane>
             <NTabPane name="new" :tab="t('post.latest')">
               <div class="posts-list">
-                <div v-if="newPosts.length === 0 && !newLoading" class="empty-state">
+                <div v-if="newPosts.length === 0 && !newLoading && !postsFailed.new" class="empty-state">
                   <p>{{t('post.noPosts')}}</p>
                 </div>
                 <div v-else>
                   <PostList :posts="newPosts" />
+                </div>
+                <div v-if="postsFailed.new" class="empty-state" role="alert">
+                  {{ t('feed.loadFailed') }}
+                  <NButton size="small" @click="fetchPosts('new', !!newSearchAfter)">{{ t('common.retry') }}</NButton>
                 </div>
                 <div ref="newSentinel" class="load-sentinel"></div>
                 <!-- 首次加载用骨架屏；追加翻页保留底部小 spinner -->
@@ -223,11 +210,15 @@
             </NTabPane>
             <NTabPane name="top" :tab="t('post.highlights')">
               <div class="posts-list">
-                <div v-if="topPosts.length === 0 && !topLoading" class="empty-state">
+                <div v-if="topPosts.length === 0 && !topLoading && !postsFailed.top" class="empty-state">
                   <p>{{t('post.noPosts')}}</p>
                 </div>
                 <div v-else>
                   <PostList :posts="topPosts" />
+                </div>
+                <div v-if="postsFailed.top" class="empty-state" role="alert">
+                  {{ t('feed.loadFailed') }}
+                  <NButton size="small" @click="fetchPosts('top', !!topSearchAfter)">{{ t('common.retry') }}</NButton>
                 </div>
                 <div ref="topSentinel" class="load-sentinel"></div>
                 <!-- 首次加载用骨架屏；追加翻页保留底部小 spinner -->
@@ -357,12 +348,11 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, inject, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch, inject, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NTabs, NTabPane, NButton, NIcon, NTag, NSpin, NTooltip, useMessage, useDialog } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import AppShell from '@/components/layout/AppShell.vue'
-import AppDropdown from '@/components/common/AppDropdown.vue'
 import { useAppShell } from '@/composables/useAppShell'
 import { shareOrCopy } from '@/utils/share'
 import PostList from '@/components/post/PostList.vue'
@@ -376,7 +366,7 @@ import { usePageTitle } from '@/composables/usePageTitle'
 import { isManager, needsInviteToJoin, joinErrorKey, isForbiddenError } from '@/constants/circle'
 import { canManageInvites } from '@/constants/circleInvite'
 import { getModerationCounts } from '@/api/moderation'
-import { Bell as BellIcon, BellOff as BellOffIcon, Edit as EditIcon, DotsVertical as MoreIcon } from '@vicons/tabler'
+import { Edit as EditIcon, Share as ShareIcon } from '@vicons/tabler'
 import { User as UserIcon, FileText as FileTextIcon, Flame as FlameIcon } from '@vicons/tabler'
 import { ShieldCheck as ShieldCheckIcon, Lock as LockIcon, UserPlus as UserPlusIcon } from '@vicons/tabler'
 
@@ -391,22 +381,6 @@ const { offset, mobileShell, contentStyle } = useAppShell()
 
 // 注入圈子搜索状态设置方法
 const setCircleSearch = inject('setCircleSearch', () => {})
-
-// 更多选项下拉菜单（移动端只保留分享：举报尚在开发中，门户不展示）
-const moreOptions = computed(() => {
-  const options = [
-    {
-      label: t('circle.shareCircle'),
-      key: 'share'
-    },
-    {
-      label: t('circle.report'),
-      key: 'report'
-    }
-  ]
-
-  return mobileShell.value ? options.filter(o => o.key === 'share') : options
-})
 
 // 圈子详情数据
 const circleDetail = ref({
@@ -485,6 +459,7 @@ const topHasMore = ref(true)
 const POST_PAGE_SIZE = 20
 
 const tabTypeMap = { hot: 1, new: 2, top: 3 }
+const postsFailed = reactive({ hot: false, new: false, top: false })
 const tabStateMap = {
   hot: { posts: hotPosts, loading: hotLoading, searchAfter: hotSearchAfter, hasMore: hotHasMore },
   new: { posts: newPosts, loading: newLoading, searchAfter: newSearchAfter, hasMore: newHasMore },
@@ -508,6 +483,8 @@ const transformPostData = (apiPosts) => {
     likeCount: post.like_count || 0,
     commentCount: post.comment_count || 0,
     collectCount: post.collect_count || 0,
+    // /circle/posts 只返回 share_count，不返回 is_shared（按未分享显示）
+    shareCount: post.share_count ?? null,
     showCircle: false
   }))
 }
@@ -518,6 +495,7 @@ const fetchPosts = async (tab, append = false) => {
   // 私密圈非成员：后端必返回 403，不发请求，直接展示「仅成员可见」
   if (membersOnly.value) return
 
+  postsFailed[tab] = false
   state.loading.value = true
   try {
     const params = {
@@ -545,6 +523,7 @@ const fetchPosts = async (tab, append = false) => {
       // 私密圈且已不是成员（被移出 / 退出）：展示空态，不弹通用错误
       postsForbidden.value = true
     } else {
+      postsFailed[tab] = true
       message.error(t('messages.getDetailFailed', { error: error.message || t('common.unknownError') }))
     }
   } finally {
@@ -703,42 +682,15 @@ const doLeaveCircle = async () => {
   }
 }
 
-// 切换免打扰
-const handleToggleDisturb = async () => {
-  try {
-    // TODO: 调用切换免打扰接口
-    circleDetail.value.member_is_disturb = !circleDetail.value.member_is_disturb
-    message.success(circleDetail.value.member_is_disturb ? t('circle.disturbEnabled') : t('circle.disturbDisabled'))
-  } catch (error) {
-    message.error(t('messages.operationFailed', { error: error.message || t('common.unknownError') }))
-  }
-}
-
 // 创建帖子
 const handleCreatePost = () => {
   // TODO: 跳转到发帖页面，并传递圈子ID
   router.push(`/create-post?circleId=${circleDetail.value.id}`)
 }
 
-// 更多选项处理
-const handleMoreSelect = (key) => {
-  switch (key) {
-    case 'share':
-      if (mobileShell.value) {
-        handleMobileShare()
-      } else {
-        message.info(t('common.featureInDevelopment'))
-      }
-      break
-    case 'report':
-      message.info(t('common.featureInDevelopment'))
-      break
-  }
-}
-
-// 移动端分享：系统分享面板，不支持时复制链接
-const handleMobileShare = async () => {
-  const result = await shareOrCopy({ title: circleDetail.value.name, url: window.location.href })
+// 分享圈子详情页：系统分享面板，不支持时复制链接
+const handleShare = async () => {
+  const result = await shareOrCopy({ title: circleDetail.value.name, url: new URL(router.resolve(`/circle/${circleDetail.value.id}`).href, window.location.origin).href })
   if (result === 'copied') message.success(t('mobile.linkCopied'))
   else if (result === 'failed') message.error(t('mobile.copyFailed'))
 }
@@ -790,7 +742,7 @@ const setupObservers = () => {
     const observer = new IntersectionObserver((entries) => {
       if (entries[0].isIntersecting) {
         const state = tabStateMap[tab]
-        if (state.hasMore.value && !state.loading.value) {
+        if (state.hasMore.value && !state.loading.value && !postsFailed[tab]) {
           fetchPosts(tab, true)
         }
       }
@@ -829,6 +781,7 @@ watch(() => route.params.id, async (newId, oldId) => {
   hotHasMore.value = true
   newHasMore.value = true
   topHasMore.value = true
+  for (const tab of Object.keys(tabStateMap)) postsFailed[tab] = false
   postsForbidden.value = false
   pendingModCount.value = 0
   pendingModFull.value = false

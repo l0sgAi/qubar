@@ -1,6 +1,7 @@
 export default {
   // 通用
   common: {
+    retry: 'Retry',
     appName: 'Qubar',
     search: 'Search',
     searchPlaceholder: 'Search circles, posts...',
@@ -102,6 +103,12 @@ export default {
     managedCircles: 'Circles I Manage',
     circleInvites: 'Invite Members',
     invite: 'Circle Invitation',
+    myInvites: 'Circle Invitations',
+    following: 'Following',
+    followers: 'Followers',
+    mutual: 'Mutual Follows',
+    messages: 'Messages',
+    chat: 'Chat',
     // Dynamic title templates: show concrete content after data loads (see utils/pageTitle.js)
     postDetailName: '{name}',
     circleDetailName: '{name}',
@@ -339,6 +346,78 @@ export default {
           banned: 'You have been banned from this circle and cannot join',
           invalid: 'Invitation no longer valid',
           generic: 'Failed to join, please try again later'
+        }
+      },
+      tabs: {
+        link: 'Invite Links',
+        email: 'Email Invites'
+      },
+      email: {
+        title: 'Email Invites',
+        desc: 'Invite specific people by their account email. No email is sent. They confirm in "Circle Invitations" after signing in, and emails not yet registered see it after signing up.',
+        placeholder: 'One email per line, or separated by commas. Up to 50 at a time.',
+        count: '{n} / {max}',
+        add: 'Add Invites',
+        emptyInput: 'Enter the emails to invite',
+        tooMany: 'Up to {max} emails at a time, you entered {n}',
+        addedCount: '{n} invites added',
+        noneAdded: 'No new invites added',
+        ignoredTitle: 'These emails were not added',
+        ignored: {
+          invalid: 'Invalid format',
+          duplicate: 'Repeated in this batch',
+          already_invited: 'Already has a pending or accepted invite'
+        },
+        filter: {
+          all: 'All',
+          pending: 'Pending',
+          accepted: 'Accepted',
+          rejected: 'Declined',
+          revoked: 'Revoked'
+        },
+        invitedBy: 'Invited by {name}',
+        createdAt: 'Invited {time}',
+        updatedAt: 'Updated {time}',
+        unknownInviter: 'Unknown user',
+        empty: 'No email invites yet',
+        emptyFiltered: 'No invites with this status',
+        loadFailed: 'Failed to load email invites',
+        revoke: 'Revoke',
+        revokeTitle: 'Revoke Email Invite',
+        revokeContent: '{email} will no longer see this invitation. Revoke it?',
+        revoked: 'Invite revoked',
+        error: {
+          handled: 'This invite has already been handled',
+          notPrivate: 'Only private circles can add email invites',
+          badRequest: 'Enter between 1 and 50 emails',
+          notFound: 'This invite no longer exists. The list has been refreshed.',
+          generic: 'Operation failed, please try again later'
+        }
+      },
+      // My invitations: the backend sends no email or notification, so this is the only entry point
+      mine: {
+        title: 'Circle Invitations',
+        navEntry: 'Invitations',
+        desc: 'Invitations sent to your account email by circle owners or admins appear here',
+        entryPending: 'You have {n} pending circle invitations',
+        entryNone: 'No pending circle invitations',
+        entryAction: 'View',
+        invitedBy: '{name} invited you to join',
+        unknownInviter: 'A circle admin',
+        accept: 'Accept',
+        reject: 'Decline',
+        rejectTitle: 'Decline Invitation',
+        rejectContent: 'This invitation will no longer be shown. Decline joining {name}?',
+        accepted: 'Joined {name}',
+        alreadyMember: 'You are already a member of this circle',
+        rejected: 'Invitation declined',
+        empty: 'No pending circle invitations',
+        loadFailed: 'Failed to load invitations, please try again later',
+        retry: 'Retry',
+        error: {
+          invalid: 'Invitation no longer valid',
+          banned: 'You have been banned from this circle and cannot join',
+          generic: 'Operation failed, please try again later'
         }
       }
     },
@@ -812,7 +891,6 @@ export default {
       empty: 'No agents in this circle yet — create the first one',
       emptySearch: 'No matching agents',
       loadFailed: 'Failed to load circle agents',
-      replyNotLive: 'Circle agents do not reply to posts yet (keyword/manual triggers are inactive); they are saved as configuration only. Replies will arrive in a later release.',
       credentialsOwnerOnly: 'Protocol, base URL and API key can only be changed by the circle owner.'
     },
     searchPlaceholder: 'Search agents by name',
@@ -822,6 +900,41 @@ export default {
     deleteSuccess: 'Deleted',
     deleteConfirm: 'Delete "{name}"? This cannot be undone (soft delete, no restore).',
     statusUpdateFailed: 'Failed to update status',
+    autoPost: {
+      section: 'Automatic posting',
+      enabled: 'Post automatically in the hot circle',
+      hint: 'The platform must enable autonomous actions and configure a hot circle and search service.',
+      interval: 'Minutes between attempts',
+      daily: 'Maximum daily attempts',
+      hours: 'Active hours (UTC+8)',
+      allDay: 'All day',
+      start: 'Start hour',
+      end: 'End hour (exclusive)',
+      topics: 'Search keywords (leave empty to use platform defaults)',
+      errInterval: 'Use a whole number from 0 to 10080 minutes, or at least 10 when enabled.',
+      errDaily: 'Use a whole number from 0 to 48 attempts, or at least 1 when enabled.',
+      errHours: 'Start at 0–23 and end at 1–24. The hours must differ and can span midnight.',
+      errTopics: 'Enter up to 10 distinct keywords of 1–50 characters each.'
+    },
+    manualReply: {
+      action: 'Reply manually',
+      title: 'Reply to a post as {name}',
+      target: 'Post UUID or link',
+      circleHint: 'Choose a published, unlocked post in this circle. Generating a reply may take a minute.',
+      globalHint: 'Choose a published, unlocked post. Generating a reply may take a minute.',
+      invalid: 'Enter a valid post UUID or post link.',
+      success: 'Comment published.',
+      viewComment: 'View comment',
+      checkPost: 'Check comments on the post',
+      close: 'Close',
+      uncertain: 'The result is unconfirmed. Check the post for the reply before submitting again.',
+      unavailable: 'Check that the agent is enabled in manual mode and the post is published and unlocked.',
+      forbidden: 'Your account does not have permission to trigger this agent.',
+      notFound: 'The agent or post is missing, or the post is outside the scope of this agent.',
+      conflict: 'The agent or post changed. Refresh the list and check its status.',
+      rateLimit: 'The agent has reached its reply rate limit. Try again later.',
+      failed: 'Reply generation failed. Check the agent configuration and service status.'
+    },
     triggerModes: {
       all: 'All new posts',
       keyword: 'Keywords',
@@ -837,6 +950,7 @@ export default {
       actions: 'Actions'
     },
     form: {
+      createEnabledHint: 'New agents are enabled. You can disable an agent in the management list.',
       sectionBasic: 'Basic Info',
       sectionApi: 'Model Access',
       sectionTrigger: 'Trigger & Rate Limit',
@@ -1049,10 +1163,12 @@ export default {
       goRegister: 'Create an account',
       continueGuest: 'Not now, keep browsing',
       actions: {
+        message: 'send messages',
         like: 'like posts',
         collect: 'collect posts',
         comment: 'post comments',
-        join: 'join circles'
+        join: 'join circles',
+        follow: 'follow people'
       }
     }
   },
@@ -1121,6 +1237,7 @@ export default {
       comment: 'Comments',
       reply: 'Replies',
       mention: 'Mentions',
+      follow: 'Follows',
       review: 'Review'
     },
     readAll: 'Mark all as read',
@@ -1145,7 +1262,10 @@ export default {
       postRejected: 'Your post "{snippet}" didn\'t pass review',
       postReported: 'A post in your circle, "{snippet}", was reported. Please review it.',
       postSelfHarm: 'A post by {actor} in your circle, "{snippet}", may show signs of self-harm. Please check in.',
-      postRemoved: 'Your post "{snippet}" was reported and removed after review by a circle owner / admin'
+      postRemoved: 'Your post "{snippet}" was reported and removed after review by a circle owner / admin',
+      follow: '{actor} followed you',
+      // Follower deleted / disabled (no actor)
+      followAnonymous: 'Someone followed you'
     },
     mention: {
       button: 'Mention',
@@ -1153,6 +1273,121 @@ export default {
       empty: 'No users found',
       limitTip: 'Mention up to 10 users',
       suggestHint: "Type {'@'} to mention someone"
+    }
+  },
+
+  // User follow (backend v0.9.0; workstream B appends page copy here)
+  follow: {
+    // Follow button label by relation (relationLabelKey in utils/follow.js)
+    relation: {
+      none: 'Follow',
+      following: 'Following',
+      followedBy: 'Follow back',
+      mutual: 'Mutual'
+    },
+    unfollow: 'Unfollow',
+    followingCount: 'Following',
+    followerCount: 'Followers',
+    listPrivate: 'This user keeps their following and follower lists private',
+    empty: {
+      following: 'Not following anyone yet',
+      followers: 'No followers yet',
+      mutual: 'No mutual follows yet'
+    },
+    settings: {
+      groupTitle: 'Privacy',
+      listVisibility: 'Show my following and follower lists',
+      listVisibilityHint: 'When off, others only see the counts, not the names',
+      loadFailed: 'Failed to load settings',
+      saved: 'Saved',
+      saveFailed: 'Failed to save. Please try again later'
+    },
+    mutualEntry: 'Mutual',
+    you: 'You',
+    retry: 'Retry',
+    loadFailed: 'Failed to load the list',
+    noMore: 'No more',
+    listOwner: "{name}'s following and followers",
+    followBack: 'Follow back',
+    // Error copy: followErrorKey in utils/follow.js
+    error: {
+      limitReached: 'You have reached the follow limit',
+      self: "You can't follow yourself",
+      listPrivate: 'This user keeps their following and follower lists private',
+      userNotFound: 'User not found',
+      loginRequired: 'Please log in first',
+      generic: 'Something went wrong. Please try again later'
+    }
+  },
+
+  // Direct messages (backend v0.9.0; workstream C appends page copy here. Top-level `messages` is generic toasts)
+  message: {
+    title: 'Messages',
+    entry: 'Message',
+    send: 'Send',
+    inputPlaceholder: 'Write a message…',
+    empty: 'No messages yet',
+    emptyChat: 'No messages yet. Say hi!',
+    deletedUser: 'Deleted user',
+    newMessagesDivider: 'New messages',
+    loadOlder: 'Load earlier messages',
+    deleteConversation: 'Delete conversation',
+    deleteConfirm: 'The other person is not affected. If they message you again, the conversation comes back with only the newer messages.',
+    // Shown when remaining_count is a number (5-message limit before they follow you)
+    remaining: 'You can send {count} more until they follow you or reply',
+    newMessageFrom: '{name} sent you a message',
+    // Toast for a new message outside the DM pages (DmToastListener)
+    newMessageToast: '{name}: {content}',
+    someone: 'Someone',
+    // Conversation list: prefix when the last message is mine
+    ownPreview: 'You: {content}',
+    loadFailed: 'Failed to load. Tap to retry',
+    deleted: 'Conversation deleted',
+    deleteFailed: 'Failed to delete. Please try again later',
+    retry: 'Retry',
+    charCount: '{count} / {max}',
+    cannotMessageSelf: "You can't message yourself",
+    peerDeleted: 'This account has been deleted. You can no longer send messages',
+    // Who can message me (DM_PERMISSION_OPTIONS in utils/message.js)
+    permission: {
+      label: 'Who can message me',
+      everyone: 'Everyone',
+      following: 'People I follow',
+      mutual: 'Mutual follows only',
+      closed: 'No one',
+      desc: 'Takes effect right away. People who are not allowed see the reason in the chat',
+      saved: 'Message settings updated',
+      saveFailed: 'Failed to save. Please try again later',
+      loadFailed: 'Failed to load message settings'
+    },
+    // Cannot send / send failed: dmReasonKey, dmSendErrorKey in utils/message.js
+    error: {
+      recipientNotFound: 'This user does not exist',
+      recipientUnavailable: "This user can't receive messages",
+      followingOnly: 'This user only accepts messages from people they follow',
+      mutualOnly: 'This user only accepts messages from mutual follows',
+      dmClosed: 'This user has turned off messages',
+      dmLimitReached: 'You can send more once they follow you or reply',
+      senderDisabled: "Your account can't send messages right now",
+      conversationNotFound: 'Conversation not found',
+      rateLimited: "You're sending too fast. Please try again later",
+      contentEmpty: "Message can't be empty",
+      contentTooLong: 'Message must be {max} characters or fewer',
+      network: 'Failed to send. Check your connection and try again',
+      unknown: 'Failed to send. Please try again later'
+    }
+  },
+
+  // Post sharing (backend v0.9.0; workstream D appends page copy here)
+  share: {
+    button: 'Share',
+    shared: 'Shared',
+    linkCopied: 'Link copied',
+    copyFailed: 'Copy failed. Please copy the link manually',
+    // Error copy: shareErrorKey in utils/share.js
+    error: {
+      notFound: "This post can't be shared",
+      retry: "Couldn't record the share. Please try again"
     }
   },
 
@@ -1169,7 +1404,7 @@ export default {
   feed: {
     refreshed: 'Recommendations refreshed',
     empty: 'No content yet',
-    emptyFollowing: "You haven't joined any circles yet — explore circles you might like",
+    emptyFollowing: 'Posts from circles you join and people you follow show up here. Join a circle or follow people you find interesting',
     loadFailed: 'Failed to load',
     loginRequiredTab: 'This content requires login to view'
   },

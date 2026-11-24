@@ -296,7 +296,9 @@ const transformPostData = (apiPosts) => {
     viewCount: post.view_count || 0,
     likeCount: post.like_count || 0,
     commentCount: post.comment_count || 0,
-    collectCount: post.collect_count || 0
+    collectCount: post.collect_count || 0,
+    // /post/list 只返回 share_count，不返回 is_shared（按未分享显示）
+    shareCount: post.share_count ?? null
   }))
 }
 

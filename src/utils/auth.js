@@ -1,3 +1,5 @@
+import { customRef } from 'vue'
+
 const TOKEN_KEY = 'qubar_token'
 const TOKEN_EXPIRE_KEY = 'qubar_token_expire'
 // 终端实例 ID（多端同时在线，对接文档见后端 docs/multi-device-frontend-api.md）：
@@ -35,6 +37,24 @@ if (legacyToken && !localStorage.getItem(TOKEN_KEY)) {
 localStorage.removeItem('quba_token')
 localStorage.removeItem('quba_token_expire')
 
+// 保留 localStorage 为会话来源，同时让已挂载组件观察本页与其它标签页的账号切换。
+const sessionToken = customRef((track, trigger) => {
+  window.addEventListener('storage', (event) => {
+    if (event.key === TOKEN_KEY || event.key === TOKEN_EXPIRE_KEY || event.key === null) trigger()
+  })
+  return {
+    get() {
+      track()
+      return localStorage.getItem(TOKEN_KEY)
+    },
+    set(token) {
+      if (token === null) localStorage.removeItem(TOKEN_KEY)
+      else localStorage.setItem(TOKEN_KEY, token)
+      trigger()
+    }
+  }
+})
+
 export const auth = {
   /**
    * 保存 token
@@ -42,12 +62,12 @@ export const auth = {
    * @param {number} expire - 过期时间（秒）
    */
   setToken(token, expire) {
-    localStorage.setItem(TOKEN_KEY, token)
     if (expire) {
       // 计算过期时间戳（毫秒）
       const expireTime = Date.now() + parseInt(expire) * 1000
       localStorage.setItem(TOKEN_EXPIRE_KEY, expireTime.toString())
     }
+    sessionToken.value = token
   },
 
   /**
@@ -55,7 +75,7 @@ export const auth = {
    * @returns {string|null}
    */
   getToken() {
-    return localStorage.getItem(TOKEN_KEY)
+    return sessionToken.value
   },
 
   /**
@@ -83,8 +103,8 @@ export const auth = {
    */
   clearToken() {
     // 不清 device_id：下次登录仍是同一终端，只替换本终端的旧 token
-    localStorage.removeItem(TOKEN_KEY)
     localStorage.removeItem(TOKEN_EXPIRE_KEY)
+    sessionToken.value = null
   },
 
   /**

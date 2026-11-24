@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { copyText, shareOrCopy } from '@/utils/share'
+import { copyText, shareOrCopy, postSharePath, postShareUrl, isShareRetryableError, shareErrorKey } from '@/utils/share'
 
 // navigator.clipboard / share 在 jsdom 中不存在或只读，用 defineProperty 注入并在用例后移除
 const setNavigator = (key, value) => {
@@ -64,5 +64,31 @@ describe('shareOrCopy', () => {
   it('复制也失败：返回 failed', async () => {
     document.execCommand = vi.fn().mockReturnValue(false)
     expect(await shareOrCopy({ title: 't', url: 'u' })).toBe('failed')
+  })
+})
+
+describe('帖子分享链接与错误（后端 v0.9.0 POST /post/share）', () => {
+  const apiErr = (code, status) => Object.assign(new Error('x'), { code, status })
+
+  it('链接只含帖子 ID，默认用当前 origin', () => {
+    expect(postSharePath('p1')).toBe('/post/p1')
+    expect(postSharePath('a/b')).toBe('/post/a%2Fb')
+    expect(postShareUrl('p1', 'https://qubar.site')).toBe('https://qubar.site/post/p1')
+    expect(postShareUrl('p1')).toBe(`${window.location.origin}/post/p1`)
+  })
+
+  it('503 / 212 可重试', () => {
+    expect(isShareRetryableError(apiErr(212, 503))).toBe(true)
+    expect(isShareRetryableError(apiErr(210, 500))).toBe(false)
+  })
+
+  it.each([
+    [apiErr(204, 404), 'share.error.notFound'],
+    [apiErr(212, 503), 'share.error.retry'],
+    [apiErr(202, 401), null],
+    [apiErr(210, 500), null],
+    [new Error('Network Error'), null]
+  ])('shareErrorKey(%o) → %s', (err, key) => {
+    expect(shareErrorKey(err)).toBe(key)
   })
 })

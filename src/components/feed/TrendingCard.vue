@@ -18,6 +18,13 @@
       <div v-if="secondary" class="secondary">{{ secondary }}</div>
     </div>
 
+    <ShareCount
+      v-if="type === 'post'"
+      :post-id="item.id"
+      :share-count="item.share_count"
+      :is-shared="item.is_shared"
+    />
+
     <!-- 热度：SVG 火焰 + 暖色胶囊（语义色，同全局 warning 琥珀一脉） -->
     <div class="hot-score">
       <svg class="flame-svg" viewBox="0 0 24 24" aria-hidden="true">
@@ -43,6 +50,7 @@ import { computed, useId } from 'vue'
 import { NAvatar } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { useFormatNumber } from '@/utils/i18n'
+import ShareCount from '@/components/post/ShareCount.vue'
 import SmartLink from '@/components/common/SmartLink.vue'
 
 const props = defineProps({

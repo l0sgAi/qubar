@@ -76,3 +76,79 @@ export function acceptInvite(data) {
     data
   })
 }
+
+/**
+ * 按邮箱添加邀请（管理员及以上，仅私密圈）。后端不发邮件，被邀请人在「我的邀请」里确认
+ * @param {Object} data
+ * @param {string} data.circle_id - 圈子ID(UUIDv7)
+ * @param {string[]} data.emails - 1–50 个邮箱（后端 trim + 转小写）
+ * @returns {Promise} data: { added: string[], ignored: Array<{ email, reason: 'invalid'|'duplicate'|'already_invited' }> }
+ */
+export function addEmailInvites(data) {
+  return request({
+    url: '/circle/invite/email/add',
+    method: 'post',
+    data
+  })
+}
+
+/**
+ * 邮箱邀请列表（管理员及以上），按创建时间倒序
+ * @param {Object} params
+ * @param {string} params.circle_id - 圈子ID(UUIDv7)
+ * @param {number} [params.status] - -1 / 不传 = 全部；0 待接受 1 已接受 2 已撤销 3 已拒绝
+ * @param {number} [params.page] - 页码，从 1 开始
+ * @param {number} [params.size] - 每页条数，≤0 或 >100 按 20 处理
+ * @returns {Promise} 分页信封：{ data: Array, total, page, per_page }
+ */
+export function getEmailInvites(params) {
+  return request({
+    url: '/circle/invite/email/list',
+    method: 'get',
+    params
+  })
+}
+
+/**
+ * 撤销邮箱邀请（管理员及以上）：只能撤销待接受的，已接受 / 已拒绝返回 409
+ * @param {Object} data
+ * @param {string} data.invite_id - 邀请ID
+ * @returns {Promise}
+ */
+export function revokeEmailInvite(data) {
+  return request({
+    url: '/circle/invite/email/revoke',
+    method: 'post',
+    data
+  })
+}
+
+/**
+ * 我的邀请（需登录）：当前用户邮箱收到的待接受邀请，按创建时间倒序
+ * @param {Object} [params]
+ * @param {number} [params.page] - 页码，从 1 开始
+ * @param {number} [params.size] - 每页条数
+ * @returns {Promise} 分页信封：data 为 [{ invite_id, circle_id, circle_name, circle_avatar, inviter_name, create_time }]
+ */
+export function getMyInvites(params) {
+  return request({
+    url: '/circle/invite/my',
+    method: 'get',
+    params
+  })
+}
+
+/**
+ * 接受 / 拒绝邮箱邀请（需登录）：失效 404、被拉黑 403（邀请保持待接受）
+ * @param {Object} data
+ * @param {string} data.invite_id - 邀请ID
+ * @param {boolean} data.accept - true 接受，false 拒绝
+ * @returns {Promise} 接受成功 data: { circle_id, already_member }
+ */
+export function respondEmailInvite(data) {
+  return request({
+    url: '/circle/invite/email/respond',
+    method: 'post',
+    data
+  })
+}

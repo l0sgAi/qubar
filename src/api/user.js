@@ -62,3 +62,36 @@ export function getUserDetail(userId) {
     method: 'get'
   })
 }
+
+/**
+ * 读取我的设置（需登录；后端 v0.9.0 #218 / #240）。从未改过的项返回默认值。
+ * @returns {Promise} data: { follow_list_visibility, dm_permission }
+ *   follow_list_visibility：0 公开 / 1 私密（utils/follow.js 的 FOLLOW_LIST_VISIBILITY）
+ *   dm_permission：0 所有人 / 1 仅我关注的人 / 2 仅互相关注 / 3 关闭（utils/message.js 的 DM_PERMISSION）
+ */
+export function getUserSettings() {
+  return request({
+    url: '/user/settings',
+    method: 'get'
+  })
+}
+
+/**
+ * 修改我的设置（部分更新：只改传入的项，值为 undefined / null 的项不提交）。
+ * 任一项非法整个请求 400、什么都不改；一项都没传时后端 400。
+ * @param {Object} settings
+ * @param {number} [settings.follow_list_visibility] - 0 公开 / 1 私密
+ * @param {number} [settings.dm_permission] - 0–3
+ * @returns {Promise} data: 修改后的全部设置（同 getUserSettings）
+ */
+export function updateUserSettings(settings = {}) {
+  const data = {}
+  for (const key of ['follow_list_visibility', 'dm_permission']) {
+    if (settings[key] !== undefined && settings[key] !== null) data[key] = settings[key]
+  }
+  return request({
+    url: '/user/settings',
+    method: 'put',
+    data
+  })
+}

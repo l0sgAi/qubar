@@ -45,6 +45,10 @@ import { RobotOutlined } from '@vicons/antd'
 import { useI18n } from 'vue-i18n'
 import CreateCircleModal from '@/components/circle/CreateCircleModal.vue'
 import { useSideNavCircles } from '@/composables/useSideNavCircles'
+import { usePendingInvites } from '@/composables/usePendingInvites'
+import { Mail as MailIcon, MessageCircle } from '@vicons/tabler'
+import { auth } from '@/utils/auth'
+import { useUnreadNotice } from '@/composables/useUnreadNotice'
 
 const router = useRouter()
 const route = useRoute()
@@ -117,9 +121,54 @@ const {
   refreshJoinedCircles
 } = useSideNavCircles()
 
+// 待接受的圈子邀请：后端不发邮件也没有站内通知，有邀请时在主菜单显示带数量的入口（未登录时恒为 0）
+const { pendingCount, refreshPendingInvites } = usePendingInvites()
+
 onMounted(() => {
   ensureSideNavData(t('circle.interestCircle'))
+  refreshPendingInvites()
 })
+
+const invitesMenuItem = computed(() => {
+  const badge = pendingCount.value > 99 ? '99+' : String(pendingCount.value)
+  return {
+    label: () => h(RouterLink, { to: '/invites', class: 'nav-link nav-link--invites' }, {
+      default: () => [
+        h('span', null, t('circle.invite.mine.navEntry')),
+        h('span', { class: 'nav-badge' }, badge)
+      ]
+    }),
+    key: 'my-invites',
+    icon: () => h('span', { class: 'nav-icon-wrap' }, [
+      h(NIcon, null, { default: () => h(MailIcon) }),
+      isCollapsed.value ? h('span', { class: 'nav-dot' }) : null
+    ])
+  }
+})
+const inviteItems = computed(() => (pendingCount.value > 0 ? [invitesMenuItem.value] : []))
+
+// 私信入口（仅登录用户）：角标为私信未读总数（dm-unread，与消息中心铃铛分开）；折叠时图标右上角小红点。
+// 共用 useUnreadNotice 单例连接；访客不 acquire，避免无意义的启动调用
+const isLoggedIn = auth.isAuthenticated()
+const dmUnreadCount = isLoggedIn ? useUnreadNotice().dmUnreadCount : computed(() => 0)
+const messagesMenuItem = computed(() => {
+  const count = dmUnreadCount.value
+  const badge = count > 99 ? '99+' : String(count)
+  return {
+    label: () => h(RouterLink, { to: '/messages', class: 'nav-link nav-link--invites' }, {
+      default: () => [
+        h('span', null, t('message.entry')),
+        count > 0 ? h('span', { class: 'nav-badge' }, badge) : null
+      ]
+    }),
+    key: 'messages',
+    icon: () => h('span', { class: 'nav-icon-wrap' }, [
+      h(NIcon, null, { default: () => h(MessageCircle) }),
+      isCollapsed.value && count > 0 ? h('span', { class: 'nav-dot' }) : null
+    ])
+  }
+})
+const messageItems = computed(() => (isLoggedIn ? [messagesMenuItem.value] : []))
 
 // 机器人管理菜单项：对所有用户开放，后端做权限控制（避免异步角色判断导致菜单项跳动）
 const agentMenuItem = computed(() => ({
@@ -186,6 +235,8 @@ const activeItem = computed(() => {
   if (path === '/hot') return 'hot'
   if (path === '/discover') return 'explore'
   if (path === '/admin/agents') return 'admin-agents'
+  if (path === '/invites') return 'my-invites'
+  if (path === '/messages' || path.startsWith('/messages/')) return 'messages'
   if (path.startsWith('/circle/')) {
     const id = path.split('/')[2]
     // 匹配「我的圈子」或「近期活跃」中的对应条目
@@ -218,12 +269,14 @@ const menuOptions = computed(() => {
         key: 'explore',
         icon: () => h(NIcon, null, { default: () => h(Explore) })
       },
+      ...messageItems.value,
       agentMenuItem.value,
       {
         label: t('circle.createCircle'),
         key: 'create',
         icon: () => h(NIcon, null, { default: () => h(PlusIcon) })
-      }
+      },
+      ...inviteItems.value
     ]
   }
 
@@ -244,12 +297,14 @@ const menuOptions = computed(() => {
       key: 'explore',
       icon: () => h(NIcon, null, { default: () => h(Explore) })
     },
+    ...messageItems.value,
     agentMenuItem.value,
     {
       label: t('circle.createCircle'),
       key: 'create',
       icon: () => h(NIcon, null, { default: () => h(PlusIcon) })
     },
+    ...inviteItems.value,
     {
       type: 'divider',
       key: 'd1'
@@ -328,6 +383,10 @@ const handleMenuSelect = (key) => {
     router.push('/discover')
   } else if (key === 'admin-agents') {
     router.push('/admin/agents')
+  } else if (key === 'my-invites') {
+    router.push('/invites')
+  } else if (key === 'messages') {
+    router.push('/messages')
   } else if (key === 'view-all-circles') {
     router.push({ path: '/profile', query: { tab: 'groups' } })
   } else if (key.startsWith('active-circle-')) {
@@ -442,6 +501,41 @@ const handleCreateSuccess = (data) => {
 :deep(.n-menu-item-content-header a.nav-link) {
   color: inherit;
   text-decoration: none;
+}
+
+/* 圈子邀请入口：文字 + 右侧数量角标；折叠时图标右上角小红点 */
+:deep(a.nav-link--invites) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+:deep(.nav-badge) {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: rgba(255, 90, 90, 0.9);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 20px;
+  text-align: center;
+}
+
+:deep(.nav-icon-wrap) {
+  position: relative;
+  display: inline-flex;
+}
+
+:deep(.nav-dot) {
+  position: absolute;
+  top: -2px;
+  right: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff5a5a;
 }
 
 /* 折叠状态下的图标居中 */

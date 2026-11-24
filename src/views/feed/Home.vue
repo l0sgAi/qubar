@@ -26,7 +26,11 @@
               <div :key="`${activeTab}-${feedView}`" class="feed-body">
                 <!-- 首屏加载：骨架屏模拟列表结构，弱网长加载时感知更流畅 -->
                 <PostListSkeleton v-if="loading && !isAppending" />
-                <!-- 空态：following 引导加圈，其余通用空文案 -->
+                <!-- 空态：following（已加入圈子 ∪ 关注的人，后端 v0.9.0）引导加圈或关注人，其余通用空文案 -->
+                <div v-else-if="loadError && !posts.length" class="feed-empty" role="alert">
+                  {{ t('feed.loadFailed') }}
+                  <NButton size="small" @click="fetchFeed()">{{ t('common.retry') }}</NButton>
+                </div>
                 <div v-else-if="posts.length === 0" class="feed-empty">
                   {{ activeTab === 'following' ? t('feed.emptyFollowing') : t('feed.empty') }}
                 </div>
@@ -40,6 +44,10 @@
               <div v-if="isAppending" class="feed-loading-more">
                 <NSpin size="small" />
                 <span>{{ t('common.loading') }}</span>
+              </div>
+              <div v-else-if="loadError" class="feed-loading-more" role="alert">
+                {{ t('feed.loadFailed') }}
+                <NButton size="small" @click="fetchFeed(true)">{{ t('common.retry') }}</NButton>
               </div>
               <div v-else-if="!hasMore" class="feed-no-more">{{ t('common.noMore') }}</div>
             </template>
@@ -57,7 +65,7 @@
 
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
-import { NTabs, NTab, NSpin, useMessage } from 'naive-ui'
+import { NTabs, NTab, NSpin, NButton, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import AppShell from '@/components/layout/AppShell.vue'
@@ -97,6 +105,7 @@ const posts = ref([])
 // 初始为 true：onMounted 的首次 fetchFeed 完成前即视为加载中，
 // 避免首帧渲染出空态闪一下再切骨架屏
 const loading = ref(true)
+const loadError = ref(false)
 const isAppending = ref(false) // true=追加翻页（底部加载条 + NSpin）；false=首屏/切 tab（骨架屏）
 const hasMore = ref(false)
 const poolToken = ref('')   // 仅 recommend：候选池版本 token，翻页原样回传
@@ -108,6 +117,7 @@ const searchAfter = ref('') // 仅 hot/latest/following：游标原样透传
 // 内容区当前视图：作为 Transition 的 key 一部分，视图切换（含切 tab）时触发平滑过渡
 const feedView = computed(() => {
   if (loading.value && !isAppending.value) return 'loading'
+  if (loadError.value && !posts.value.length) return 'error'
   return posts.value.length === 0 ? 'empty' : 'list'
 })
 
@@ -140,7 +150,10 @@ const transformPost = (p) => {
     collectCount: p.collect_count || 0,
     // 当前列表项是否已点赞/已收藏（PostCard 暂未渲染高亮，预留后续接入）
     isLiked: !!p.is_liked,
-    isCollected: !!p.is_collected
+    isCollected: !!p.is_collected,
+    // 分享数 / 我是否分享过（后端 v0.9.0，PostCard 渲染分享按钮用；缺省时 null 表示不显示数字）
+    shareCount: p.share_count ?? null,
+    isShared: !!p.is_shared
   }
 }
 
@@ -152,6 +165,7 @@ const fetchFeed = async (append = false) => {
   if (!append) fetchGen++
   const gen = fetchGen
 
+  loadError.value = false
   loading.value = true
   isAppending.value = append
   try {
@@ -197,6 +211,7 @@ const fetchFeed = async (append = false) => {
   } catch (error) {
     // 过期请求的错误不再提示
     if (gen !== fetchGen) return
+    loadError.value = true
     console.error('获取首页信息流失败:', error)
     message.error(error.message || t('feed.loadFailed'))
   } finally {
@@ -236,11 +251,11 @@ const setupObserver = () => {
     observer.disconnect()
     observer = null
   }
-  if (!sentinel.value || !hasMore.value || loading.value) return
+  if (!sentinel.value || !hasMore.value || loading.value || loadError.value) return
 
   observer = new IntersectionObserver(
     (entries) => {
-      if (entries[0].isIntersecting && hasMore.value && !loading.value) {
+      if (entries[0].isIntersecting && hasMore.value && !loading.value && !loadError.value) {
         fetchFeed(true)
       }
     },

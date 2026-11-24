@@ -21,7 +21,23 @@
             :description="t('circle.invite.publicCircle')"
             class="public-empty"
           />
-          <InviteLinkPanel v-else :circle-id="circleId" @forbidden="refreshRoleAndGuard" />
+          <!-- 邀请链接 / 邮箱邀请：?tab=email 可直达邮箱邀请 -->
+          <NTabs
+            v-else
+            :value="activeTab"
+            type="line"
+            animated
+            size="large"
+            class="invite-tabs"
+            @update:value="changeTab"
+          >
+            <NTabPane name="link" :tab="t('circle.invite.tabs.link')" display-directive="show:lazy">
+              <InviteLinkPanel :circle-id="circleId" @forbidden="refreshRoleAndGuard" />
+            </NTabPane>
+            <NTabPane name="email" :tab="t('circle.invite.tabs.email')" display-directive="show:lazy">
+              <EmailInvitePanel :circle-id="circleId" @forbidden="refreshRoleAndGuard" />
+            </NTabPane>
+          </NTabs>
         </div>
       </template>
     </div>
@@ -31,11 +47,12 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NEmpty, useMessage } from 'naive-ui'
+import { NEmpty, NTabs, NTabPane, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import AppShell from '@/components/layout/AppShell.vue'
 import CircleAdminHeader from '@/components/circle/CircleAdminHeader.vue'
 import InviteLinkPanel from '@/components/circle/InviteLinkPanel.vue'
+import EmailInvitePanel from '@/components/circle/EmailInvitePanel.vue'
 import { getCircleDetail } from '@/api/circle'
 import { useAppShell } from '@/composables/useAppShell'
 import { usePageTitle } from '@/composables/usePageTitle'
@@ -52,6 +69,12 @@ const circleId = computed(() => route.params.id)
 const circle = ref({})
 const pageLoading = ref(true)
 const isPrivate = computed(() => isPrivateJoinType(circle.value.join_type))
+
+// 当前子 Tab 与 query.tab 同步（replace，不产生历史记录）
+const activeTab = computed(() => (route.query.tab === 'email' ? 'email' : 'link'))
+const changeTab = (tab) => {
+  router.replace({ query: { ...route.query, tab: tab === 'link' ? undefined : tab } })
+}
 
 // 管理接口 403：角色可能已变更，重查详情，已降级则退回圈子详情页
 const refreshRoleAndGuard = async () => {
@@ -119,6 +142,10 @@ watch(() => route.params.id, (newId, oldId) => {
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 16px;
+}
+
+.invite-tabs {
+  padding-top: 4px;
 }
 
 .public-empty {

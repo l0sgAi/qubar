@@ -46,7 +46,12 @@ describe('mobileNav', () => {
     ['/hot', 'discover'],
     ['/search', 'discover'],
     ['/notifications', 'notice'],
+    ['/messages', 'messages'],
+    ['/messages/u1', 'messages'],
+    ['/messagesx', null],
     ['/profile', 'me'],
+    ['/invites', 'me'],
+    ['/invite/abc', null],
     ['/post/1', null],
     ['/circle/1', null]
   ])('activeTab(%s) → %s', (path, tab) => {

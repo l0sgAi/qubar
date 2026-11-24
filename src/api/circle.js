@@ -290,7 +290,7 @@ export function updateCircle(data) {
 
 /**
  * 创建圈内机器人（admin+；每圈上限 5 个，超出返回 409）
- * 创建成功统一返回 200/`Created successfully`（非 201）；不传 status 默认启用。
+ * 创建成功返回 200，机器人默认启用。管理列表使用 updateCircleAgent 调整状态。
  * @param {Object} data - 机器人数据
  * @param {string} data.circle_id - 归属圈子 ID（必填，来自 /circle/manage/list）
  * @param {string} data.name - 展示名，圈内唯一，1-50 字符（UTF-8 字节，中文约 16 字）
@@ -308,7 +308,6 @@ export function updateCircle(data) {
  * @param {number} [data.min_interval_sec] - 最小回复间隔秒，0=不限
  * @param {Object} [data.auto_config] - 自主行为配置：auto_reply 自动回复本圈高热度帖子 / 评论，
  *   字段与校验同全局机器人（见 createAgent / src/utils/agentAutoReply.js），不传 = 不自动回复
- * @param {number} [data.status] - 0=停用 1=启用，缺省启用
  * @returns {Promise} data 为创建后的完整圈内机器人对象（含 circle_id）
  */
 export function createCircleAgent(data) {
@@ -382,5 +381,19 @@ export function deleteCircleAgent(id) {
   return request({
     url: `/circle/agent/${id}`,
     method: 'delete'
+  })
+}
+
+/**
+ * 圈主手动触发本圈启用的手动机器人回复本圈已发布且未锁定的帖子。
+ * @param {string} id - 圈内机器人 UUID
+ * @param {string} postId - 帖子 UUID
+ * @returns {Promise} data 为生成的评论 UUID。同步生成，失败不自动重发。
+ */
+export function triggerCircleAgentReply(id, postId) {
+  return request({
+    url: `/circle/agent/${id}/reply/${postId}`,
+    method: 'post',
+    timeout: 120000
   })
 }

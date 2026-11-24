@@ -31,6 +31,8 @@
           />
         </NFormItem>
 
+        <p v-if="!isEdit"><NText depth="3">{{ t('agent.form.createEnabledHint') }}</NText></p>
+
         <NFormItem :label="t('agent.form.avatarUrl')">
           <div class="avatar-row">
             <NAvatar
@@ -173,8 +175,11 @@
           <span class="section-dot" />
           <span class="section-title">{{ t('agent.form.sectionTrigger') }}</span>
         </div>
-        <!-- 触发方式固定为关键词触发（trigger_mode=2），关键词必填 -->
+        <NFormItem :label="t('agent.table.trigger')">
+          <NSelect v-model:value="formData.trigger_mode" :options="triggerOptions" />
+        </NFormItem>
         <NFormItem
+          v-if="formData.trigger_mode === 2"
           :label="t('agent.form.keywords')"
           path="trigger_keywords"
         >
@@ -186,7 +191,7 @@
 
         <!-- filter_prompt：两阶段回复判定（高级选项）；
              空 = 命中关键词即回复，非空 = LLM 先判定该不该回 -->
-        <NFormItem :label="t('agent.form.filterPrompt')" path="filter_prompt">
+        <NFormItem v-if="formData.trigger_mode === 2" :label="t('agent.form.filterPrompt')" path="filter_prompt">
           <NInput
             v-model:value="formData.filter_prompt"
             type="textarea"
@@ -341,6 +346,46 @@
           <div>{{ isCircle ? t('agent.autoReply.scopeCircle') : t('agent.autoReply.scopeGlobal') }}</div>
         </NAlert>
       </div>
+      <div v-if="!isCircle" class="form-section">
+        <div class="section-header">
+          <span class="section-dot" />
+          <span class="section-title">{{ t('agent.autoPost.section') }}</span>
+        </div>
+        <div class="auto-switch-row">
+          <NSwitch :value="formData.auto_post.enabled" @update:value="toggleAutoPost" />
+          <div class="auto-switch-text">
+            <div class="auto-switch-label">{{ t('agent.autoPost.enabled') }}</div>
+            <NText depth="3" class="auto-switch-hint">{{ t('agent.autoPost.hint') }}</NText>
+          </div>
+        </div>
+        <template v-if="formData.auto_post.enabled">
+          <div class="rate-row">
+            <NFormItem :label="t('agent.autoPost.interval')">
+              <NInputNumber v-model:value="formData.auto_post.interval_min" :min="10" :max="10080" :precision="0" />
+            </NFormItem>
+            <NFormItem :label="t('agent.autoPost.daily')">
+              <NInputNumber v-model:value="formData.auto_post.daily_max" :min="1" :max="48" :precision="0" />
+            </NFormItem>
+          </div>
+          <NFormItem :label="t('agent.autoPost.hours')">
+            <NCheckbox :checked="!formData.auto_post.active_hours.length"
+              @update:checked="allDay => formData.auto_post.active_hours = allDay ? [] : [8, 23]">
+              {{ t('agent.autoPost.allDay') }}
+            </NCheckbox>
+          </NFormItem>
+          <div v-if="formData.auto_post.active_hours.length" class="rate-row">
+            <NFormItem :label="t('agent.autoPost.start')">
+              <NInputNumber v-model:value="formData.auto_post.active_hours[0]" :min="0" :max="23" :precision="0" />
+            </NFormItem>
+            <NFormItem :label="t('agent.autoPost.end')">
+              <NInputNumber v-model:value="formData.auto_post.active_hours[1]" :min="1" :max="24" :precision="0" />
+            </NFormItem>
+          </div>
+          <NFormItem :label="t('agent.autoPost.topics')">
+            <NDynamicTags v-model:value="formData.auto_post.topics" />
+          </NFormItem>
+        </template>
+      </div>
     </NForm>
 
     <!-- 头像裁剪弹窗（1:1，仅预览圆形头像；确认后直接上传回填 URL） -->
@@ -383,6 +428,7 @@ import { useI18n } from 'vue-i18n'
 import { createAgent, updateAgent } from '@/api/agent'
 import { createCircleAgent, updateCircleAgent } from '@/api/circle'
 import ImageCropperModal from '@/components/common/ImageCropperModal.vue'
+import { autoPostError, normalizeAutoPost } from '@/utils/agentAutoPost'
 import { useImageUpload } from '@/composables/useImageUpload'
 import {
   AUTO_REPLY_THRESHOLD_MAX, AUTO_REPLY_WINDOW_HOURS_MAX, AUTO_REPLY_MAX_PER_HOUR_MAX,
@@ -427,10 +473,20 @@ const modalTitle = computed(() => {
 })
 
 // 后端当前只支持 openai / anthropic 两种模型协议
-const protocolOptions = [
-  { label: 'openai', value: 'openai' },
-  { label: 'anthropic', value: 'anthropic' }
-]
+const protocolOptions = computed(() => {
+  const options = ['openai', 'anthropic'].map(value => ({ label: value, value }))
+  const saved = props.agent?.api_protocol
+  if (saved && !options.some(option => option.value === saved)) {
+    options.push({ label: saved, value: saved, disabled: true })
+  }
+  return options
+})
+
+const triggerOptions = computed(() => [
+  ...(props.agent?.trigger_mode === 1 ? [{ value: 1, label: t('agent.triggerModes.all'), disabled: true }] : []),
+  { value: 2, label: t('agent.triggerModes.keyword') },
+  { value: 3, label: t('agent.triggerModes.manual') }
+])
 
 const formRef = ref(null)
 const submitting = ref(false)
@@ -457,13 +513,13 @@ const emptyForm = () => ({
   system_prompt: '',
   // 回复判定条件：空 = 命中关键词即回复
   filter_prompt: '',
-  // 触发方式固定为关键词触发（trigger_mode=2），表单不再提供模式选择
   trigger_mode: 2,
   trigger_keywords: [],
   max_replies_per_hour: 30,
   min_interval_sec: 60,
   // 自动回复高热度帖子 / 评论（auto_config.auto_reply），默认关闭
-  auto_reply: emptyAutoReply()
+  auto_reply: emptyAutoReply(),
+  auto_post: normalizeAutoPost()
 })
 
 const formData = ref(emptyForm())
@@ -529,9 +585,8 @@ watch(
       const a = props.agent
       fresh.name = a.name || ''
       fresh.avatar_url = a.avatar_url || ''
-      // 遗留协议（gemini/ollama 等）映射为 openai：下拉已无这些选项，
-      // 保存时 diff 会把 api_protocol='openai' 一并提交，完成迁移
-      fresh.api_protocol = ['openai', 'anthropic'].includes(a.api_protocol) ? a.api_protocol : 'openai'
+      // 旧协议可读回；只有显式改选支持的协议时才提交凭据变更。
+      fresh.api_protocol = a.api_protocol || 'openai'
       fresh.base_url = a.base_url || ''
       fresh.model = a.model || ''
       for (const k of LLM_PARAM_KEYS) {
@@ -539,17 +594,24 @@ watch(
       }
       fresh.system_prompt = a.system_prompt || ''
       fresh.filter_prompt = a.filter_prompt || ''
-      // 触发方式固定关键词触发：遗留 mode（1/3）在编辑保存且关键词变更时
-      // 会随 trigger_keywords 一并提交 mode=2，完成迁移
-      fresh.trigger_mode = 2
+      fresh.trigger_mode = a.trigger_mode ?? 2
       fresh.trigger_keywords = [...(a.trigger_keywords || [])]
       fresh.max_replies_per_hour = a.max_replies_per_hour ?? 30
       fresh.min_interval_sec = a.min_interval_sec ?? 60
       fresh.auto_reply = autoReplyFromAgent(a)
+      if (!isCircle.value) fresh.auto_post = normalizeAutoPost(a.auto_config?.auto_post ?? {})
     }
     formData.value = fresh
-  }
+  },
+  { immediate: true }
 )
+
+const toggleAutoPost = enabled => {
+  const post = formData.value.auto_post
+  post.enabled = enabled
+  if (enabled && !post.interval_min) post.interval_min = 60
+  if (enabled && !post.daily_max) post.daily_max = 1
+}
 
 // 开关自动回复：首次开启时预填目标与时间窗口（门槛交给运营填写）
 const toggleAutoReply = on => {
@@ -591,6 +653,18 @@ const buildLlmParams = () => {
 
 const sortedJson = obj => JSON.stringify(obj, Object.keys(obj).sort())
 
+// 后端分别替换提供的子对象，另一个子对象缺席即保留。
+const putAutoConfigChanges = (payload, agent) => {
+  const f = formData.value
+  const config = autoReplyChanged(f.auto_reply, agent) ? buildAutoConfig(f.auto_reply) : {}
+  if (!isCircle.value) {
+    const post = normalizeAutoPost(f.auto_post)
+    const original = normalizeAutoPost(agent?.auto_config?.auto_post ?? {})
+    if (JSON.stringify(post) !== JSON.stringify(original)) config.auto_post = post
+  }
+  if (Object.keys(config).length) payload.auto_config = config
+}
+
 // 创建：全量字段（后端对未传字段有默认值）；api_key 为空不传；
 // 圈子作用域额外带 circle_id（编辑时后端以路径 id 定位，无须携带）
 const buildCreatePayload = () => {
@@ -612,8 +686,7 @@ const buildCreatePayload = () => {
   if (f.api_key.trim()) payload.api_key = f.api_key.trim()
   const llm = buildLlmParams()
   if (Object.keys(llm).length) payload.llm_params = llm
-  // 未动过自动回复（仍为零值）时不传，后端默认不自动回复
-  if (autoReplyChanged(f.auto_reply, null)) payload.auto_config = buildAutoConfig(f.auto_reply)
+  putAutoConfigChanges(payload, null)
   return payload
 }
 
@@ -634,7 +707,7 @@ const buildUpdatePayload = () => {
   // 后端对含任一凭据字段的更新请求整体要求圈主，管理员混提即 403
   if (props.canEditCredentials) {
     if ((f.base_url || '').trim() !== (a.base_url || '')) payload.base_url = f.base_url.trim()
-    if (f.api_protocol !== a.api_protocol) payload.api_protocol = f.api_protocol
+    if (f.api_protocol !== (a.api_protocol || 'openai')) payload.api_protocol = f.api_protocol
     // api_key：空串=清除，不传=保持不变
     if (f.clear_api_key) payload.api_key = ''
     else if (f.new_api_key.trim()) payload.api_key = f.new_api_key.trim()
@@ -645,22 +718,19 @@ const buildUpdatePayload = () => {
 
   const keywordsChanged =
     JSON.stringify([...f.trigger_keywords].sort()) !== JSON.stringify([...(a.trigger_keywords || [])].sort())
-  if (keywordsChanged) {
-    // 关键词变更时连同 mode=2 一起提交（mode=2 必须与关键词同请求提交；
-    // 遗留 mode=1/3 的机器人借此迁移到关键词触发）
-    payload.trigger_mode = 2
+  if (f.trigger_mode !== (a.trigger_mode ?? 2)) payload.trigger_mode = f.trigger_mode
+  if (f.trigger_mode === 2 && (keywordsChanged || payload.trigger_mode === 2)) {
     payload.trigger_keywords = [...f.trigger_keywords]
   }
 
-  if ((f.max_replies_per_hour ?? 0) !== (a.max_replies_per_hour ?? 0)) {
+  if ((f.max_replies_per_hour ?? 0) !== (a.max_replies_per_hour ?? 30)) {
     payload.max_replies_per_hour = f.max_replies_per_hour ?? 0
   }
-  if ((f.min_interval_sec ?? 0) !== (a.min_interval_sec ?? 0)) {
+  if ((f.min_interval_sec ?? 0) !== (a.min_interval_sec ?? 60)) {
     payload.min_interval_sec = f.min_interval_sec ?? 0
   }
 
-  // auto_reply 整体替换语义：有变更就带完整对象（关闭状态下折叠的字段也一并提交）
-  if (autoReplyChanged(f.auto_reply, a)) payload.auto_config = buildAutoConfig(f.auto_reply)
+  putAutoConfigChanges(payload, a)
 
   return payload
 }
@@ -679,15 +749,16 @@ const handleSubmit = async () => {
   const willSubmitTrigger = !isEdit.value ||
     JSON.stringify([...f.trigger_keywords].sort()) !==
       JSON.stringify([...(props.agent.trigger_keywords || [])].sort())
-  if (willSubmitTrigger && !f.trigger_keywords.length) {
+  if (f.trigger_mode === 2 && (willSubmitTrigger || props.agent?.trigger_mode !== 2) && !f.trigger_keywords.length) {
     message.warning(t('agent.form.keywordsRequired'))
     return
   }
 
   // 自动回复兜底校验：关闭时字段已折叠、不走表单项校验，这里按完整对象再校验一次
-  const autoReplyError = Object.values(validateAutoReply(f.auto_reply))[0]
-  if (autoReplyError) {
-    message.warning(t(autoReplyError))
+  const configError = Object.values(validateAutoReply(f.auto_reply))[0] ||
+    (!isCircle.value && autoPostError(f.auto_post))
+  if (configError) {
+    message.warning(t(configError))
     return
   }
 
