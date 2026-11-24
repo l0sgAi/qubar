@@ -1,18 +1,5 @@
-# 生产发布：develop → main 合并（push main）触发。
-#
-#   changes ─┬─ infra（deploy/** 变更）：Terraform apply → Ansible 收敛主机 / 中间件
-#            └─ test → build（应用代码变更）：镜像推 GHCR ghcr.io/l0sgai/qubar:<sha>
-#   migrate（needs infra + build；migrations/** 变更或有新镜像时）：同步 migrations/ → db-migrate.sh
-#            （migrate up + 重跑 grants.sql 刷新授权 / dbz_pub）。失败 → 不发布应用。
-#   deploy（needs migrate）：SSH(经 Cloudflare Access) → deploy-app.sh（失败自动回滚）
-#            → register-connectors.sh → 外网冒烟 https://api-next.qubar.site/healthz
-#   github-release（needs deploy；本次发布了新镜像时）：scripts/next-version.sh 算版本号 →
-#            镜像加 :<版本号> 标签 → 打 tag 并发 GitHub Release（说明取发版 PR 描述）。回滚 / 只改 infra、迁移不出版本。
-#
-# 先迁移、后发版：迁移必须兼容正在运行的旧版本应用（expand / contract，见 migrations/README.md）；回滚不回退 schema。
-#
-# 手动触发：Actions → release → Run workflow（可强制 infra / 回滚上一版本）。
-# 密钥全部在 GitHub Environment「production」（限 main 分支），清单见 deploy/README.md。
+# develop → main 由发布负责人执行。组件范围、首次接管及部分失败恢复见 docs/ops/product-release.md。
+# 同一生产并发组内先固定候选包，再迁移 / 部署 API、验证兼容接口、部署 Pages、验收并发布产品版本。
 name: release
 
 on:
@@ -26,6 +13,10 @@ on:
         default: false
       force_deploy:
         description: 强制构建并发布当前 main
+        type: boolean
+        default: false
+      force_web:
+        description: 使用当前 main 的静态包接管 Pages
         type: boolean
         default: false
       force_migrate:
@@ -50,34 +41,95 @@ env:
 
 jobs:
   changes:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pages: read
     outputs:
-      infra: ${{ steps.f.outputs.infra == 'true' || inputs.force_infra == true }}
-      app: ${{ (steps.f.outputs.app == 'true' || inputs.force_deploy == true) && inputs.rollback != true }}
-      db: ${{ (steps.f.outputs.db == 'true' || inputs.force_migrate == true) && inputs.rollback != true }}
+      app: ${{ steps.plan.outputs.app }}
+      web: ${{ steps.plan.outputs.web }}
+      imported: ${{ steps.plan.outputs.imported }}
+      infra: ${{ steps.plan.outputs.infra }}
+      db: ${{ steps.plan.outputs.db }}
+      prev: ${{ steps.version.outputs.prev }}
+      next: ${{ steps.version.outputs.next }}
+      product: ${{ steps.plan.outputs.app == 'true' || steps.plan.outputs.web == 'true' }}
+      reuse: ${{ steps.draft.outputs.reuse }}
+      published: ${{ steps.version.outputs.published }}
     steps:
       - uses: actions/checkout@v5
-      - id: f
-        uses: dorny/paths-filter@v3
         with:
-          filters: |
-            infra:
-              - 'deploy/**'
-              - '.github/actions/**'
-              - '.github/workflows/release.yml'
-            app:
-              - 'cmd/**'
-              - 'pkg/**'
-              - 'go.mod'
-              - 'go.sum'
-              - 'Dockerfile'
-              - '.dockerignore'
-            db:
-              - 'migrations/**'
+          fetch-depth: 0
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE_APP: ${{ inputs.force_deploy }}
+          FORCE_WEB: ${{ inputs.force_web }}
+          FORCE_DB: ${{ inputs.force_migrate }}
+          FORCE_INFRA: ${{ inputs.force_infra }}
+          ROLLBACK: ${{ inputs.rollback }}
+        run: |
+          # 以最近成功发布为基线，失败或并发排队期间累积的变更一并纳入。
+          base=$(gh run list -w release.yml -b main -s success -L 1 --json headSha --jq '.[0].headSha // empty')
+          base=${base:-v0.9.0}
+          git merge-base --is-ancestor "$base" HEAD
+          product_base=$(git describe --first-parent --tags --abbrev=0 --match 'v[0-9]*' HEAD)
+          python3 scripts/release-plan.py "$base" HEAD "$product_base" | tee -a "$GITHUB_OUTPUT" "$GITHUB_STEP_SUMMARY"
+      - id: version
+        if: steps.plan.outputs.app == 'true' || steps.plan.outputs.web == 'true'
+        run: |
+          tag=$(git tag --points-at HEAD --list 'v[0-9]*' | head -1)
+          if [[ -n "$tag" ]]; then
+            printf 'prev=%s\nnext=%s\npublished=true\n' "$tag" "$tag" >> "$GITHUB_OUTPUT"
+          else
+            scripts/next-version.sh HEAD | tee -a "$GITHUB_OUTPUT"
+          fi
+      - id: draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WEB: ${{ steps.plan.outputs.web }}
+          NEXT: ${{ steps.version.outputs.next }}
+          ROLLBACK: ${{ inputs.rollback }}
+          PUBLISHED: ${{ steps.version.outputs.published }}
+          PRODUCT: ${{ steps.plan.outputs.app == 'true' || steps.plan.outputs.web == 'true' }}
+        run: |
+          drafts=$(gh release list --limit 100 --json tagName,isDraft --jq '.[] | select(.isDraft and (.tagName | test("^v[0-9]"))) | .tagName')
+          reuse=false
+          for draft in $drafts; do
+            if [[ "$ROLLBACK" == true ]]; then break; fi
+            details=$(gh release view "$draft" --json targetCommitish,assets)
+            if jq -e 'any(.assets[]; .name == "candidate.json")' <<< "$details" >/dev/null; then
+              test "$draft" = "$NEXT" && test "$(jq -r .targetCommitish <<< "$details")" = "$GITHUB_SHA" || { echo "先完成待恢复候选 $draft"; exit 1; }
+              reuse=true
+            fi
+          done
+          if [[ "$reuse" != true ]]; then test "$(git rev-parse origin/main)" = "$GITHUB_SHA"; fi
+          if [[ "$PUBLISHED" == true ]]; then reuse=true; fi
+          if [[ "$PRODUCT" == true ]]; then
+            test -n "$NEXT" || { echo '没有待发布的产品提交'; exit 1; }
+            # 真实用户流程由受保护的环境审核，缺少审核人则在部署前停止。
+            gh api "repos/$GITHUB_REPOSITORY/environments/product-acceptance" --jq '.protection_rules' |
+              jq -e 'any(.[]; .type == "required_reviewers" and (.reviewers | length) > 0)' >/dev/null
+          fi
+          if [[ "$WEB" == true ]]; then
+            gh api "repos/$GITHUB_REPOSITORY/pages" |
+              jq -e '.cname == "qubar.site" and .build_type == "workflow" and .https_enforced' >/dev/null
+          fi
+          echo "reuse=$reuse" >> "$GITHUB_OUTPUT"
+
+  web-build:
+    permissions:
+      contents: read
+      actions: read
+    needs: changes
+    if: (needs.changes.outputs.web == 'true' || needs.changes.outputs.imported == 'true') && needs.changes.outputs.reuse != 'true'
+    uses: ./.github/workflows/web-build.yml
 
   test:
     needs: changes
-    if: needs.changes.outputs.app == 'true'
+    if: needs.changes.outputs.app == 'true' && needs.changes.outputs.reuse != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -88,8 +140,10 @@ jobs:
       - run: go test ./pkg/...
 
   build:
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
     needs: [changes, test]
-    if: needs.changes.outputs.app == 'true'
+    if: needs.changes.outputs.app == 'true' && needs.changes.outputs.reuse != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -102,7 +156,8 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      - id: image
+        uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64 # ECS r9ae = x86_64
@@ -116,9 +171,51 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  stage:
+    needs: [changes, build, web-build]
+    if: ${{ !failure() && !cancelled() && needs.changes.outputs.product == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      digest: ${{ steps.stage.outputs.digest }}
+      pages_hash: ${{ steps.stage.outputs.pages_hash }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v8
+        if: needs.changes.outputs.web == 'true' && needs.changes.outputs.reuse != 'true'
+        with:
+          name: github-pages
+          path: ${{ runner.temp }}/built
+      - id: stage
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          PREV: ${{ needs.changes.outputs.prev }}
+          NEXT: ${{ needs.changes.outputs.next }}
+          REUSE: ${{ needs.changes.outputs.reuse }}
+          PUBLISHED: ${{ needs.changes.outputs.published }}
+          WEB: ${{ needs.changes.outputs.web }}
+          APP: ${{ needs.changes.outputs.app }}
+          DIGEST: ${{ needs.build.outputs.digest }}
+        run: scripts/stage-product.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: candidate-pages
+          path: ${{ runner.temp }}/candidate/artifact.tar
+          overwrite: true
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        if: needs.changes.outputs.web == 'true'
+        with:
+          name: previous-pages
+          path: ${{ runner.temp }}/previous/artifact.tar
+          overwrite: true
+          if-no-files-found: error
+
   infra:
-    needs: changes
-    if: needs.changes.outputs.infra == 'true'
+    needs: [changes, stage, web-build]
+    if: ${{ !failure() && !cancelled() && needs.changes.outputs.infra == 'true' }}
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -171,12 +268,10 @@ jobs:
         run: ansible-playbook site.yml -e "@$RUNNER_TEMP/ansible-vars.json" --private-key ~/.ssh/qubar_deploy
 
   migrate:
-    needs: [changes, test, build, infra]
-    # 有迁移变更、或要发布新镜像时执行（无待执行迁移时是 no-op，保证应用永远不早于 schema）；回滚不迁移
+    needs: [changes, stage, infra]
     if: >-
-      always() && !cancelled() && inputs.rollback != true &&
-      needs.test.result != 'failure' && needs.build.result != 'failure' && needs.infra.result != 'failure' &&
-      (needs.changes.outputs.db == 'true' || needs.build.result == 'success')
+      !failure() && !cancelled() && inputs.rollback != true &&
+      (needs.changes.outputs.db == 'true' || needs.changes.outputs.app == 'true')
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -201,14 +296,13 @@ jobs:
           ssh "$PROD_SSH" /opt/qubar/bin/db-migrate.sh "${{ github.sha }}"
 
   deploy:
-    needs: [changes, build, infra, migrate]
-    # infra / build / migrate 允许被跳过，但不能失败；回滚不依赖 build。
-    # 只有 infra / 迁移变更时也运行（不换镜像）：cdc_tables 等 connector 配置变化需要重新注册。
+    needs: [changes, stage, infra, migrate]
     if: >-
-      always() && !cancelled() &&
-      needs.build.result != 'failure' && needs.infra.result != 'failure' && needs.migrate.result != 'failure' &&
-      (needs.build.result == 'success' || inputs.rollback == true ||
+      !failure() && !cancelled() && needs.changes.result == 'success' &&
+      (needs.changes.outputs.product == 'true' || inputs.rollback == true ||
        needs.migrate.result == 'success' || needs.infra.result == 'success')
+    outputs:
+      image: ${{ steps.live.outputs.image }}
     runs-on: ubuntu-latest
     environment: production
     permissions:
@@ -224,24 +318,27 @@ jobs:
           deploy-ssh-key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
 
       - name: GHCR login on host（GITHUB_TOKEN 仅本 job 有效）
-        if: needs.build.result == 'success' || inputs.rollback == true
+        if: needs.changes.outputs.app == 'true' || inputs.rollback == true
         run: echo "${{ secrets.GITHUB_TOKEN }}" | ssh "$PROD_SSH" docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Deploy
-        if: needs.build.result == 'success' || inputs.rollback == true
+        env:
+          DIGEST: ${{ needs.stage.outputs.digest }}
+        if: needs.changes.outputs.app == 'true' || inputs.rollback == true
         run: |
           if [ "${{ inputs.rollback }}" = "true" ]; then
             ssh "$PROD_SSH" /opt/qubar/bin/deploy-app.sh --rollback
           else
             # shellcheck disable=SC2029  # 镜像名有意在 runner 侧展开
-            ssh "$PROD_SSH" /opt/qubar/bin/deploy-app.sh "$IMAGE:${{ github.sha }}"
+            ssh "$PROD_SSH" /opt/qubar/bin/deploy-app.sh "$IMAGE@$DIGEST"
           fi
 
       - name: CDC connectors（幂等）
+        if: needs.changes.outputs.app == 'true' || needs.infra.result == 'success' || needs.migrate.result == 'success' || inputs.rollback == true
         run: ssh "$PROD_SSH" /opt/qubar/bin/register-connectors.sh
 
       - name: GHCR logout
-        if: always() && (needs.build.result == 'success' || inputs.rollback == true)
+        if: always() && (needs.changes.outputs.app == 'true' || inputs.rollback == true)
         run: ssh "$PROD_SSH" docker logout ghcr.io || true
 
       - name: Smoke（经 Cloudflare 外网）
@@ -252,65 +349,134 @@ jobs:
           done
           echo "smoke failed: $SMOKE_URL"; exit 1
 
-  github-release:
-    needs: [build, deploy]
-    # 只有发布了新镜像才出版本（tag = 生产上实际运行的提交）；回滚、只改 infra / 迁移的发版跳过。
+      - name: 核对在运行的镜像、旧前端公开接口
+        id: live
+        env:
+          EXPECTED: ${{ needs.stage.outputs.digest }}
+        run: |
+          image=$(ssh "$PROD_SSH" 'docker image inspect "$(docker inspect --format="{{.Image}}" qubar)" --format="{{json .RepoDigests}}"' |
+            jq -er --arg prefix "$IMAGE@" '[.[] | select(startswith($prefix))] | first')
+          [[ "$image" =~ @sha256:[0-9a-f]{64}$ ]]
+          if [[ -n "$EXPECTED" ]]; then test "$image" = "$IMAGE@$EXPECTED"; fi
+          curl -fsS --retry 3 --max-time 20 https://api.qubar.site/readyz > /dev/null
+          curl -fsS --retry 3 --max-time 20 https://api.qubar.site/category/get |
+            jq -e '.code == 200 and (.data | type == "array")' >/dev/null
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "产品提交 $GITHUB_SHA，运行镜像 $image，部署 $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
+
+  pages:
+    outputs:
+      attempt: ${{ steps.receipt.outputs.attempt }}
+    needs: [changes, deploy, stage]
+    if: ${{ !failure() && !cancelled() && needs.changes.outputs.web == 'true' && needs.deploy.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+        with:
+          artifact_name: candidate-pages
+      - id: receipt
+        run: echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+
+  smoke:
+    needs: [changes, deploy, stage, pages]
+    if: ${{ !failure() && !cancelled() && needs.changes.outputs.product == 'true' && needs.deploy.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v8
+        with:
+          name: candidate-pages
+          path: ${{ runner.temp }}/candidate
+      - run: python3 scripts/smoke-pages.py 'https://qubar.site' "$RUNNER_TEMP/candidate/artifact.tar"
+      - run: echo "请按 docs/ops/product-release.md 完成账号冒烟，并在 product-acceptance 记录结果。" >> "$GITHUB_STEP_SUMMARY"
+
+  accept:
+    needs: smoke
+    if: ${{ !failure() && !cancelled() && needs.smoke.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment: product-acceptance
+    steps:
+      - run: echo "产品流程已由环境审核人验收"
+
+  recover-pages:
+    needs: [changes, stage, pages, smoke, accept]
     if: >-
-      always() && !cancelled() && inputs.rollback != true &&
-      needs.build.result == 'success' && needs.deploy.result == 'success'
+      always() && needs.changes.outputs.web == 'true' && needs.stage.result == 'success' &&
+      (needs.pages.result == 'failure' || (needs.pages.result == 'success' && needs.accept.result != 'success'))
+    runs-on: ubuntu-latest
+    environment: github-pages
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/deploy-pages@v4
+        with:
+          artifact_name: previous-pages
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v8
+        with:
+          name: previous-pages
+          path: ${{ runner.temp }}/previous
+      - run: python3 scripts/smoke-pages.py 'https://qubar.site' "$RUNNER_TEMP/previous/artifact.tar"
+
+  github-release:
+    needs: [changes, stage, deploy, pages, accept]
+    if: ${{ !failure() && !cancelled() && needs.accept.result == 'success' && needs.changes.outputs.published != 'true' }}
     runs-on: ubuntu-latest
     permissions:
-      contents: write # 建 tag / Release
-      packages: write # 给 GHCR 镜像加版本标签
-      pull-requests: read # 读发版 PR 描述
+      contents: write
+      packages: write
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 0 # 版本计算需要全部提交与 tag
-
-      - name: 计算版本号
-        id: v
-        run: scripts/next-version.sh "$GITHUB_SHA" | tee -a "$GITHUB_OUTPUT"
-
+          fetch-depth: 0
+      - name: 核对本次实际部署（恢复后需重跑整个工作流）
+        env:
+          WEB: ${{ needs.changes.outputs.web }}
+          DEPLOY_ATTEMPT: ${{ needs.pages.outputs.attempt }}
+        run: |
+          if [[ "$WEB" == true ]]; then test "$DEPLOY_ATTEMPT" = "$GITHUB_RUN_ATTEMPT"; fi
+      - uses: actions/download-artifact@v8
+        with:
+          name: candidate-pages
+          path: ${{ runner.temp }}/final
+      - name: 发布前复核持久清单摘要与域名上的内容
+        env:
+          PAGES_HASH: ${{ needs.stage.outputs.pages_hash }}
+        run: |
+          printf '%s  %s\n' "$PAGES_HASH" "$RUNNER_TEMP/final/artifact.tar" | sha256sum -c
+          python3 scripts/smoke-pages.py 'https://qubar.site' "$RUNNER_TEMP/final/artifact.tar"
       - uses: docker/login-action@v4
-        if: steps.v.outputs.next != ''
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 镜像加版本标签（不重新构建）
-        if: steps.v.outputs.next != ''
-        env:
-          NEXT: ${{ steps.v.outputs.next }}
-        run: docker buildx imagetools create -t "$IMAGE:$NEXT" "$IMAGE:$GITHUB_SHA"
-
-      # 放在最后：Release 存在即表示本 job 已完成，失败重跑时 next-version.sh 不会重复出版本。
-      - name: GitHub Release
-        if: steps.v.outputs.next != ''
+      - name: 记录生产状态并发布版本
         env:
           GH_TOKEN: ${{ github.token }}
-          PREV: ${{ steps.v.outputs.prev }}
-          NEXT: ${{ steps.v.outputs.next }}
+          PREV: ${{ needs.changes.outputs.prev }}
+          NEXT: ${{ needs.changes.outputs.next }}
+          LIVE_IMAGE: ${{ needs.deploy.outputs.image }}
+          PAGES_HASH: ${{ needs.stage.outputs.pages_hash }}
         run: |
-          pr=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
-            --jq '[.[] | select(.base.ref == "main")][0].number // empty')
-          if [ -z "$pr" ]; then
-            echo "未找到合入 main 的发版 PR，使用自动生成的说明"
-            gh release create "$NEXT" --target "$GITHUB_SHA" --title "$NEXT" --latest \
-              --generate-notes ${PREV:+--notes-start-tag "$PREV"}
-            exit 0
-          fi
-          {
-            gh pr view "$pr" --json body --jq .body
-            echo
-            echo "---"
-            echo
-            echo "发版 PR：#$pr"
-            if [ -n "$PREV" ]; then
-              echo
-              echo "**Full Changelog**: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/$PREV...$NEXT"
-            fi
-          } > "$RUNNER_TEMP/release-notes.md"
-          gh release create "$NEXT" --target "$GITHUB_SHA" --title "$NEXT" --latest \
-            --notes-file "$RUNNER_TEMP/release-notes.md"
+          cd "$RUNNER_TEMP"
+          base="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          run="$base/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT"
+          restore_tag=$PREV
+          if [[ "$restore_tag" == v0.9.0 ]]; then restore_tag=web-baseline-v0.9.0; fi
+          jq -n --arg restore "$base/releases/download/$restore_tag/manifest.json" --arg sha "$GITHUB_SHA" --arg image "$LIVE_IMAGE" --arg prev "$PREV" \
+            --arg hash "$PAGES_HASH" --arg url "$base/releases/download/$NEXT/pages.tar" --arg run "$run" \
+            '{sha:$sha, image:$image, pages:{sha256:$hash,url:$url}, previous:$prev, previous_manifest:$restore, deployment:$run}' > manifest.json
+          cd "$GITHUB_WORKSPACE"
+          scripts/product-log.sh "$PREV" HEAD '- %s (%h)' > "$RUNNER_TEMP/notes.md"
+          docker buildx imagetools create --prefer-index=false -t "$IMAGE:$NEXT" "$LIVE_IMAGE"
+          gh release upload "$NEXT" "$RUNNER_TEMP/manifest.json" --clobber
+          gh release edit "$NEXT" --draft=false --latest --notes-file "$RUNNER_TEMP/notes.md"

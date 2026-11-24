@@ -1,0 +1,61 @@
+# 接管前在主仓的临时域名验证首次发布运行生成的原包。
+name: pages-preview
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 同一 main 提交的成功 release 运行 ID
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: release-prod
+  cancel-in-progress: false
+jobs:
+  stage:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pages: read
+    steps:
+      - uses: actions/checkout@v5
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" |
+            jq -e --arg sha "$GITHUB_SHA" '.path == ".github/workflows/release.yml" and .head_branch == "main" and .head_sha == $sha and .conclusion == "success"' > /dev/null
+          test "$(gh api "repos/$GITHUB_REPOSITORY/pages" --jq .cname)" = preview.qubar.site
+          gh run download "$RUN_ID" -n github-pages -D "$RUNNER_TEMP/preview"
+          python3 scripts/verify-pages.py "$RUNNER_TEMP/preview/artifact.tar"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: preview-pages
+          path: ${{ runner.temp }}/preview/artifact.tar
+          if-no-files-found: error
+          overwrite: true
+  preview:
+    needs: stage
+    runs-on: ubuntu-latest
+    environment: github-pages
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: test "$(gh api "repos/$GITHUB_REPOSITORY/pages" --jq .cname)" = preview.qubar.site
+      - uses: actions/deploy-pages@v4
+        with:
+          artifact_name: preview-pages
+      - uses: actions/download-artifact@v8
+        with:
+          name: preview-pages
+          path: ${{ runner.temp }}/preview
+      - run: python3 scripts/smoke-pages.py https://preview.qubar.site "$RUNNER_TEMP/preview/artifact.tar"

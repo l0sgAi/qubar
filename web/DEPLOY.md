@@ -5,3 +5,5 @@
 生产包使用站点根路径 `/`，包含 `index.html`、相同内容的 `404.html`、`landing/`、`assets/` 和 `.well-known/`。预览该包时使用独立域名根路径。GitHub Pages 的域名绑定在仓库 Settings → Pages 管理。
 
 迁移期间由旧仓提供线上站点。主仓 PR 目标为 `develop`；发布负责人在域名、证书、回退包和冒烟流程就绪后接管。[迁移交接单](https://github.com/l0sgAi/qubar-frontend/issues/62)
+
+首次接管、环境保护、版本清单和失败重试步骤见[统一发布手册](../docs/ops/product-release.md)。
