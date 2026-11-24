@@ -55,6 +55,12 @@ type PostRepository interface {
 	CountReviewingByCircle(ctx context.Context, circleID uuid.UUID) (int64, error)
 	// GetCircleIDsByIDs 批量取 帖子ID → 所属 circle_id，不过滤删除 / 状态（通知跳转用，#156）；查不到的 ID 不在结果里。
 	GetCircleIDsByIDs(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
+	// GetShareCounts 批量取 帖子ID → post.share_count（分享数缓存 miss 回源，#233）；查不到的 ID 不在结果里。
+	GetShareCounts(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]int64, error)
+	// IsShared 用户是否分享过该帖（查 domains.post_share 的 uk_post_share_user_post，#233）。
+	IsShared(ctx context.Context, userID, postID uuid.UUID) (bool, error)
+	// BatchIsShared 批量查用户分享过哪些帖子（同一唯一索引）；返回已分享 postID 集合（未分享的不在 map 中）。
+	BatchIsShared(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (map[uuid.UUID]bool, error)
 }
 
 // AutoReplyPostFilter 机器人自动回复的帖子候选过滤条件（aiagent 扫描器经 Facade 传入）。
@@ -91,6 +97,15 @@ type PostStatsCache interface {
 	// IncrCommentCount 递增帖子评论计数（Hash 字段 comment_count +1）。
 	// 供 comment 领域发评论后调用。
 	IncrCommentCount(ctx context.Context, postID uuid.UUID) error
+}
+
+// PostShareCountCache 帖子分享数缓存（Redis String post:sharecnt:{post_id}，#233）。
+// post 领域只读取并在 miss 时回种；分享自增由 share 领域负责，落库后校准由帖子统计消费者负责。
+type PostShareCountCache interface {
+	// BatchGet 批量读分享数（1 RTT）。只返回缓存命中的 postID，未命中的不在结果里。
+	BatchGet(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]int64, error)
+	// SeedIfAbsent 批量回种（仅 key 不存在时写入，不覆盖并发自增 / 校准过的新值）。
+	SeedIfAbsent(ctx context.Context, counts map[uuid.UUID]int64) error
 }
 
 // InteractionCheck 用户点赞 / 收藏 ZSET 批查结果。

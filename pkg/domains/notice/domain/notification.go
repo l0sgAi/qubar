@@ -1,7 +1,7 @@
 // Package domain 存放 notice 领域的纯领域模型。
 //
 // notice 领域负责站内通知（消息中心）的读侧：列表/未读数/已读。
-// 写路径不在本域：4 触发域（like/collect/comment/post）发 notification_events
+// 写路径不在本域：触发域（like/collect/comment/post/follow）发 notification_events
 // Redpanda 事件，NotificationEventConsumer 批量 upsert domains.notification。
 // 设计见 docs/notice-design.md。
 package domain
@@ -26,9 +26,10 @@ const (
 	NoticeTypePostReported int16 = 9  // 帖子待处理举报达到阈值 → 本圈圈主 + 管理员（#153）
 	NoticeTypePostSelfHarm int16 = 10 // 帖子疑似自伤 / 轻生倾向（已发布，需人工关怀）→ 本圈圈主 + 管理员（#153）
 	NoticeTypePostRemoved  int16 = 11 // 帖子被举报后经圈管复核下架 → 帖子作者（#153）
+	NoticeTypeFollow       int16 = 12 // 被关注 → 被关注者（#219）；不挂帖子 / 评论，post_id / comment_id 为 NULL、snippet 为空
 
 	// NoticeTypeMax 最大合法通知类型（列表 type 过滤校验上限）。
-	NoticeTypeMax = NoticeTypePostRemoved
+	NoticeTypeMax = NoticeTypeFollow
 )
 
 // IsCircleReviewNotice 该类型是否为发给圈管的审核类通知（举报 / 疑似自伤）：列表回填帖子所属 circle_id，
@@ -56,7 +57,8 @@ const (
 // Notification 站内通知实体（domains.notification）。
 //
 // 去重模型：每对 (recipient, actor, type, target) 仅一行（uk_notice_dedup 表达式索引），
-// 重复触发（重赞）upsert 复用行 + 重置未读；取消赞/收藏不回收（负向事件不发布）。
+// 重复触发（重赞 / 取关后再关注）upsert 复用行 + 重置未读；取消赞 / 收藏 / 关注不回收（负向事件不发布）。
+// 被关注通知（12）没有 target：post_id / comment_id 都是 NULL，每个关注者对同一接收人只有一行。
 type Notification struct {
 	ID          uuid.UUID  `json:"id" gorm:"type:uuid;primaryKey;column:id"`
 	RecipientID uuid.UUID  `json:"recipient_id" gorm:"column:recipient_id"`

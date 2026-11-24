@@ -225,8 +225,8 @@ func TestLikePipeline_CommentLikeFlushedToPG(t *testing.T) {
 	}
 	testkit.CleanupRows(t, "domains.comment", "id", c.ID)
 	testkit.CleanupRows(t, "domains.comment_like", "comment_id", c.ID)
-	testkit.CleanupKeys(t, redispkg.GetCommentStatsKey(c.ID))
 	user := newTestUser(t)
+	testkit.CleanupKeys(t, redispkg.GetUserCommentLikeListKey(user), redispkg.GetUserCommentLikeLoadedKey(user))
 
 	res, err := likeSvc.Toggle(ctx, user, likeapp.ToggleInput{Type: "comment", TargetID: c.ID})
 	if err != nil || !res.IsLiked {
@@ -248,4 +248,8 @@ func TestLikePipeline_CommentLikeFlushedToPG(t *testing.T) {
 		}
 		return row.PostID != nil && *row.PostID == postID && row.Deleted == 0 && likeCount == 1
 	})
+	// #207：评论点赞不再写 Redis 计数 Hash，like_count 只以 PG 为准。
+	if n := redispkg.Client.Exists(ctx, "comment:stats:"+c.ID.String()).Val(); n != 0 {
+		t.Fatalf("comment:stats:%s exists, want no comment stats hash", c.ID)
+	}
 }

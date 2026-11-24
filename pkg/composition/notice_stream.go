@@ -27,8 +27,8 @@ import (
 
 // ServeNoticeStream 构造 GET /notice/stream handler。
 //
-// 流程：auth（header→query 兜底）→ 注册连接（超限踢该用户最旧连接）→ 连接建立即推全量（首事件带 retry）
-// → 泵循环（conn chan 推 unread-count / 25s 心跳 + token 复检 → auth-expired /
+// 流程：auth（header→query 兜底）→ 注册连接（超限踢该用户最旧连接）→ 连接建立即推各计数通道全量（首事件带 retry）
+// → 泵循环（conn chan 推 unread-count / dm-unread（#241）/ 即时事件 dm-message（#241）/ 25s 心跳 + token 复检 → auth-expired /
 // 被踢 → conn-evicted / 客户端断开即退出释放名额）。
 // 重连带 Last-Event-ID 一律忽略：连接建立即推当前全量，不补历史。
 func ServeNoticeStream(hub noticeapp.StreamHub) app.HandlerFunc {
@@ -82,8 +82,8 @@ func ServeNoticeStream(hub noticeapp.StreamHub) app.HandlerFunc {
 		// 不再等下一次写失败（最长一个心跳周期）。
 		gone := middleware.ClientGone(ctx)
 
-		// 首事件数据在 hijack 前备好，失败仍可返回 JSON 错误。
-		first, err := hub.Snapshot(ctx, userID)
+		// 首包数据在 hijack 前备好，失败仍可返回 JSON 错误。
+		firsts, err := hub.Snapshot(ctx, userID)
 		if err != nil {
 			logger.Log.Error("Failed to snapshot unread count for notice stream: " + err.Error())
 			httputil.InternalError(ac)
@@ -94,11 +94,19 @@ func ServeNoticeStream(hub noticeapp.StreamHub) app.HandlerFunc {
 		c.Response.Header.Set("X-Accel-Buffering", "no")
 		w := sse.NewWriter(c)
 
-		// 连接建立即推全量；retry 重连建议仅首事件携带。
-		if err := writeUnreadEvent(w, first, retry); err != nil {
-			return
+		// 连接建立即推各计数通道全量（unread-count，接着 dm-unread）；retry 重连建议仅首事件携带。
+		// 每个通道各自记录已推值，与 Snapshot/首事件竞态的重复值兜底去重（hub 内 lastSent 已挡大部分）。
+		var sent countSent
+		for i, ev := range firsts {
+			r := time.Duration(0)
+			if i == 0 {
+				r = retry
+			}
+			if err := writeCountEvent(w, ev, r); err != nil {
+				return
+			}
+			sent.mark(ev)
 		}
-		lastSent := first.Count
 
 		ticker := time.NewTicker(heartbeat)
 		defer ticker.Stop()
@@ -111,14 +119,26 @@ func ServeNoticeStream(hub noticeapp.StreamHub) app.HandlerFunc {
 				_ = w.WriteEvent("", "conn-evicted", nil)
 				return
 			case ev := <-conn.Events:
-				// 与 Snapshot/首事件竞态的重复值兜底去重（hub 内 lastSent 已挡大部分）。
-				if ev.Count == lastSent {
+				if !sent.changed(ev) {
 					continue
 				}
-				if err := writeUnreadEvent(w, ev, 0); err != nil {
+				if err := writeCountEvent(w, ev, 0); err != nil {
 					return // 客户端断开/假死：defer Remove 释放连接
 				}
-				lastSent = ev.Count
+				sent.mark(ev)
+			case ev := <-conn.DMEvents:
+				if !sent.changed(ev) {
+					continue
+				}
+				if err := writeCountEvent(w, ev, 0); err != nil {
+					return
+				}
+				sent.mark(ev)
+			case p := <-conn.Pushes:
+				// 即时事件（dm-message 新私信摘要）：不去重，原样下发。
+				if err := w.WriteEvent(p.ID, p.Type, p.Data); err != nil {
+					return
+				}
 			case <-ticker.C:
 				// 心跳 + token 复检（D2a：覆盖登出/过期/Kickout，≤heartbeat 延迟）。
 				if !stputil.IsLogin(token) {
@@ -133,12 +153,39 @@ func ServeNoticeStream(hub noticeapp.StreamHub) app.HandlerFunc {
 	}
 }
 
-// writeUnreadEvent 写一条 unread-count 事件。retry>0 时携带重连建议（仅首事件）。
-func writeUnreadEvent(w *sse.Writer, ev noticeapp.StreamEvent, retry time.Duration) error {
+// SSE 事件名。计数事件 data 统一为 {"unread_count": N}（全量）；dm-message 的 data 见 messageapp.NewMessageEvent。
+const (
+	sseEventUnreadCount = "unread-count" // 消息中心未读通知数
+	sseEventDMUnread    = "dm-unread"    // 私信未读总数（#241）
+	sseEventDMMessage   = "dm-message"   // 新私信摘要，只推给接收方（#241）
+)
+
+// countEventNames 计数通道 → SSE 事件名。新增通道时同步这里与前端对接文档。
+var countEventNames = [noticeapp.NumStreamChannels]string{
+	noticeapp.ChannelNoticeUnread: sseEventUnreadCount,
+	noticeapp.ChannelDMUnread:     sseEventDMUnread,
+}
+
+// countSent 单连接各计数通道已下发的值（handler 层兜底去重）。
+type countSent struct {
+	value [noticeapp.NumStreamChannels]int64
+	ok    [noticeapp.NumStreamChannels]bool
+}
+
+func (s *countSent) changed(ev noticeapp.StreamEvent) bool {
+	return !s.ok[ev.Channel] || s.value[ev.Channel] != ev.Count
+}
+
+func (s *countSent) mark(ev noticeapp.StreamEvent) {
+	s.value[ev.Channel], s.ok[ev.Channel] = ev.Count, true
+}
+
+// writeCountEvent 写一条计数事件（事件名按通道映射，data 为 {"unread_count": N}）。retry>0 时携带重连建议（仅首事件）。
+func writeCountEvent(w *sse.Writer, ev noticeapp.StreamEvent, retry time.Duration) error {
 	data, _ := json.Marshal(struct {
 		UnreadCount int64 `json:"unread_count"`
 	}{UnreadCount: ev.Count})
-	e := &sse.Event{Type: "unread-count"}
+	e := &sse.Event{Type: countEventNames[ev.Channel]}
 	e.SetID(ev.ID)
 	e.SetData(data)
 	if retry > 0 {

@@ -44,6 +44,7 @@
 | like | POST | `/like/toggle` | 赞切换(post/comment) |
 | collect | POST | `/collect/toggle` | 收藏切换 |
 | collect | GET | `/collect/posts` | 我的收藏 |
+| share | POST | `/post/share` | 帖子外部分享（一人一帖只记一次，#232） |
 | history | GET | `/history/posts` | 浏览历史 |
 | storage | POST | `/upload/image` | 上传单图 |
 | storage | POST | `/upload/post-images` | 上传帖子图(多) |
@@ -105,6 +106,11 @@
 - Service（`application/service.go`）：`Toggle`(校验→RestoreStats→解析真实状态→**同步 upsert** post_collect(返回 changed)→Lua 设值→仅 changed 发 collect_count 事件，投递失败回滚)/
   `ListCollectedPosts`(DB keyset `(create_time,id)`)。
 - 缓存：`user:collect:posts:{uid}` ZSET。
+
+### share（`PostShare`，`domains.post_share`，#232）
+- Service（`application/service.go`）：`SharePost`(post 桥接 `GetShareable`=已发布+`CanViewPost` → `INSERT … ON CONFLICT DO NOTHING`(影响行数=首次) →
+  首次：同步发分享事件 `post_share_events`(失败删行→`ErrEventPublishFailed`/503) + best-effort `post_share_count` 标记与热度 → `post:sharecnt` +1)。
+- 缓存：`post:sharecnt:{post_id}` String（冷 key 按 post_share 行数 SET NX 回种）；`post.share_count` 由帖子统计消费者按 post_share 重算，不进 ES。
 
 ### history ⭐（`PostViewHistory`，`domains.post_view_history`）
 - **DB 只由 MQ consumer 写**，repo 是冷启动兜底。

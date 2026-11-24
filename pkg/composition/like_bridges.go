@@ -41,7 +41,7 @@ func (t *likePostTarget) CanView(ctx context.Context, userID, postID uuid.UUID) 
 	return t.delegate.CanViewPost(ctx, userID, postID)
 }
 
-// ===== comment → like（评论存在性 + 所属帖子ID + 统计缓存恢复 + 真实点赞状态）=====
+// ===== comment → like（评论存在性 + 所属帖子ID + 真实点赞状态）=====
 
 // likeCommentTarget 把 comment.application.CommentService 适配为 like.application.CommentTarget。
 type likeCommentTarget struct {
@@ -57,10 +57,6 @@ func (t *likeCommentTarget) ExistsWithPostID(ctx context.Context, commentID uuid
 		return nil, false, nil
 	}
 	return postID, true, nil
-}
-
-func (t *likeCommentTarget) RestoreStats(ctx context.Context, commentID uuid.UUID) error {
-	return t.delegate.RestoreCommentStats(ctx, commentID)
 }
 
 func (t *likeCommentTarget) IsLiked(ctx context.Context, userID, commentID uuid.UUID) (bool, error) {

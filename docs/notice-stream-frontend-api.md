@@ -2,6 +2,7 @@
 
 > 面向前端同学。后端设计见 `docs/design/sse-notification-design.md`，轮询接口见 `docs/notice-frontend-api.md`。
 > 一句话：新增 `GET /notice/stream` 长连接，未读数一变服务端主动推；**保留原 30s 轮询作为降级**。
+> #241 起同一连接还推**私信**未读总数 `dm-unread` 与新私信摘要 `dm-message`（§3.4，详见 `docs/api/message-api.md` §3）；只监听 `unread-count` 的旧版前端不受影响。
 
 ## 一、能力总览
 
@@ -28,7 +29,7 @@ const es = new EventSource(`/notice/stream?satoken=${encodeURIComponent(token)}`
 
 ## 三、事件格式
 
-### 3.1 `unread-count` — 未读数更新（唯一数据事件）
+### 3.1 `unread-count` — 消息中心未读数更新
 
 ```text
 event: unread-count
@@ -82,7 +83,25 @@ es.addEventListener('conn-evicted', () => {
 })
 ```
 
-### 3.4 心跳注释行 `: ping`
+### 3.4 `dm-unread` / `dm-message` — 私信（#241）
+
+```text
+event: dm-unread
+id: 1762843800123-8
+data: {"unread_count":2}
+
+event: dm-message
+id: 1762843800124-9
+data: {"id":"...","conversation_id":"...","sender_id":"...","sender":{...},"msg_type":1,"content":"你好","truncated":false,"create_time":"..."}
+```
+
+- `dm-unread`：私信未读总数全量，语义同 `unread-count`（首包下发、1s 合并、值不变不推），与 `GET /message/unread-count` 同源。
+  **与 `unread-count` 是两个独立的数**，私信角标只认它。
+- `dm-message`：新私信摘要，只推给接收方，不合并、不去重；`content` 只有前 100 个字符（`truncated` 标记是否截断）。
+- 字段说明与前端处理建议见 `docs/api/message-api.md` §3。
+- 不监听这两个事件的页面不受影响（EventSource 对未监听的具名事件不触发回调）。
+
+### 3.5 心跳注释行 `: ping`
 
 25s 一帧，EventSource **不会触发任何事件**，仅保活，无需处理。5 分钟无数据属正常。
 
@@ -156,5 +175,6 @@ export function disconnectNoticeStream() {
 
 - 与轮询接口的关系：**互备不互斥**。SSE 建立后停轮询；SSE 挂了就开轮询。两条链路的值永远一致（同源）。
 - 不要在 `unread-count` 回调里立刻再调 `/notice/unread-count`——推送的就是全量值，再调是浪费。
-- 新通知到达只推未读数，**不推通知内容**；用户进入消息中心仍走 `GET /notice/list` 拉列表。
+- 新通知到达只推未读数，**不推通知内容**；用户进入消息中心仍走 `GET /notice/list` 拉列表。（私信例外：新私信会推 `dm-message` 摘要，见 §3.4。）
+- 首包现在是两条：`unread-count`（带 `retry`）紧跟 `dm-unread`。
 - 原生 EventSource 不支持自定义 header；若用 fetch/`@microsoft/fetch-event-source` 实现，可直接 header 带 `satoken`，query 不传。

@@ -17,13 +17,13 @@ type PostLikeCache interface {
 	StatsExists(ctx context.Context, postID uuid.UUID) (bool, error)
 }
 
-// CommentLikeCache 评论点赞缓存（Redis ZSET + stats Hash + Lua 原子设值）。
+// CommentLikeCache 评论点赞缓存（Redis ZSET + Lua 原子设值）。
+//
+// 只维护用户点赞状态 ZSET，没有计数缓存：评论 like_count 只以 PG 为准（#207）。
 type CommentLikeCache interface {
 	// Set 原子设置评论点赞状态（liked=true 赞 / false 取消）。
-	// 已处于期望状态时返回 ToggleResultUnchanged，不修改计数。
+	// 已处于期望状态时返回 ToggleResultUnchanged。
 	Set(ctx context.Context, userID, commentID uuid.UUID, liked bool) (ToggleResult, error)
-	// StatsExists 检查评论统计 Hash 是否存在（用于恢复缓存）。
-	StatsExists(ctx context.Context, commentID uuid.UUID) (bool, error)
 }
 
 // LikeEventPublisher 点赞事件发布（异步持久化到 DB）。

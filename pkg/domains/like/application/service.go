@@ -3,7 +3,7 @@
 // 职责：
 //   - 点赞/取消点赞（先解析真实状态，再 Redis Lua 原子设值；已处于期望态则 no-op）
 //   - 跨 post / comment 两种目标类型
-//   - 点赞前恢复统计缓存（避免 Lua 脚本读到不存在的 stats Hash）
+//   - 帖子点赞前恢复统计缓存（避免 Lua 脚本读到不存在的 stats Hash）；评论没有计数缓存（#207）
 //   - 状态真正变化时才异步发布点赞事件（Redpanda → 消费者批量持久化到 DB）
 package application
 
@@ -39,8 +39,6 @@ type CommentTarget interface {
 	// ExistsWithPostID 检查评论是否存在，并返回其所属帖子ID。
 	// 未找到返回 nil, false, nil。
 	ExistsWithPostID(ctx context.Context, commentID uuid.UUID) (postID *uuid.UUID, exists bool, err error)
-	// RestoreStats 恢复评论统计缓存（如果不存在）。
-	RestoreStats(ctx context.Context, commentID uuid.UUID) error
 	// IsLiked 用户当前是否已赞该评论（缓存优先，miss 回源 DB 并回填缓存）。
 	IsLiked(ctx context.Context, userID, commentID uuid.UUID) (bool, error)
 }
@@ -202,10 +200,6 @@ func (s *likeServiceImpl) toggleCommentLike(ctx context.Context, userID, comment
 		if !visible {
 			return nil, domain.ErrCommentNotFound
 		}
-	}
-
-	if err := s.commentTarget.RestoreStats(ctx, commentID); err != nil {
-		logger.Log.Error("Failed to restore comment stats cache: " + err.Error())
 	}
 
 	current, err := s.commentTarget.IsLiked(ctx, userID, commentID)

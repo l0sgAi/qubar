@@ -83,7 +83,7 @@ COMMENT ON COLUMN domains.ai_agent.trigger_mode IS '触发模式: 1=全部新帖
 COMMENT ON COLUMN domains.ai_agent.trigger_keywords IS 'trigger_mode=2时的关键词列表(JSON数组,应用层匹配)';
 COMMENT ON COLUMN domains.ai_agent.max_replies_per_hour IS '每小时最大回复数(0=不限,按ai_agent_reply_log统计)';
 COMMENT ON COLUMN domains.ai_agent.min_interval_sec IS '两次回复最小间隔秒数(0=不限)';
-COMMENT ON COLUMN domains.ai_agent.auto_config IS '自主行为配置(JSON对象,与trigger_mode互不影响): auto_reply={enabled,targets,post_hot_min,comment_like_min,comment_reply_min,window_hours,max_per_hour}; 各子对象按顶层key独立写入';
+COMMENT ON COLUMN domains.ai_agent.auto_config IS '自主行为配置(JSON对象,与trigger_mode互不影响): auto_reply={enabled,targets,post_hot_min,comment_like_min,comment_reply_min,window_hours,max_per_hour}; auto_post={enabled,interval_min,daily_max,active_hours,topics,require_review}(仅全局机器人); 各子对象按顶层key独立写入';
 COMMENT ON COLUMN domains.ai_agent.status IS '状态: 0=停用, 1=启用';
 
 -- --- 索引优化 ---
@@ -230,3 +230,28 @@ CREATE INDEX idx_ai_agent_circle ON domains.ai_agent (circle_id) WHERE deleted =
 > 存量行 `trigger_source` 回填规则（存量日志未记录来源，按回复形态 + 机器人触发模式推断）：
 > status=2/3 → 1；回复挂在评论楼层内 → 1（同时回填 `target_comment_id`）；顶层回复：手动模式机器人 → 3，其余 → 2；
 > 无评论的失败行按机器人当前触发模式推断（2 → 1，3 → 3，其余 → 2）。
+
+## 自动发帖日志表（#101）
+
+> 全局机器人在 hot 圈自动发帖的日志，迁移见 `migrations/20261031171726_add_ai_agent_post_log.up.sql`（权威）。
+> 每次发帖尝试先插 `status=2` 占位行，撞唯一约束 `uk_ai_agent_post_log_topic (agent_id, topic_key)` 即跳过
+> （同一机器人同一话题只发一次，多实例 / 并发兜底），终态原地更新。`interval_min` / `daily_max` 统计这张表（含失败 / 占位）。
+> 不进 CDC（`-- cdc: none`）。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | uuid | 主键（UUIDv7，应用层生成） |
+| `agent_id` | uuid | 机器人ID（`ai_agent.id`，无 FK） |
+| `circle_id` | uuid | 发帖目标圈（配置 `aiagent.autonomy.hot_circle_id`） |
+| `topic_key` | varchar(64) | 规范化首条来源 URL 的 SHA-256（小写 hex） |
+| `post_id` | uuid | 生成的帖子ID；占位 / 失败为 NULL |
+| `status` | smallint | 0=失败，1=成功，2=占位（进程中断保持 2，视为已触发不重试） |
+| `search_query` | varchar(128) | 本次搜索关键词 |
+| `sources` | jsonb | 提供给 LLM 的搜索结果 `[{title,url,source,published_at}]`；成功后更新为帖子实际引用的来源。近 7 天出现过的 URL 不再作为材料 |
+| `error_msg` | varchar(2048) | 失败原因 |
+| `latency_ms` / `prompt_tokens` / `completion_tokens` | int | 耗时与 token 用量 |
+| `create_time` / `update_time` | timestamptz | 占位时间（限频口径）/ 终态时间 |
+
+索引：`uk_ai_agent_post_log_topic (agent_id, topic_key)` 唯一；`idx_ai_agent_post_log_agent_time (agent_id, create_time DESC)` 供限频统计与来源去重。
+
+`ai_agent.auto_config.auto_post` 子对象：`{enabled, interval_min, daily_max, active_hours, topics, require_review}`（仅全局机器人，规则见 `docs/api/ai-agent-admin-api.md` §2.6）。

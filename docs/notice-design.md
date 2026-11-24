@@ -68,12 +68,13 @@ type NotificationEventMessage struct {
     PostID         *uuid.UUID  `json:"post_id,omitempty"`    // 跳转用；like_post/collect_post/comment_post/mention(post) 必填
     CommentID      *uuid.UUID  `json:"comment_id,omitempty"` // like_comment/comment_post/reply_comment/mention(comment) 必填
     MentionUserIDs []uuid.UUID `json:"mention_user_ids,omitempty"` // type=mention 专用（触发端已校验+截断）
+    RecipientID    *uuid.UUID  `json:"recipient_id,omitempty"`     // type=follow 专用：被关注者（#219，见 §九）
     Snippet        string      `json:"snippet,omitempty"`    // comment 类：正文快照（已 SanitizeForPg）
     Ts             int64       `json:"ts"`
 }
 ```
 
-Kafka key = 目标 ID（post_id 或 comment_id），同目标事件保序。
+Kafka key = 目标 ID（comment_id > post_id > recipient_id，都没有时用 actor_id），同目标事件保序。
 
 ### 3.3 消费端接收人解析与规则
 
@@ -85,6 +86,7 @@ flush 一批事件后：
    - `like_comment` → `SELECT id, user_id FROM domains.comment WHERE id IN (...)`
    - `reply_comment` → `SELECT id, reply_to_user_id FROM domains.comment WHERE id IN (...)`（新评论的 reply_to_user_id 即接收人）
    - `mention` → 事件自带 mention_user_ids，不反查
+   - `follow` → 事件自带 recipient_id，不反查（#219，见 §九）
 3. **R1 自动作过滤**：recipient == actor 丢弃。
 4. **R4 同人同事去重**：批内按 (recipient, comment_id) 分组，mention 优先于 reply_comment/comment_post，只留一条。
 5. **R3 幂等 upsert**：唯一表达式索引锚点 `ON CONFLICT DO UPDATE SET is_read=0, snippet, update_time`（重赞复用行、重置未读；列表按 id 序位置不变，确认项 #7）。
@@ -116,7 +118,7 @@ flush 一批事件后：
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/notice/list?type=&cursor=&size=` | keyset 游标（base64 JSON `{id}`，`ORDER BY id DESC`，UUIDv7 序，仿 comment cursor）；type 空/0=全部，支持单值 `1`-`8`（7/8 为帖子人工审核结果，#118）或逗号分隔多值 `1,2`（分类 tab 聚合，`notice_type IN (...)`）；size `normalizeSize` 回落 20 |
+| GET | `/notice/list?type=&cursor=&size=` | keyset 游标（base64 JSON `{id}`，`ORDER BY id DESC`，UUIDv7 序，仿 comment cursor）；type 空/0=全部，支持单值 `1`-`12`（7 / 8 为帖子人工审核结果，#118；9–11 为举报 / 疑似自伤 / 下架，#153；12 为被关注，#219）或逗号分隔多值 `1,2`（分类 tab 聚合，`notice_type IN (...)`）；size `normalizeSize` 回落 20 |
 | GET | `/notice/unread-count` | Redis 计数器，miss → DB COUNT 回填 |
 | POST | `/notice/read` | `{ids: []string}` 批量已读（仅本人），DECR 计数器（floor 0） |
 | POST | `/notice/read-all` | 全部已读，计数器 SET 0 |
@@ -275,3 +277,57 @@ notice:
 6. **机器人通知**：bot 作 actor 正常触发（推荐：用户该看到 AI 回复通知）；bot 作 recipient 仍落库（推荐：无害）vs recipient=role2 过滤。
 7. **R3 重赞语义**：复用行重置未读、列表位置不变（推荐：upsert 简单幂等）vs 删旧插新行（位置提前，但破坏幂等锚点）。
 8. **flush 间隔**：5s（推荐：红点延迟可接受）vs 10s 对齐现有 like/collect 链路。
+
+## 九、被关注通知（notice_type = 12，#219）
+
+> 用户关注（#29）的第 3 步。业务规则 2026-11-10 由维护者确认：**与点赞通知一致**——每个关注者对同一接收人只有一条；
+> 取关后再次关注复用同一条并重新置为未读；取关不撤回。不改表、不加配置。
+
+### 9.1 触发端（follow 域）
+
+| 项 | 实现 |
+|---|---|
+| 触发点 | `follow/application/relation.go` 的 `Follow`：仓储 `RelationRepository.Follow` 返回 `changed == true`（关系这次真的从「未关注」变为「已关注」，事务已提交）才发 |
+| 不发的情况 | 重复关注（幂等命中，`changed == false`）；取关（不发也不撤回）；关注被拒绝（关注自己 / 目标不存在 / 达到上限）或写库失败 |
+| 端口与实现 | `follow/domain/event_publisher.go` 的 `FollowEventPublisher.PublishFollowed` → `follow/infrastructure/follow_event_publisher.go`（委托 `redpanda.PublishNotificationEvent`），同域依赖、构造器注入（`composition/wire_follow.go`） |
+| 失败语义 | best-effort：`application/notify.go` 只记日志，关注接口照常返回（与点赞通知一样没有 outbox） |
+
+### 9.2 事件
+
+```json
+{ "type": "follow", "actor_id": "<关注者>", "recipient_id": "<被关注者>", "ts": 1794300000000 }
+```
+
+- 关注通知没有可供 consumer 反查的帖子 / 评论，接收人由触发端自带：`NotificationEventMessage` 新增 `recipient_id`（`omitempty`），
+  与 `mention` 自带 `mention_user_ids` 是同一种做法。`post_id` / `comment_id` / `snippet` 不带。
+- 兼容性：其他类型的消息编码后不带 `recipient_id`；旧版本发出的消息解码后该字段为 nil，各类型的处理不变。
+  旧版本 consumer 收到 `type=follow` 会按未知类型丢弃并记日志（回滚到旧版本时关注通知不落库，不影响其他类型）。
+- Kafka key = `recipient_id`（沿用「key = 目标 ID」的约定）。关注事件之间没有顺序依赖：只发正向事件，upsert 幂等。
+
+### 9.3 消费端
+
+| 步骤 | 行为 |
+|---|---|
+| 接收人 | 取事件的 `recipient_id`；缺失（非法消息）丢弃。不查帖子 / 评论 / 用户表 |
+| R1 | `recipient == actor` 丢弃（服务层已经拒绝关注自己，这里兜底） |
+| 落库 | `recipient_id` = 被关注者，`actor_id` = 关注者，`notice_type = 12`，`post_id` / `comment_id` 为 NULL，`snippet` 为空串（事件里即使带了也清掉） |
+| 去重 | `uk_notice_dedup` 的 `post_id` / `comment_id` 经 `COALESCE` 归一成零值 UUID，键退化为 `(recipient, actor, 12)`：每个关注者对同一接收人一行 |
+| 再次关注 | 走 upsert 冲突分支：`is_read = 0`、刷新 `update_time`，`id` / `create_time` 不变（列表位置不变，与重赞一致；不属于 9 / 10 的「换新 id 顶到最前」） |
+| 未读数 / SSE | 与其他类型同一条路径：upsert 后按接收人 `INCRBY notice:unread:{uid}`，再回调 SSE hub（`/notice/stream`）推送未读数全量 |
+| 机器人接收人 | 不过滤。现有类型都不区分接收人是不是 AI 机器人账号（确认项 #6：bot 作 recipient 仍落库），被关注的是机器人时同样落库并计入它的未读数；机器人不登录，没有连接，SSE 推送为空操作 |
+
+### 9.4 读侧
+
+- `NoticeTypeMax = 12`，`GET /notice/list?type=12` 可单独过滤。
+- 不属于 `HidesActor`：列表项照常带 `actor`（关注者），前端用 `actor.id` 跳关注者主页；没有 `post_id` / `comment_id` / `circle_id`。
+
+### 9.5 边界与已知限制
+
+| 项 | 现状 |
+|---|---|
+| 反复关注 / 取关骚扰 | 每次重新关注都会把同一条通知重新置为未读并推送，没有频率限制（与反复点赞相同，#219 范围外，另开 issue） |
+| 未读计数漂移 | 旧通知还未读时再次关注，行状态不变但 Redis 计数器仍 +1（与重赞相同）；计数器是软信号，24h TTL 到期或 miss 时回源 `COUNT` 校正 |
+| 发布失败 / 进程崩溃 | 关注已生效但通知丢失（无 outbox，与其他类型相同） |
+| 关注者之后被禁用 / 删除 | 通知保留；列表回填不到 `actor` 时该字段缺省，前端按「有人」兜底且不可跳转 |
+| 列注释 | `domains.notification.notice_type` 的 `COMMENT` 还停在 1–11。只改注释也要走迁移（高风险路径），#219 不含迁移，随后续迁移补上 |
+| 聚合 / 单独开关 | 「A 等 N 人关注了你」、关注通知免打扰都不做（#219 范围外） |

@@ -54,7 +54,6 @@ type fakeCommentCache struct{ *fakeLikeCache }
 func (c fakeCommentCache) Set(_ context.Context, _, commentID uuid.UUID, liked bool) (domain.ToggleResult, error) {
 	return c.set(commentID, liked)
 }
-func (c fakeCommentCache) StatsExists(context.Context, uuid.UUID) (bool, error) { return true, nil }
 
 type publishedEvent struct {
 	target uuid.UUID

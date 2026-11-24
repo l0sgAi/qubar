@@ -236,6 +236,17 @@ func (r *agentRepoPG) ListAutoReplyEnabled(ctx context.Context) ([]domain.AiAgen
 	return agents, err
 }
 
+// ListAutoPostEnabled 自动发帖候选机器人：只取全局机器人，判定方式同 ListAutoReplyEnabled。
+func (r *agentRepoPG) ListAutoPostEnabled(ctx context.Context) ([]domain.AiAgent, error) {
+	var agents []domain.AiAgent
+	err := r.db.WithContext(ctx).
+		Where("deleted = ? AND status = ? AND circle_id IS NULL", 0, domain.AgentStatusEnabled).
+		Where("auto_config -> ? -> 'enabled' = 'true'::jsonb", domain.AutoConfigKeyAutoPost).
+		Order("create_time ASC").
+		Find(&agents).Error
+	return agents, err
+}
+
 func (r *agentRepoPG) ExistsByLinkedUserID(ctx context.Context, userID uuid.UUID) (bool, error) {
 	var count int64
 	err := r.db.WithContext(ctx).Model(&domain.AiAgent{}).

@@ -1,8 +1,8 @@
 // Package domain 定义 recommend 领域的端口与 DTO。
 //
 // recommend 是跨域编排器（无聚合根）：调 post(hydrate/circle_id)、circle(joined IDs)、
-// redis(seed/cf:item/feed 池)。所有跨域依赖经此包接口抽象，由 composition 注入桥接器，
-// 本包不 import post/circle，避免环依赖。
+// follow(关注的用户 ID)、redis(seed/cf:item/feed 池)。所有跨域依赖经此包接口抽象，由 composition 注入桥接器，
+// 本包不 import post/circle/follow，避免环依赖。
 package domain
 
 import (
@@ -14,8 +14,8 @@ import (
 
 // FeedPostItem 推荐流帖子项（镜像 post.PostListItem 字段 + 当前用户交互态）。
 //
-// post 域的 PostListItem 无 is_liked/is_collected 字段且不改其签名；
-// recommend 域自定义本类型，由 InteractionChecker 批量回填两个 flag。
+// post 域的 PostListItem 无 is_liked/is_collected/is_shared 字段且不改其签名；
+// recommend 域自定义本类型，由 InteractionChecker 批量回填交互 flag。
 type FeedPostItem struct {
 	ID           uuid.UUID `json:"id"`
 	CircleID     uuid.UUID `json:"circle_id"`
@@ -28,6 +28,7 @@ type FeedPostItem struct {
 	CommentCount int       `json:"comment_count"`
 	LikeCount    int       `json:"like_count"`
 	CollectCount int       `json:"collect_count"`
+	ShareCount   int       `json:"share_count"` // 分享数（post 域 Redis post:sharecnt 回填，口径同详情，#233）
 	IsPinned     int16     `json:"is_pinned"`
 	IsEssence    int16     `json:"is_essence"`
 	IsLock       int16     `json:"is_lock"`
@@ -40,6 +41,7 @@ type FeedPostItem struct {
 	Images       []string  `json:"images"`
 	IsLiked      bool      `json:"is_liked"`
 	IsCollected  bool      `json:"is_collected"`
+	IsShared     bool      `json:"is_shared"` // 当前用户是否分享过（访客恒为 false，#233）
 }
 
 // FeedPage 推荐流分页结果。
@@ -60,6 +62,10 @@ type HomeFeedSearcher interface {
 	// circleIDs nil/空=全局；非空=terms 过滤。next 为下一页 searchAfter（recall 内部翻页用）。
 	// excludeCircleIDs 为查看者不可见的私密圈（must_not）。
 	Search(ctx context.Context, sort string, circleIDs, excludeCircleIDs []uuid.UUID, size int, searchAfter []interface{}) (ids []uuid.UUID, next []interface{}, err error)
+	// SearchFollowing 关注流：帖子所在圈子在 circleIDs 内，或作者在 authorIDs 内（命中任一即可，同一帖子只返回一次），
+	// create_time desc；其余过滤与 Search 的 "latest" 一致。两个列表都为空时返回空结果，不退化成全局流。
+	// excludeCircleIDs 为查看者不可见的私密圈（must_not），对两种条件都生效。
+	SearchFollowing(ctx context.Context, circleIDs, authorIDs, excludeCircleIDs []uuid.UUID, size int, searchAfter []interface{}) (ids []uuid.UUID, next []interface{}, err error)
 }
 
 // PostHydrator 把 postID 列表 hydrate 成 FeedPostItem（作者/圈子/图片/统计；不含交互态）。
@@ -84,6 +90,12 @@ type CircleLookup interface {
 	ListJoinedCircleIDs(ctx context.Context, userID uuid.UUID, limit int) ([]uuid.UUID, error)
 }
 
+// FolloweeLookup 用户关注的全部用户 ID（关注流用；composition 桥接 follow 域，数量上限由 follow 域按
+// follow.max_following 控制）。
+type FolloweeLookup interface {
+	ListFolloweeIDs(ctx context.Context, userID uuid.UUID) ([]uuid.UUID, error)
+}
+
 // SeedReader 用户互动种子（C5 CF seed + exclude 已交互 + CF 相似召回）。
 type SeedReader interface {
 	LikedPostIDs(ctx context.Context, userID uuid.UUID, limit int) ([]uuid.UUID, error)
@@ -93,9 +105,10 @@ type SeedReader interface {
 	CFSimilar(ctx context.Context, seedPostIDs []uuid.UUID, topNPerSeed int) (map[uuid.UUID]float64, error)
 }
 
-// InteractionChecker 批量回填 is_liked/is_collected（ZSET 缓存优先，miss 回源 DB；由 composition 桥接 post）。
+// InteractionChecker 批量回填 is_liked/is_collected（ZSET 缓存优先，miss 回源 DB）与 is_shared（查 post_share）；
+// 由 composition 桥接 post。
 type InteractionChecker interface {
-	BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (liked, collected map[uuid.UUID]bool, err error)
+	BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (liked, collected, shared map[uuid.UUID]bool, err error)
 }
 
 // FeedCache 推荐流候选池（Redis LIST feed:recommend:{uid} + 版本 token）。
