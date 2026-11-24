@@ -1128,6 +1128,7 @@ export default {
       goRegister: '注册新账号',
       continueGuest: '暂不登录，继续浏览',
       actions: {
+        message: '发私信',
         like: '点赞',
         collect: '收藏',
         comment: '发表评论',
@@ -1285,13 +1286,29 @@ export default {
     // remaining_count 为数字时的提示（未关注 5 条限制）
     remaining: '对方关注你或回复前，还可发送 {count} 条',
     newMessageFrom: '{name} 给你发了私信',
+    // 非私信页收到新私信时的提示（DmToastListener）
+    newMessageToast: '{name}：{content}',
+    someone: '有人',
+    // 会话列表：我发的最后一条加前缀
+    ownPreview: '我：{content}',
+    loadFailed: '加载失败，点击重试',
+    deleted: '会话已删除',
+    deleteFailed: '删除失败，请稍后重试',
+    retry: '重试',
+    charCount: '{count} / {max}',
+    cannotMessageSelf: '不能给自己发私信',
+    peerDeleted: '对方账号已注销，无法发送私信',
     // 谁可以给我发私信（utils/message.js 的 DM_PERMISSION_OPTIONS）
     permission: {
       label: '谁可以给我发私信',
       everyone: '所有人',
       following: '仅我关注的人',
       mutual: '仅互相关注',
-      closed: '关闭私信'
+      closed: '关闭私信',
+      desc: '修改后立即生效，不满足条件的人在聊天页会看到原因',
+      saved: '私信设置已更新',
+      saveFailed: '保存失败，请稍后重试',
+      loadFailed: '读取私信设置失败'
     },
     // 不能发送 / 发送失败：utils/message.js 的 dmReasonKey、dmSendErrorKey
     error: {
