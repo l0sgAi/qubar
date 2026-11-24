@@ -1,6 +1,7 @@
 export default {
   // 通用
   common: {
+    retry: 'Retry',
     appName: 'Qubar',
     search: 'Search',
     searchPlaceholder: 'Search circles, posts...',

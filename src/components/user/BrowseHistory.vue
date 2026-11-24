@@ -62,6 +62,9 @@
               :view-count="post.views"
               :like-count="post.likes"
               :comment-count="post.comments"
+              :share-count="post.shareCount"
+              :status="post.status"
+              shareable
               flush>
               <template v-if="post.viewedText" #meta>
                 <span class="viewed-time">{{ post.viewedText }}</span>
@@ -147,6 +150,12 @@
                   </NIcon>
                   {{ formatNumber(post.collects) }}
                 </span>
+                <ShareButton
+                  v-if="post.status === 1"
+                  :post-id="post.id"
+                  :title="post.title"
+                  :share-count="post.shareCount"
+                />
               </div>
             </div>
           </NCard>
@@ -171,6 +180,7 @@ import { useI18n } from 'vue-i18n'
 import { getHistoryPosts } from '@/api/history'
 import { useFormatTime, useFormatNumber } from '@/utils/i18n'
 import ImageCarousel from '@/components/common/ImageCarousel.vue'
+import ShareButton from '@/components/post/ShareButton.vue'
 import MobilePostItem from '@/components/post/MobilePostItem.vue'
 import { useMobileShell } from '@/composables/useAppShell'
 import SmartLink from '@/components/common/SmartLink.vue'
@@ -253,6 +263,8 @@ const transformPost = (p) => ({
   comments: p.comment_count || 0,
   likes: p.like_count || 0,
   views: p.view_count || 0,
+  shareCount: p.share_count ?? null,
+  status: p.status ?? 1,
   collects: p.collect_count || 0,
   viewedText: viewedLabel(p.viewed_at || '') // 本次浏览时间文本（viewed_at，RFC3339）
 })

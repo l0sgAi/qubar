@@ -28,6 +28,8 @@
             :post-time="post.postTime"
             :like-count="post.likeCount"
             :comment-count="post.commentCount"
+            :share-count="post.shareCount"
+            :is-shared="post.isShared"
           />
         </div>
 
@@ -47,6 +49,11 @@
           </div>
         </div>
 
+        <div v-else-if="loadFailed" class="empty-state" role="alert">
+          <p class="empty-text">{{ t('feed.loadFailed') }}</p>
+          <NButton text @click="fetchLatest(recentPosts.length > 0)">{{ t('common.retry') }}</NButton>
+        </div>
+
         <!-- 加载更多（search_after 游标翻页） -->
         <div v-else-if="hasMore" class="load-more">
           <NButton text :disabled="loadingMore" @click="handleLoadMore">
@@ -62,7 +69,7 @@
         </div>
 
         <!-- 空状态 -->
-        <div v-if="recentPosts.length === 0 && !loading" class="empty-state">
+        <div v-if="recentPosts.length === 0 && !loading && !loadFailed" class="empty-state">
           <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
           </svg>
@@ -110,6 +117,7 @@ const PAGE_SIZE = 6
 // 最新发布帖子（原首页 latest tab 迁移至此）：search_after 游标翻页
 const recentPosts = ref([])
 const loading = ref(false)     // 首屏
+const loadFailed = ref(false)
 const loadingMore = ref(false) // 加载更多
 const searchAfter = ref('')    // 游标原样透传
 const hasMore = ref(false)
@@ -126,13 +134,16 @@ const transformPost = (p) => {
     images: p.images || [],
     postTime: isNaN(ts) ? Date.now() : ts, // NTime 接受 number|Date
     likeCount: p.like_count || 0,
-    commentCount: p.comment_count || 0
+    commentCount: p.comment_count || 0,
+    shareCount: p.share_count ?? null,
+    isShared: !!p.is_shared
   }
 }
 
 // 拉取最新帖子：append=true 追加下一页
 const fetchLatest = async (append = false) => {
   if (append ? loadingMore.value : loading.value) return
+  loadFailed.value = false
   if (append) loadingMore.value = true
   else loading.value = true
   try {
@@ -148,6 +159,7 @@ const fetchLatest = async (append = false) => {
     // has_more=false 时不返回 search_after；二者同时判断更稳妥
     hasMore.value = !!data.has_more && !!searchAfter.value
   } catch (error) {
+    loadFailed.value = true
     console.error('获取最新帖子失败:', error)
     message.error(error.message || t('feed.loadFailed'))
   } finally {

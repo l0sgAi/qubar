@@ -61,6 +61,9 @@
               :view-count="post.views"
               :like-count="post.likes"
               :comment-count="post.comments"
+              :share-count="post.shareCount"
+              :status="post.status"
+              :shareable="post.status === 1"
               :tone="post.tone"
               flush>
               <template v-if="post.status !== undefined && post.status !== 1" #meta>
@@ -146,6 +149,12 @@
                   </NIcon>
                   {{ formatNumber(post.views) }}
                 </span>
+                <ShareButton
+                  v-if="post.status === 1"
+                  :post-id="post.id"
+                  :title="post.title"
+                  :share-count="post.shareCount"
+                />
               </div>
             </div>
           </NCard>
@@ -170,6 +179,7 @@ import { useI18n } from 'vue-i18n'
 import { getMyPosts, getUserPosts } from '@/api/post'
 import { useFormatTime, useFormatNumber } from '@/utils/i18n'
 import ImageCarousel from '@/components/common/ImageCarousel.vue'
+import ShareButton from '@/components/post/ShareButton.vue'
 import MobilePostItem from '@/components/post/MobilePostItem.vue'
 import AppDropdown from '@/components/common/AppDropdown.vue'
 import SmartLink from '@/components/common/SmartLink.vue'
@@ -231,7 +241,7 @@ const transformPost = (p) => ({
   authorAvatar: p.author_avatar || '',
   circleName: p.circle_name || '',
   images: p.images || [],
-  status: p.status,
+  status: p.status ?? (props.userId ? 1 : undefined),
   tone: getPostStatusInfo(p.status).tone,
   isPinned: p.is_pinned,
   isEssence: p.is_essence,
@@ -239,6 +249,7 @@ const transformPost = (p) => ({
   comments: p.comment_count || 0,
   likes: p.like_count || 0,
   views: p.view_count || 0,
+  shareCount: p.share_count ?? null,
   collects: p.collect_count || 0
 })
 

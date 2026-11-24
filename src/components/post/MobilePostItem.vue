@@ -54,7 +54,7 @@
       <span class="m-stat"><NIcon size="14"><CommentIcon /></NIcon>{{ formatNumber(commentCount) }}</span>
       <span class="m-stat"><NIcon size="14"><HeartIcon /></NIcon>{{ formatNumber(likeCount) }}</span>
       <span class="m-stat"><NIcon size="14"><EyeIcon /></NIcon>{{ formatNumber(viewCount) }}</span>
-      <!-- 分享（信息流开启；「我的帖子」等列表不开）：未发布的帖子不可分享 -->
+      <!-- 未发布的帖子不可分享 -->
       <ShareButton
         v-if="shareable && (status === null || status === 1)"
         class="m-share"
@@ -100,7 +100,7 @@ defineProps({
   viewCount: { type: Number, default: 0 },
   likeCount: { type: Number, default: 0 },
   commentCount: { type: Number, default: 0 },
-  // 分享按钮（信息流卡片开启）；shareCount 为 null 时只显示图标，isShared 缺省按未分享
+  // 分享按钮；shareCount 为 null 时只显示图标，isShared 缺省按未分享
   shareable: { type: Boolean, default: false },
   shareCount: { type: Number, default: null },
   isShared: { type: Boolean, default: false },

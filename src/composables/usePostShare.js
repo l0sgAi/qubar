@@ -20,7 +20,7 @@ const sharedKeys = reactive(new Set())
 // 同一账号对同一帖子同时最多一个计数请求，连点共用
 const inflight = new Map()
 
-const keyOf = (postId) => `${auth.getToken() || ''}\n${postId}`
+const keyOf = (postId, token = auth.getToken()) => `${token || ''}\n${postId}`
 
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -59,10 +59,10 @@ export function usePostShareState(postId, count, shared) {
 }
 
 /** 记录一次成功的分享计数（POST /post/share 的响应） */
-export function applyShareResult(postId, data) {
+export function applyShareResult(postId, data, token = auth.getToken()) {
   const n = toCount(data?.share_count)
   if (n !== null) counts[postId] = Math.max(n, counts[postId] ?? 0)
-  sharedKeys.add(keyOf(postId))
+  if (token) sharedKeys.add(keyOf(postId, token))
 }
 
 /**
@@ -71,7 +71,8 @@ export function applyShareResult(postId, data) {
  * @returns {Promise<{ share_count: number, first_share: boolean }>}
  */
 export function recordPostShare(postId, { retryDelay = 800 } = {}) {
-  const key = keyOf(postId)
+  const token = auth.getToken()
+  const key = keyOf(postId, token)
   const pending = inflight.get(key)
   if (pending) return pending.then(data => ({ ...data, first_share: false }))
 
@@ -82,10 +83,11 @@ export function recordPostShare(postId, { retryDelay = 800 } = {}) {
     } catch (error) {
       if (!isShareRetryableError(error)) throw error
       await wait(retryDelay)
+      if (auth.getToken() !== token || !auth.isAuthenticated()) throw error
       res = await sharePost(postId)
     }
     const data = res?.data || {}
-    applyShareResult(postId, data)
+    applyShareResult(postId, data, token)
     return { share_count: data.share_count, first_share: !!data.first_share }
   })()
   inflight.set(key, request)
@@ -107,16 +109,17 @@ export function recordPostShare(postId, { retryDelay = 800 } = {}) {
  * }>}
  */
 export async function sharePostLink({ postId, title = '' }, options) {
+  const token = auth.getToken()
   const result = await shareOrCopy({ title, url: postShareUrl(postId) })
   const outcome = { result, counted: false, firstShare: false, errorKey: null }
   if (result !== 'shared' && result !== 'copied') return outcome
-  if (!auth.isAuthenticated()) return outcome
+  if (auth.getToken() !== token || !auth.isAuthenticated()) return outcome
   try {
     const data = await recordPostShare(postId, options)
     outcome.counted = true
-    outcome.firstShare = data.first_share
+    outcome.firstShare = auth.getToken() === token && data.first_share
   } catch (error) {
-    outcome.errorKey = shareErrorKey(error)
+    if (auth.getToken() === token) outcome.errorKey = shareErrorKey(error)
   }
   return outcome
 }

@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { flushPromises } from '@vue/test-utils'
 import { ref } from 'vue'
+import { auth } from '@/utils/auth'
 
 const mocks = vi.hoisted(() => ({ sharePost: vi.fn() }))
 vi.mock('@/api/post', () => ({ sharePost: mocks.sharePost }))
@@ -13,9 +15,12 @@ const {
   __resetPostShare
 } = await import('@/composables/usePostShare')
 
-const login = (token = 'tok-a') => {
-  localStorage.setItem('qubar_token', token)
-  localStorage.setItem('qubar_token_expire', String(Date.now() + 60_000))
+const login = (token = 'tok-a') => auth.setToken(token, 60)
+
+const deferred = () => {
+  let resolve
+  const promise = new Promise(r => { resolve = r })
+  return { promise, resolve }
 }
 
 const apiError = (status, code) => Object.assign(new Error('x'), { status, code })
@@ -150,6 +155,51 @@ describe('usePostShare', () => {
   describe('sharePostLink', () => {
     const stubShare = (impl) => vi.stubGlobal('navigator', { ...navigator, share: impl, clipboard: undefined })
     const stubClipboard = (writeText) => vi.stubGlobal('navigator', { ...navigator, share: undefined, clipboard: { writeText } })
+
+    it.each(['tok-b', null])('A 的慢响应更新公共计数，只给发起者高亮（当前会话 %s）', async (nextToken) => {
+      login()
+      stubClipboard(vi.fn().mockResolvedValue())
+      const response = deferred()
+      mocks.sharePost.mockReturnValue(response.promise)
+      const state = usePostShareState('p1')
+      const request = sharePostLink({ postId: 'p1' })
+      await flushPromises()
+      expect(mocks.sharePost).toHaveBeenCalledTimes(1)
+      if (nextToken) login(nextToken)
+      else auth.clearToken()
+      response.resolve({ data: { share_count: 7, first_share: true } })
+      expect(await request).toMatchObject({ counted: true, firstShare: false })
+      expect(state.value).toEqual({ count: 7, shared: false })
+      login()
+      expect(state.value).toEqual({ count: 7, shared: true })
+    })
+
+    it.each(['tok-b', null])('503 延时重试中切到 %s，停止写入并静默结束', async (nextToken) => {
+      vi.useFakeTimers()
+      login()
+      stubClipboard(vi.fn().mockResolvedValue())
+      mocks.sharePost.mockRejectedValue(apiError(503, 212))
+      const request = sharePostLink({ postId: 'p1' })
+      await vi.advanceTimersByTimeAsync(300)
+      expect(mocks.sharePost).toHaveBeenCalledTimes(1)
+      if (nextToken) login(nextToken)
+      else auth.clearToken()
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(await request).toMatchObject({ counted: false, firstShare: false, errorKey: null })
+      expect(mocks.sharePost).toHaveBeenCalledTimes(1)
+      expect(resolvePostShare('p1')).toEqual({ count: null, shared: false })
+    })
+
+    it('系统面板打开期间切账号，完成分享后跳过计数', async () => {
+      login()
+      const panel = deferred()
+      stubShare(() => panel.promise)
+      const request = sharePostLink({ postId: 'p1' })
+      login('tok-b')
+      panel.resolve()
+      expect(await request).toMatchObject({ result: 'shared', counted: false })
+      expect(mocks.sharePost).not.toHaveBeenCalled()
+    })
 
     it('系统分享成功 + 登录 → 计数，链接只有帖子路径', async () => {
       login()

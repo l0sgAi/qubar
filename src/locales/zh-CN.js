@@ -1,6 +1,7 @@
 export default {
   // 通用
   common: {
+    retry: '重试',
     appName: '趣吧',
     search: '搜索',
     searchPlaceholder: '搜索兴趣圈、帖子...',

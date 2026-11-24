@@ -26,10 +26,12 @@
           {{ formatNumber(commentCount) }}
         </span>
         <!-- 分享数（只读）：整块是帖子链接，<a> 里不能再放按钮，分享在卡片 / 详情页操作 -->
-        <span v-if="share.count !== null" class="stat" :class="{ 'is-shared': share.shared }">
-          <ShareIcon />
-          {{ formatNumber(share.count) }}
-        </span>
+        <ShareCount
+          class="stat"
+          :post-id="post.postId"
+          :share-count="post.shareCount"
+          :is-shared="post.isShared"
+        />
       </div>
     </div>
   </SmartLink>
@@ -39,8 +41,7 @@
 import { computed } from 'vue'
 import { useFormatNumber } from '@/utils/i18n'
 import SmartLink from '@/components/common/SmartLink.vue'
-import { Share as ShareIcon } from '@vicons/tabler'
-import { usePostShareState } from '@/composables/usePostShare'
+import ShareCount from '@/components/post/ShareCount.vue'
 
 const props = defineProps({
   // 已 transform 的 post 对象（camelCase，与 PostCard 同源）
@@ -58,11 +59,6 @@ const circleName = computed(() => props.post.circleName || '')
 const viewCount = computed(() => props.post.viewCount || 0)
 const likeCount = computed(() => props.post.likeCount || 0)
 const commentCount = computed(() => props.post.commentCount || 0)
-const share = usePostShareState(
-  () => props.post.postId,
-  () => props.post.shareCount,
-  () => props.post.isShared
-)
 // 封面图：多图取第一张，否则回退 coverImage
 const coverImage = computed(() => {
   const imgs = props.post.images
@@ -176,7 +172,4 @@ const coverImage = computed(() => {
   height: 14px;
 }
 
-.stat.is-shared {
-  color: #66eac2;
-}
 </style>
