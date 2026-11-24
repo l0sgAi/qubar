@@ -33,6 +33,8 @@
           <span class="meta-text">{{ commentCount }}</span>
         </div>
 
+        <ShareCount :post-id="postId" :share-count="shareCount" :is-shared="isShared" />
+
         <div class="meta-item time">
           <svg class="meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="10"></circle>
@@ -53,6 +55,7 @@
 <script setup>
 import { computed } from 'vue'
 import { NTime } from 'naive-ui'
+import ShareCount from '@/components/post/ShareCount.vue'
 import SmartLink from '@/components/common/SmartLink.vue'
 
 const props = defineProps({
@@ -84,6 +87,8 @@ const props = defineProps({
     type: [Date, String, Number],
     required: true
   },
+  shareCount: { type: Number, default: null },
+  isShared: { type: Boolean, default: false },
   likeCount: {
     type: Number,
     default: 0
@@ -232,6 +237,7 @@ const summary = computed(() => {
 /* 帖子元数据 */
 .post-meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   margin-top: auto;

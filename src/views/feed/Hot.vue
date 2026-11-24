@@ -27,8 +27,13 @@
             </NButtonGroup>
           </div>
 
+          <div v-if="!loading && loadFailed" class="hot-empty" role="alert">
+            <p>{{ t('trending.loadFailed') }}</p>
+            <NButton text @click="fetchTrending">{{ t('common.retry') }}</NButton>
+          </div>
+
           <!-- 全空态 -->
-          <div v-if="!loading && isEmpty" class="hot-empty">
+          <div v-else-if="!loading && isEmpty" class="hot-empty">
               {{ t('trending.empty') }}
           </div>
 
@@ -114,6 +119,7 @@ const circles = ref([])
 const users = ref([])
 const refreshedAt = ref(0)
 const loading = ref(false)
+const loadFailed = ref(false)
 
 // 拉取世代：切时间窗时丢弃过期响应
 let fetchGen = 0
@@ -146,6 +152,7 @@ const fetchTrending = async () => {
   fetchGen++
   const gen = fetchGen
   loading.value = true
+  loadFailed.value = false
   try {
     const res = await getTrending({ window: window.value, section: 'all', size: SECTION_SIZE })
     if (gen !== fetchGen) return
@@ -156,6 +163,7 @@ const fetchTrending = async () => {
     refreshedAt.value = data.refreshed_at || 0
   } catch (e) {
     if (gen !== fetchGen) return
+    loadFailed.value = true
     console.error('获取热点榜单失败:', e)
     message.error(e.message || t('trending.loadFailed'))
     posts.value = []
