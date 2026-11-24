@@ -893,7 +893,6 @@ export default {
       empty: '本圈还没有机器人，点击「新建机器人」创建第一个',
       emptySearch: '没有匹配的机器人',
       loadFailed: '加载圈内机器人失败',
-      replyNotLive: '圈内机器人暂不会回复圈内帖子（关键词/手动触发均未生效），当前仅保存配置；回复能力将在后续版本开放。',
       credentialsOwnerOnly: 'API 协议、自定义地址与 API Key 仅圈主可修改；如需调整请联系圈主'
     },
     searchPlaceholder: '搜索机器人名称',
@@ -903,6 +902,41 @@ export default {
     deleteSuccess: '已删除',
     deleteConfirm: '确定删除「{name}」吗？删除后不可恢复（软删，无恢复接口）',
     statusUpdateFailed: '状态更新失败',
+    autoPost: {
+      section: '自动发帖',
+      enabled: '向热点圈自动发帖',
+      hint: '平台须开启自主行为，并配置热点圈和搜索服务。',
+      interval: '尝试间隔（分钟）',
+      daily: '每天最多尝试次数',
+      hours: '活跃时段（UTC+8）',
+      allDay: '全天',
+      start: '开始小时',
+      end: '结束小时（不含）',
+      topics: '搜索关键词（留空使用平台默认）',
+      errInterval: '间隔须为 0 至 10080 的整数，启用时至少 10 分钟。',
+      errDaily: '每日上限须为 0 至 48 的整数，启用时至少 1 次。',
+      errHours: '起始小时须为 0 至 23，结束小时须为 1 至 24。允许跨零点，起止时间须不同。',
+      errTopics: '最多 10 个不同的关键词，每个须为 1 至 50 个字符。'
+    },
+    manualReply: {
+      action: '手动回复',
+      title: '让「{name}」回复帖子',
+      target: '帖子 UUID 或链接',
+      circleHint: '选择本圈已发布、可回复的帖子。生成评论可能需要几十秒。',
+      globalHint: '选择已发布、可回复的帖子。生成评论可能需要几十秒。',
+      invalid: '请输入有效的帖子 UUID 或详情页链接。',
+      success: '评论已发布。',
+      viewComment: '查看生成的评论',
+      checkPost: '打开帖子核对评论',
+      close: '关闭',
+      uncertain: '尚未确认回复结果。请先到帖子中核对，再决定是否重新发起。',
+      unavailable: '请确认机器人已启用手动模式，帖子已发布且未锁定。',
+      forbidden: '当前账号没有触发这个机器人的权限。',
+      notFound: '机器人或帖子不存在，或帖子不在该机器人的管理范围内。',
+      conflict: '机器人或帖子状态已变化。请刷新列表后核对。',
+      rateLimit: '已达到机器人的回复频率限制，请稍后再试。',
+      failed: '回复生成失败。请检查机器人配置及服务状态。'
+    },
     triggerModes: {
       all: '全部新帖',
       keyword: '关键词触发',
@@ -918,6 +952,7 @@ export default {
       actions: '操作'
     },
     form: {
+      createDisabled: '创建时停用',
       sectionBasic: '基本信息',
       sectionApi: '模型接入',
       sectionTrigger: '触发与限频',

@@ -101,6 +101,7 @@
     </div>
 
     <!-- 创建/编辑弹窗 -->
+    <AgentReplyModal v-if="replyAgent && isAdmin" :agent="replyAgent" @close="replyAgent = null" />
     <AgentFormModal
       v-model:show="showFormModal"
       :agent="editingAgent"
@@ -119,6 +120,7 @@ import { useI18n } from 'vue-i18n'
 import { Search as SearchIcon } from '@vicons/tabler'
 import AppHeader from '@/components/layout/AppHeader.vue'
 import SideNav from '@/components/layout/SideNav.vue'
+import AgentReplyModal from '@/components/agent/AgentReplyModal.vue'
 import AgentFormModal from '@/components/agent/AgentFormModal.vue'
 import ManagedCircleList from '@/components/circle/ManagedCircleList.vue'
 import { getAgentList, updateAgent, deleteAgent } from '@/api/agent'
@@ -320,8 +322,11 @@ const columns = computed(() => [
   {
     title: t('agent.table.actions'),
     key: 'actions',
-    width: 130,
+    width: 200,
     render: row => h('div', { class: 'agent-cell-actions' }, [
+      isAdmin.value && row.status === 1 && row.trigger_mode === 3
+        ? h(NButton, { size: 'tiny', onClick: () => { replyAgent.value = row } }, { default: () => t('agent.manualReply.action') })
+        : null,
       h(NButton, { size: 'tiny', quaternary: true, onClick: () => openEdit(row) }, { default: () => t('common.edit') }),
       h(NPopconfirm, {
         onPositiveClick: () => handleDelete(row)
@@ -336,6 +341,7 @@ const columns = computed(() => [
 // ---- 创建/编辑弹窗 ----
 const showFormModal = ref(false)
 const editingAgent = ref(null)
+const replyAgent = ref(null)
 
 const openCreate = () => {
   editingAgent.value = null

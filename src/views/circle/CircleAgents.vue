@@ -108,7 +108,9 @@
     </div>
 
     <!-- 创建/编辑弹窗：圈子作用域；凭据字段仅圈主可改 -->
+    <AgentReplyModal v-if="replyAgent && isOwnerRole" :agent="replyAgent" circle @close="replyAgent = null" />
     <AgentFormModal
+      :key="circleId"
       v-model:show="showFormModal"
       scope="circle"
       :circle-id="circleId"
@@ -120,7 +122,7 @@
 </template>
 
 <script setup>
-import { ref, computed, h, onMounted, watch } from 'vue'
+import { ref, computed, h, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   NButton, NInput, NIcon, NAvatar, NTag, NSwitch, NDataTable, NPagination,
@@ -131,6 +133,7 @@ import { RobotOutlined as RobotIcon } from '@vicons/antd'
 import { Search as SearchIcon } from '@vicons/tabler'
 import AppHeader from '@/components/layout/AppHeader.vue'
 import SideNav from '@/components/layout/SideNav.vue'
+import AgentReplyModal from '@/components/agent/AgentReplyModal.vue'
 import AgentFormModal from '@/components/agent/AgentFormModal.vue'
 import { getCircleDetail, getCircleAgentList, updateCircleAgent, deleteCircleAgent } from '@/api/circle'
 import { isManager, isOwner } from '@/constants/circle'
@@ -155,23 +158,6 @@ const loadingCircle = ref(true)
 const isManagerRole = computed(() => isManager(myRole.value))
 const isOwnerRole = computed(() => isOwner(myRole.value))
 
-onMounted(async () => {
-  try {
-    const res = await getCircleDetail(circleId.value)
-    circleName.value = res.data?.name || ''
-    myRole.value = res.data?.member_role || 0
-    if (circleName.value) {
-      setTitleData('title.circleAgentsName', { name: circleName.value })
-    }
-  } catch (e) {
-    console.error('获取圈子详情失败:', e)
-    message.error(e.message || t('agent.circlePage.loadFailed'))
-  } finally {
-    loadingCircle.value = false
-  }
-  if (isManagerRole.value) fetchAgents()
-})
-
 // ---- 列表（服务端分页 + keyword 名称子串过滤） ----
 const agents = ref([])
 const loading = ref(false)
@@ -189,6 +175,7 @@ const quotaFull = computed(() => quotaCount.value >= 5)
 let fetchGen = 0
 
 const fetchAgents = async () => {
+  if (!isManagerRole.value) return
   const gen = ++fetchGen
   loading.value = true
   try {
@@ -366,8 +353,11 @@ const columns = computed(() => [
   {
     title: t('agent.table.actions'),
     key: 'actions',
-    width: isOwnerRole.value ? 130 : 90,
+    width: isOwnerRole.value ? 200 : 90,
     render: row => h('div', { class: 'c-agent-cell-actions' }, [
+      isOwnerRole.value && row.status === 1 && row.trigger_mode === 3
+        ? h(NButton, { size: 'tiny', onClick: () => { replyAgent.value = row } }, { default: () => t('agent.manualReply.action') })
+        : null,
       h(NButton, { size: 'tiny', quaternary: true, onClick: () => openEdit(row) }, { default: () => t('common.edit') }),
       // 删除仅圈主：管理员渲染即 403，前端直接不展示入口
       ...(isOwnerRole.value
@@ -385,6 +375,7 @@ const columns = computed(() => [
 // ---- 创建/编辑弹窗 ----
 const showFormModal = ref(false)
 const editingAgent = ref(null)
+const replyAgent = ref(null)
 
 const openCreate = () => {
   editingAgent.value = null
@@ -406,6 +397,36 @@ const handleFormSuccess = vo => {
     refreshAfterMutation()
   }
 }
+
+// 同一路由切换圈子会复用页面，权限和操作目标都要随圈子重新取。
+watch(circleId, async (id, _, onCleanup) => {
+  let current = true
+  onCleanup(() => { current = false })
+  fetchGen++
+  loadingCircle.value = true
+  myRole.value = 0
+  circleName.value = ''
+  replyAgent.value = null
+  editingAgent.value = null
+  showFormModal.value = false
+  agents.value = []
+  quotaCount.value = 0
+  total.value = 0
+  page.value = 1
+  if (!id) return
+  try {
+    const res = await getCircleDetail(id)
+    if (!current) return
+    circleName.value = res.data?.name || ''
+    myRole.value = res.data?.member_role || 0
+    if (circleName.value) setTitleData('title.circleAgentsName', { name: circleName.value })
+    if (isManagerRole.value) fetchAgents()
+  } catch (error) {
+    if (current) message.error(error.message || t('agent.circlePage.loadFailed'))
+  } finally {
+    if (current) loadingCircle.value = false
+  }
+}, { immediate: true })
 
 const goBack = () => router.push('/admin/agents')
 </script>

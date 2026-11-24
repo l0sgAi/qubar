@@ -384,3 +384,17 @@ export function deleteCircleAgent(id) {
     method: 'delete'
   })
 }
+
+/**
+ * 圈主手动触发本圈启用的手动机器人回复本圈已发布且未锁定的帖子。
+ * @param {string} id - 圈内机器人 UUID
+ * @param {string} postId - 帖子 UUID
+ * @returns {Promise} data 为生成的评论 UUID。同步生成，失败不自动重发。
+ */
+export function triggerCircleAgentReply(id, postId) {
+  return request({
+    url: `/circle/agent/${id}/reply/${postId}`,
+    method: 'post',
+    timeout: 120000
+  })
+}
