@@ -77,6 +77,19 @@ describe('composables/useNoticeStream', () => {
     expect(unreadCount.value).toBe(0)
   })
 
+  it('切号后，即使旧连接还未卸载也忽略其私信与会话失效事件', () => {
+    login()
+    const stream = useNoticeStream()
+    const received = vi.fn()
+    stream.onDmMessage(received)
+    stream.start()
+    localStorage.setItem('qubar_token', 'next-session')
+    lastEs().emit('dm-message', JSON.stringify({ conversation_id: 'old' }))
+    lastEs().emit('auth-expired', '{}')
+    expect(received).not.toHaveBeenCalled()
+    expect(localStorage.getItem('qubar_token')).toBe('next-session')
+  })
+
   it('conn-evicted：主动 close 阻止自动重连，回落 30s 轮询，不再重建 SSE', async () => {
     login()
     const { start, unreadCount } = useNoticeStream()

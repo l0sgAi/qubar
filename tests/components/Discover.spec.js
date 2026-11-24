@@ -56,6 +56,17 @@ describe('Discover：私密圈帖子被过滤后的分页（后端 #170）', () 
     wrapper?.unmount()
   })
 
+  it('首屏失败时显示错误，刷新成功才展示空态', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    api.getDiscover = vi.fn().mockRejectedValueOnce(new Error('500')).mockResolvedValueOnce({ data: {} })
+    await mountPage()
+    expect(wrapper.get('[role="alert"]').text()).toBe(createTestI18n().global.t('discover.loadFailed'))
+    await wrapper.get('.refresh-btn').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    expect(wrapper.get('.discover-empty').text()).toBe(createTestI18n().global.t('discover.empty'))
+  })
+
   it('首屏帖子不足 size 条时仍可继续加载；offset 按池切片（size）累加，而不是已展示条数', async () => {
     api.getDiscover = vi.fn((params) => {
       if (params.section === 'all') {

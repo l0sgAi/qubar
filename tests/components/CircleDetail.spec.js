@@ -113,6 +113,18 @@ describe('CircleDetail：私密圈非成员空态（后端 #170）', () => {
     document.body.innerHTML = ''
   })
 
+  it('圈内帖子返回 500 时显示错误，重试成功后才出现空态', async () => {
+    api.getCircleDetail = vi.fn().mockResolvedValue({ data: fullDetail() })
+    api.getCirclePosts.mockRejectedValueOnce(new Error('500')).mockResolvedValueOnce({ data: { posts: [] } })
+    await mountPage()
+    const alert = wrapper.get('.posts-list [role="alert"]')
+    expect(alert.text()).toContain(createTestI18n().global.t('feed.loadFailed'))
+    await alert.get('button').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.posts-list [role="alert"]').exists()).toBe(false)
+    expect(wrapper.get('.posts-list .empty-state').text()).toBe(createTestI18n().global.t('post.noPosts'))
+  })
+
   it('restricted：展示「仅成员可见」精简页，不请求圈内帖子，不弹错误', async () => {
     api.getCircleDetail = vi.fn(() => Promise.resolve({ data: restrictedDetail() }))
     await mountPage()

@@ -1,5 +1,5 @@
 <template>
-  <NConfigProvider :theme="darkTheme" :theme-overrides="themeOverrides">
+  <NConfigProvider :theme="darkTheme">
     <div class="user-profile-page">
       <!-- 顶栏 + 侧边栏（移动端外框切换见 AppShell） -->
       <AppShell v-model:offset="offset" />

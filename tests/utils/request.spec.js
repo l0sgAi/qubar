@@ -41,6 +41,13 @@ describe('utils/request', () => {
       expect(mock.history.get[0].headers.satoken).toBe('tok-123')
     })
 
+    it('分享从操作到请求派发之间换号时取消请求', async () => {
+      const share = request.post('/post/share', { post_id: 'p' }, { expectedSession: 'tok-123' })
+      localStorage.setItem(TOKEN_KEY, 'new-session')
+      await expect(share).rejects.toMatchObject({ code: 'ERR_CANCELED' })
+      expect(mock.history.post).toHaveLength(0)
+    })
+
     it('无 token 时不注入 satoken', async () => {
       localStorage.clear()
       mock.onGet('/post/list').reply(200, { code: 200, data: [] })
@@ -120,6 +127,16 @@ describe('utils/request', () => {
   })
 
   describe('响应拦截器：HTTP 错误状态', () => {
+    it.each([200, 401])('旧会话迟到的 401 不会登出刚切换的用户（HTTP %i）', async status => {
+      mock.onGet('/user/info').reply(() => {
+        localStorage.setItem(TOKEN_KEY, 'new-session')
+        return [status, { code: 401, message: 'expired' }]
+      })
+      await expect(request.get('/user/info')).rejects.toMatchObject({ code: 401 })
+      expect(localStorage.getItem(TOKEN_KEY)).toBe('new-session')
+      expect(location.href).toBe('http://localhost/home')
+    })
+
     it('HTTP 401 清 token 并跳转，错误带 status', async () => {
       mock.onGet('/user/info').reply(401, { code: 202, message: 'expired' })
       const err = await request.get('/user/info').catch(e => e)

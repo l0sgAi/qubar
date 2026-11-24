@@ -1,5 +1,4 @@
 import axios from 'axios'
-import { useMessage } from 'naive-ui'
 import { sanitizePayload } from '@/utils/sanitize'
 import { isFeedTabRestricted } from '@/utils/guest-access'
 import { auth } from '@/utils/auth'
@@ -19,7 +18,11 @@ const request = axios.create({
 request.interceptors.request.use(
   config => {
     // 从 localStorage 获取 token
-    const token = localStorage.getItem('qubar_token')
+    const token = auth.getToken()
+    // 分享发起时绑定会话，连同 axios 真正发送前的这段异步窗口一起校验。
+    if ('expectedSession' in config && config.expectedSession !== token) {
+      throw new axios.CanceledError('Session changed')
+    }
     if (token) {
       // 设置 sa-token 的请求头
       config.headers['satoken'] = token
@@ -54,6 +57,15 @@ function isAuthRequest(url = '') {
   )
 }
 
+// 在途请求可能属于已退出的账号，只有当前会话的 401 可以触发登出。
+function handleUnauthorized(config, message) {
+  if ((config?.headers?.satoken ?? null) !== auth.getToken()
+      || isAuthRequest(config?.url)
+      || isFeedTabRestricted(message)) return
+  auth.clearToken()
+  window.location.href = '/'
+}
+
 // 响应拦截器
 request.interceptors.response.use(
   response => {
@@ -68,11 +80,7 @@ request.interceptors.response.use(
       // 此时不应重定向（会刷掉错误提示），应直接交由调用方展示错误。
       // 另：/post/home?tab=recommend|following 访客访问时返回的 401（message='This feed tab requires login'）
       // 仅表示该 tab 需要登录，不应清 token 或跳转，交由调用方降级（如切 hot tab）。
-      if (res.code === 401 && !isAuthRequest(response.config.url) && !isFeedTabRestricted(res.message)) {
-        // token 无效或过期，清除本地存储（token 与过期时间）并跳转到登录页
-        auth.clearToken()
-        window.location.href = '/'
-      }
+      if (res.code === 401) handleUnauthorized(response.config, res.message)
 
       // 创建自定义错误对象，保留完整的响应信息
       const error = new Error(res.message || '请求失败')
@@ -91,11 +99,8 @@ request.interceptors.response.use(
       // 处理 401 未授权
       // 登录/注册等认证请求的 401 表示“凭证错误”，应交由调用方展示，不重定向。
       // /post/home 的 feed-tab 限制 401 也不在此处理——交由调用方降级。
-      if (!isAuthRequest(error.config?.url)
-          && !isFeedTabRestricted(res.message)
-          && (error.response.status === 401 || res.code === 401)) {
-        auth.clearToken()
-        window.location.href = '/'
+      if (error.response.status === 401 || res.code === 401) {
+        handleUnauthorized(error.config, res.message)
       }
 
       // 创建包含后端 message 的错误对象

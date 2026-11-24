@@ -29,7 +29,7 @@
                 <!-- 空态：following（已加入圈子 ∪ 关注的人，后端 v0.9.0）引导加圈或关注人，其余通用空文案 -->
                 <div v-else-if="loadError && !posts.length" class="feed-empty" role="alert">
                   {{ t('feed.loadFailed') }}
-                  <NButton size="small" @click="fetchFeed()">{{ t('feed.refresh') }}</NButton>
+                  <NButton size="small" @click="fetchFeed()">{{ t('common.retry') }}</NButton>
                 </div>
                 <div v-else-if="posts.length === 0" class="feed-empty">
                   {{ activeTab === 'following' ? t('feed.emptyFollowing') : t('feed.empty') }}
@@ -47,7 +47,7 @@
               </div>
               <div v-else-if="loadError" class="feed-loading-more" role="alert">
                 {{ t('feed.loadFailed') }}
-                <NButton size="small" @click="fetchFeed(true)">{{ t('feed.refresh') }}</NButton>
+                <NButton size="small" @click="fetchFeed(true)">{{ t('common.retry') }}</NButton>
               </div>
               <div v-else-if="!hasMore" class="feed-no-more">{{ t('common.noMore') }}</div>
             </template>

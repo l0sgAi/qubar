@@ -93,7 +93,7 @@ describe('usePostShare', () => {
       login()
       mocks.sharePost.mockResolvedValue({ data: { share_count: 8, first_share: true } })
       await expect(recordPostShare('p1')).resolves.toEqual({ share_count: 8, first_share: true })
-      expect(mocks.sharePost).toHaveBeenCalledWith('p1')
+      expect(mocks.sharePost).toHaveBeenCalledWith('p1', localStorage.getItem('qubar_token'))
       expect(resolvePostShare('p1')).toEqual({ count: 8, shared: true })
     })
 

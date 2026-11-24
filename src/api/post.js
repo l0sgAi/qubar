@@ -227,12 +227,14 @@ export function reportPost(data) {
  * 复制 / 唤起系统分享，同时调本接口。一人一帖只计一次，不可撤销；接口失败不影响分享本身。
  * 文档：后端 docs/api/post-share-api.md
  * @param {string} postId - 帖子 ID
+ * @param {string} [expectedSession] - 分享发起时的会话，派发前已切换则取消请求
  * @returns {Promise} data: { share_count, first_share }。失败时 reject：
  *   401 / 202 未登录（访客不要调用）；404 / 204 帖子不可分享；503 / 212 服务端已回滚，可直接重试（utils/share.js 的 isShareRetryableError）
  */
-export function sharePost(postId) {
+export function sharePost(postId, expectedSession) {
   return request({
     url: '/post/share',
+    ...(expectedSession !== undefined && { expectedSession }),
     method: 'post',
     data: { post_id: postId }
   })

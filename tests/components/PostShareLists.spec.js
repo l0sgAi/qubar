@@ -119,6 +119,17 @@ it.each([[Hot, api.getTrending], [RightSidebar, api.getHomeFeed]])('服务端失
   expect(wrapper.find(page === Hot ? '.hot-empty' : '.empty-text').text()).toBeTruthy()
 })
 
+it('个人帖子搜索失败可以重试，只有成功的空列表提示发帖', async () => {
+  vi.spyOn(console, 'error').mockImplementation(() => {})
+  api.getMyPosts.mockRejectedValueOnce(new Error('500')).mockResolvedValueOnce({ data: { posts: [] } })
+  await render(MyPosts)
+  expect(wrapper.find('.empty-hint').exists()).toBe(false)
+  await wrapper.get('[role="alert"] button').trigger('click')
+  await flushPromises()
+  expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+  expect(wrapper.find('.empty-hint').exists()).toBe(true)
+})
+
 it('列表进入详情分享再返回，旧列表计数与个人高亮均更新', async () => {
   auth.setToken('tok-p', 60)
   api.getMyPosts.mockResolvedValue({ data: { posts: [{ id: 'p', status: 1, title: '分享', share_count: 0 }] } })
@@ -136,7 +147,7 @@ it('列表进入详情分享再返回，旧列表计数与个人高亮均更新'
   expect(router.currentRoute.value.path).toBe('/post/p')
   await wrapper.get('.share-action').trigger('click')
   await flushPromises()
-  expect(api.sharePost).toHaveBeenCalledWith('p')
+  expect(api.sharePost).toHaveBeenCalledWith('p', 'tok-p')
   router.back()
   await flushPromises()
   expect(wrapper.get('.is-shared .share-stat').text()).toBe('1')

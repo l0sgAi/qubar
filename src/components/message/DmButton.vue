@@ -84,4 +84,3 @@ const handleClick = () => {
   router.push(`/messages/${props.user.id}`)
 }
 </script>
-

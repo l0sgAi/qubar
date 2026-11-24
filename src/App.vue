@@ -36,6 +36,7 @@ import { darkTheme, zhCN, enUS } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { NConfigProvider, NGlobalStyle, NMessageProvider, NDialogProvider } from 'naive-ui'
 import LoginPromptModal from '@/components/auth/LoginPromptModal.vue'
+import { stopUnreadNotice } from '@/composables/useUnreadNotice'
 import { auth } from '@/utils/auth'
 import { applyPageTitle } from '@/utils/pageTitle'
 import MobileUnsupported from '@/views/MobileUnsupported.vue'
@@ -80,6 +81,7 @@ const clearCircleSearch = () => {
 // 换号后让当前业务页重新读取该用户的数据。登录和 OAuth 回调自行完成跳转。
 const sessionVersion = ref(0)
 watch(() => auth.getToken(), () => {
+  stopUnreadNotice()
   clearCircleSearch()
   const route = router.currentRoute.value
   if (route.name === 'login' || route.name === 'success') return

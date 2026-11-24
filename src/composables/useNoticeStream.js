@@ -137,7 +137,7 @@ export function useNoticeStream({ onAuthExpired } = {}) {
     let interrupted = false
     // 已关闭的连接可能还有排队中的事件；只接受当前连接的事件。
     const listen = (name, handler) => source.addEventListener(name, event => {
-      if (es === source) handler(event)
+      if (es === source && token === auth.getToken()) handler(event)
     })
 
     listen('unread-count', (e) => {

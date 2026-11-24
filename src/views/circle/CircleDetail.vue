@@ -170,11 +170,15 @@
           <NTabs v-else v-model:value="activeTab" type="segment" animated>
             <NTabPane name="hot" :tab="t('post.hottest')">
               <div class="posts-list">
-                <div v-if="hotPosts.length === 0 && !hotLoading" class="empty-state">
+                <div v-if="hotPosts.length === 0 && !hotLoading && !postsFailed.hot" class="empty-state">
                   <p>{{t('post.noPosts')}}</p>
                 </div>
                 <div v-else>
                   <PostList :posts="hotPosts" />
+                </div>
+                <div v-if="postsFailed.hot" class="empty-state" role="alert">
+                  {{ t('feed.loadFailed') }}
+                  <NButton size="small" @click="fetchPosts('hot', !!hotSearchAfter)">{{ t('common.retry') }}</NButton>
                 </div>
                 <div ref="hotSentinel" class="load-sentinel"></div>
                 <!-- 首次加载用骨架屏；追加翻页保留底部小 spinner -->
@@ -186,11 +190,15 @@
             </NTabPane>
             <NTabPane name="new" :tab="t('post.latest')">
               <div class="posts-list">
-                <div v-if="newPosts.length === 0 && !newLoading" class="empty-state">
+                <div v-if="newPosts.length === 0 && !newLoading && !postsFailed.new" class="empty-state">
                   <p>{{t('post.noPosts')}}</p>
                 </div>
                 <div v-else>
                   <PostList :posts="newPosts" />
+                </div>
+                <div v-if="postsFailed.new" class="empty-state" role="alert">
+                  {{ t('feed.loadFailed') }}
+                  <NButton size="small" @click="fetchPosts('new', !!newSearchAfter)">{{ t('common.retry') }}</NButton>
                 </div>
                 <div ref="newSentinel" class="load-sentinel"></div>
                 <!-- 首次加载用骨架屏；追加翻页保留底部小 spinner -->
@@ -202,11 +210,15 @@
             </NTabPane>
             <NTabPane name="top" :tab="t('post.highlights')">
               <div class="posts-list">
-                <div v-if="topPosts.length === 0 && !topLoading" class="empty-state">
+                <div v-if="topPosts.length === 0 && !topLoading && !postsFailed.top" class="empty-state">
                   <p>{{t('post.noPosts')}}</p>
                 </div>
                 <div v-else>
                   <PostList :posts="topPosts" />
+                </div>
+                <div v-if="postsFailed.top" class="empty-state" role="alert">
+                  {{ t('feed.loadFailed') }}
+                  <NButton size="small" @click="fetchPosts('top', !!topSearchAfter)">{{ t('common.retry') }}</NButton>
                 </div>
                 <div ref="topSentinel" class="load-sentinel"></div>
                 <!-- 首次加载用骨架屏；追加翻页保留底部小 spinner -->
@@ -336,7 +348,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, inject, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch, inject, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NTabs, NTabPane, NButton, NIcon, NTag, NSpin, NTooltip, useMessage, useDialog } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
@@ -447,6 +459,7 @@ const topHasMore = ref(true)
 const POST_PAGE_SIZE = 20
 
 const tabTypeMap = { hot: 1, new: 2, top: 3 }
+const postsFailed = reactive({ hot: false, new: false, top: false })
 const tabStateMap = {
   hot: { posts: hotPosts, loading: hotLoading, searchAfter: hotSearchAfter, hasMore: hotHasMore },
   new: { posts: newPosts, loading: newLoading, searchAfter: newSearchAfter, hasMore: newHasMore },
@@ -482,6 +495,7 @@ const fetchPosts = async (tab, append = false) => {
   // 私密圈非成员：后端必返回 403，不发请求，直接展示「仅成员可见」
   if (membersOnly.value) return
 
+  postsFailed[tab] = false
   state.loading.value = true
   try {
     const params = {
@@ -509,6 +523,7 @@ const fetchPosts = async (tab, append = false) => {
       // 私密圈且已不是成员（被移出 / 退出）：展示空态，不弹通用错误
       postsForbidden.value = true
     } else {
+      postsFailed[tab] = true
       message.error(t('messages.getDetailFailed', { error: error.message || t('common.unknownError') }))
     }
   } finally {
@@ -727,7 +742,7 @@ const setupObservers = () => {
     const observer = new IntersectionObserver((entries) => {
       if (entries[0].isIntersecting) {
         const state = tabStateMap[tab]
-        if (state.hasMore.value && !state.loading.value) {
+        if (state.hasMore.value && !state.loading.value && !postsFailed[tab]) {
           fetchPosts(tab, true)
         }
       }
@@ -766,6 +781,7 @@ watch(() => route.params.id, async (newId, oldId) => {
   hotHasMore.value = true
   newHasMore.value = true
   topHasMore.value = true
+  for (const tab of Object.keys(tabStateMap)) postsFailed[tab] = false
   postsForbidden.value = false
   pendingModCount.value = 0
   pendingModFull.value = false

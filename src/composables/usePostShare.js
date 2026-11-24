@@ -79,12 +79,12 @@ export function recordPostShare(postId, { retryDelay = 800 } = {}) {
   const request = (async () => {
     let res
     try {
-      res = await sharePost(postId)
+      res = await sharePost(postId, token)
     } catch (error) {
       if (!isShareRetryableError(error)) throw error
       await wait(retryDelay)
       if (auth.getToken() !== token || !auth.isAuthenticated()) throw error
-      res = await sharePost(postId)
+      res = await sharePost(postId, token)
     }
     const data = res?.data || {}
     applyShareResult(postId, data, token)
