@@ -1,5 +1,5 @@
+<!-- 我的互关（路由 follow-mutual，需登录；GET /follow/mutual 只能看自己的，不受隐私开关影响） -->
 <template>
-  <!-- 我的互关（路由 follow-mutual，需登录；GET /follow/mutual 只能看自己的，不受隐私开关影响） -->
   <div class="mutual-list-page">
     <AppShell v-model:offset="offset" />
     <div class="content-wrapper" :style="contentStyle">

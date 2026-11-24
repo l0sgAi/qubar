@@ -1,5 +1,5 @@
+<!-- 关注数 / 粉丝数：list_visible=true 时是进入列表的链接，false（对方设为私密）时只显示数字 -->
 <template>
-  <!-- 关注数 / 粉丝数：list_visible=true 时是进入列表的链接，false（对方设为私密）时只显示数字 -->
   <div class="follow-stats">
     <component
       :is="listVisible ? SmartLink : 'span'"

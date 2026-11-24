@@ -1,5 +1,5 @@
+<!-- 关注 / 粉丝 / 互关通用列表：游标分页 + 无限滚动，结束只看 has_more；403 私密 / 404 / 失败重试各有状态 -->
 <template>
-  <!-- 关注 / 粉丝 / 互关通用列表：游标分页 + 无限滚动，结束只看 has_more；403 私密 / 404 / 失败重试各有状态 -->
   <div class="follow-user-list">
     <FollowUserItem
       v-for="item in items"

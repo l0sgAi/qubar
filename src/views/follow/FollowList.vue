@@ -1,5 +1,5 @@
+<!-- 关注 / 粉丝列表（路由 user-following / user-followers，:id 为列表主人，访客可读） -->
 <template>
-  <!-- 关注 / 粉丝列表（路由 user-following / user-followers，:id 为列表主人，访客可读） -->
   <div class="follow-list-page">
     <AppShell v-model:offset="offset" />
     <div class="content-wrapper" :style="contentStyle">
@@ -36,8 +36,9 @@
             <NIcon :size="28" class="state-icon"><Lock /></NIcon>
             <p>{{ t('follow.listPrivate') }}</p>
           </div>
+          <!-- 等 stats 有结果（成功或失败）再拉列表，私密时不发注定 403 的请求 -->
           <FollowUserList
-            v-else-if="ownerId"
+            v-else-if="ownerId && statsSettled"
             :list-key="`${listType}:${ownerId}`"
             :fetch-page="fetchPage"
             :empty-text="emptyText" />
@@ -73,6 +74,7 @@ const listType = computed(() => (route.name === 'user-followers' ? 'user-followe
 const owner = ref(null)
 const stats = ref(null)
 const ownerMissing = ref(false)
+const statsSettled = ref(false)
 
 const tabs = computed(() => [
   { name: 'user-following', label: t('follow.followingCount'), count: stats.value?.following_count ?? 0 },
@@ -89,6 +91,7 @@ const loadOwner = async (id) => {
   owner.value = null
   stats.value = null
   ownerMissing.value = false
+  statsSettled.value = false
   const [detail, st] = await Promise.allSettled([getUserDetail(id), getFollowStats(id)])
   if (id !== ownerId.value) return
   if (detail.status === 'fulfilled' && detail.value?.data) {
@@ -99,6 +102,7 @@ const loadOwner = async (id) => {
   } else if (st.status === 'rejected' && isFollowUserNotFoundError(st.reason)) {
     ownerMissing.value = true
   }
+  statsSettled.value = true
 }
 
 watch(ownerId, (id) => { if (id) loadOwner(id) }, { immediate: true })

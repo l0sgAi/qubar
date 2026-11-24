@@ -1,5 +1,5 @@
+<!-- 关注 / 粉丝 / 互关列表的一行：头像 + 用户名（进主页）+ 关注按钮（relation 是「我」与 TA 的关系） -->
 <template>
-  <!-- 关注 / 粉丝 / 互关列表的一行：头像 + 用户名（进主页）+ 关注按钮（relation 是「我」与 TA 的关系） -->
   <div class="follow-user-item">
     <SmartLink class="user-link" :to="{ name: 'user-detail', params: { id: user.id } }">
       <NAvatar round :size="44" :src="user.avatar_url || undefined" class="user-avatar">

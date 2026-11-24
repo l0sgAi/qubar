@@ -1,6 +1,6 @@
+<!-- 个人中心「隐私设置」分组（GET / PUT /user/settings，后端 v0.9.0）。
+     一次读取全部设置，每一项是一个 .setting-item，按顺序追加；保存统一走 updateSetting(key, value)。 -->
 <template>
-  <!-- 个人中心「隐私设置」分组（GET / PUT /user/settings，后端 v0.9.0）。
-       一次读取全部设置，每一项是一个 .setting-item，按顺序追加；保存统一走 updateSetting(key, value)。 -->
   <section class="profile-settings" :aria-label="t('follow.settings.groupTitle')">
     <div class="settings-group-title">{{ t('follow.settings.groupTitle') }}</div>
 

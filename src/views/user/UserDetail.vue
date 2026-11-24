@@ -231,9 +231,11 @@ const isSelf = computed(() => !!viewerId.value && viewerId.value === profileId.v
 
 // 关注统计（GET /follow/stats/:id，访客可读）：{ following_count, follower_count, relation, list_visible }
 const followStats = ref(null)
+// stats 请求已结束（成功或失败）：关注按钮等它，避免先显示「关注」再跳成「已关注」
+const followStatsSettled = ref(false)
 
 // 关注按钮：看自己不显示；访客显示（点击弹登录引导）
-const showFollowButton = computed(() => viewerLoaded.value && !isSelf.value && !!userInfo.value.id)
+const showFollowButton = computed(() => viewerLoaded.value && followStatsSettled.value && !isSelf.value && !!userInfo.value.id)
 // 操作区：看自己时整块不渲染（C 的私信按钮同样不对自己显示）
 const showActions = computed(() => viewerLoaded.value && !isSelf.value && !!userInfo.value.id)
 
@@ -246,6 +248,8 @@ const fetchFollowStats = async () => {
   } catch (error) {
     // 统计失败不影响主页其余内容；用户不存在由 getUserDetail 兜底
     console.error('获取关注统计失败:', error)
+  } finally {
+    if (id === profileId.value) followStatsSettled.value = true
   }
 }
 
@@ -363,6 +367,7 @@ onMounted(() => {
 watch(() => route.params.id, (id, oldId) => {
   if (!id || id === oldId || route.name !== 'user-detail') return
   followStats.value = null
+  followStatsSettled.value = false
   fetchUserInfo()
   fetchFollowStats()
 })
