@@ -1,0 +1,146 @@
+// Package composition 的 message_bridges.go：注入 message（私信）领域的跨域桥接器
+// （user → message：接收方状态、对方简要信息、私信权限设置；follow → message：未关注发送限制 / 私信权限的关注关系；
+// message → notice StreamHub：未读与新消息推送）。
+package composition
+
+import (
+	"context"
+	"encoding/json"
+
+	followapp "interestBar/pkg/domains/follow/application"
+	followdomain "interestBar/pkg/domains/follow/domain"
+	messageapp "interestBar/pkg/domains/message/application"
+	noticeapp "interestBar/pkg/domains/notice/application"
+	userapp "interestBar/pkg/domains/user/application"
+	userdomain "interestBar/pkg/domains/user/domain"
+	"interestBar/pkg/logger"
+
+	"github.com/google/uuid"
+)
+
+// ===== user → message（接收方能否收私信）=====
+
+// messageRecipientChecker 把 user.application.UserService 适配为 message.application.RecipientChecker。
+type messageRecipientChecker struct {
+	delegate userapp.UserService
+}
+
+var _ messageapp.RecipientChecker = (*messageRecipientChecker)(nil)
+
+// CheckRecipient 复用 UserService.GetByID（缓存优先，不存在 / 已禁用 / 已删除都返回 nil）；
+// AI 机器人账号（role=2，见 agent_bridges.go 的 botUserRole）不接收私信。
+func (c *messageRecipientChecker) CheckRecipient(ctx context.Context, userID uuid.UUID) (messageapp.RecipientStatus, error) {
+	user, err := c.delegate.GetByID(ctx, userID)
+	if err != nil {
+		return messageapp.RecipientNotFound, err
+	}
+	switch {
+	case user == nil:
+		return messageapp.RecipientNotFound, nil
+	case user.Role == botUserRole:
+		return messageapp.RecipientBot, nil
+	default:
+		return messageapp.RecipientOK, nil
+	}
+}
+
+// ===== user → message（会话列表里对方的简要信息）=====
+
+// messageUserBriefReader 把 user.application.UserFacade 适配为 message.application.UserBriefReader。
+type messageUserBriefReader struct {
+	delegate userapp.UserFacade
+}
+
+var _ messageapp.UserBriefReader = (*messageUserBriefReader)(nil)
+
+// GetBriefs 复用 UserFacade.GetBriefs：不存在 / 已禁用 / 已删除的用户不在返回里，会话列表据此把 peer 置为 null。
+func (r *messageUserBriefReader) GetBriefs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]messageapp.UserBrief, error) {
+	ids := make([]string, len(userIDs))
+	for i, id := range userIDs {
+		ids[i] = id.String()
+	}
+	briefs, err := r.delegate.GetBriefs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[uuid.UUID]messageapp.UserBrief, len(briefs))
+	for _, id := range userIDs {
+		if b, ok := briefs[id.String()]; ok {
+			out[id] = messageapp.UserBrief{ID: b.ID, Username: b.Username, AvatarURL: b.AvatarURL}
+		}
+	}
+	return out, nil
+}
+
+// ===== follow → message（未关注发送限制，#239）=====
+
+// messageFollowChecker 把 follow.application.FollowService 适配为 message.application.FollowChecker。
+type messageFollowChecker struct {
+	delegate followapp.FollowService
+}
+
+var _ messageapp.FollowChecker = (*messageFollowChecker)(nil)
+
+// IsFollowing 复用 FollowService.GetRelations（以 followerID 为查看者查 followeeID，直接读关系行，不走缓存）：
+// 关系值的「我关注了对方」位即 followerID 关注了 followeeID。
+func (c *messageFollowChecker) IsFollowing(ctx context.Context, followerID, followeeID uuid.UUID) (bool, error) {
+	vo, err := c.delegate.GetRelations(ctx, followerID, []uuid.UUID{followeeID})
+	if err != nil {
+		return false, err
+	}
+	return vo.Relations[followeeID.String()]&followdomain.RelationFollowing != 0, nil
+}
+
+// ===== message → notice StreamHub（私信未读与新消息实时推送，#241）=====
+
+// messageStreamNotifier 把 notice.application.StreamHub 适配为 message.application.UnreadNotifier。
+// 进程内投递、非阻塞：UnreadChanged 只标脏（hub 合并窗口内读全量、去重后推 dm-unread），
+// NewMessage 立即推 dm-message（不合并、不去重）。
+type messageStreamNotifier struct {
+	hub noticeapp.StreamHub
+}
+
+var _ messageapp.UnreadNotifier = (*messageStreamNotifier)(nil)
+
+// UnreadChanged 标记私信未读通道脏。
+func (n *messageStreamNotifier) UnreadChanged(userID uuid.UUID) {
+	n.hub.PublishChannel(noticeapp.ChannelDMUnread, userID)
+}
+
+// NewMessage 给接收方推新消息摘要（data 为 NewMessageEvent 的 JSON）。
+func (n *messageStreamNotifier) NewMessage(receiverID uuid.UUID, ev messageapp.NewMessageEvent) {
+	data, err := json.Marshal(ev)
+	if err != nil {
+		logger.Log.Error("Failed to marshal dm-message event: " + err.Error())
+		return
+	}
+	n.hub.Push(receiverID, sseEventDMMessage, data)
+}
+
+// ===== user → message（私信权限设置，#240）=====
+
+// messageDMPermissionReader 把 user.application.SettingService 适配为 message.application.DMPermissionReader。
+type messageDMPermissionReader struct {
+	delegate userapp.SettingService
+}
+
+var _ messageapp.DMPermissionReader = (*messageDMPermissionReader)(nil)
+
+// GetDMPermission 复用 SettingService.GetSettings（没有设置行时为默认值「所有人」），把 user 域取值映射为 message 域枚举；
+// 未知取值（应用层只写合法值，理论上不会出现）按关闭处理。
+func (r *messageDMPermissionReader) GetDMPermission(ctx context.Context, userID uuid.UUID) (messageapp.DMPermission, error) {
+	settings, err := r.delegate.GetSettings(ctx, userID)
+	if err != nil {
+		return messageapp.DMPermissionClosed, err
+	}
+	switch settings.DMPermission {
+	case userdomain.DMPermissionEveryone:
+		return messageapp.DMPermissionEveryone, nil
+	case userdomain.DMPermissionFollowing:
+		return messageapp.DMPermissionFollowing, nil
+	case userdomain.DMPermissionMutual:
+		return messageapp.DMPermissionMutual, nil
+	default:
+		return messageapp.DMPermissionClosed, nil
+	}
+}

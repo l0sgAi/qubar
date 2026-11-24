@@ -18,6 +18,9 @@ const (
 	// StatisticsTypePostComment 帖子评论数变化（#130）：只标记「该帖评论有变化」，Value 不参与计算，
 	// 落库时按 domains.comment 明细重算 comment_count（幂等，见 consumer.go batchUpdatePostStats）。
 	StatisticsTypePostComment = "post_comment_count"
+	// StatisticsTypePostShare 帖子分享数变化（#232）：与评论数同一口径，只标记「该帖有新分享」，Value 不参与计算，
+	// 落库时按 domains.post_share 行数重算 share_count（幂等）。
+	StatisticsTypePostShare = "post_share_count"
 )
 
 // CircleStatisticsMessage 圈子统计消息
@@ -121,19 +124,43 @@ const (
 	NoticeTypePostReported = "post_reported"  // 帖子待处理举报达到阈值 → 本圈圈主 + 管理员（#153）
 	NoticeTypePostSelfHarm = "post_self_harm" // 帖子疑似自伤 / 轻生倾向（已发布）→ 本圈圈主 + 管理员（#153）
 	NoticeTypePostRemoved  = "post_removed"   // 帖子被举报后经圈管复核下架 → 帖子作者（#153）
+	NoticeTypeFollow       = "follow"         // 被关注 → 被关注者（#219，接收人由触发端自带 RecipientID）
 )
 
 // NotificationEventMessage 通知事件消息（topic: notification_events）。
 //
 // 仅正向动作发布（取消赞/收藏不通知也不回收，触发端直接不发）。
-// 接收人不在事件里：consumer 按类型批量反查 post/comment 表解析（mention 例外，
-// 接收人由触发端校验后自带 MentionUserIDs）。
+// 接收人不在事件里：consumer 按类型批量反查 post/comment 表解析。两个例外由触发端自带接收人：
+// mention（校验后的 MentionUserIDs）与 follow（RecipientID，没有可反查的帖子 / 评论）。
+// 新增字段一律 omitempty：旧版本发出的消息没有该字段，解码后为零值，各类型的处理不受影响。
 type NotificationEventMessage struct {
 	Type           string      `json:"type"` // NoticeType* 常量
 	ActorID        uuid.UUID   `json:"actor_id"`
 	PostID         *uuid.UUID  `json:"post_id,omitempty"`          // 跳转用；like_post/collect_post/comment_post/mention(post)/审核 / 举报类必填
 	CommentID      *uuid.UUID  `json:"comment_id,omitempty"`       // like_comment/comment_post/reply_comment/mention(comment) 必填
 	MentionUserIDs []uuid.UUID `json:"mention_user_ids,omitempty"` // type=mention 专用（触发端已校验+截断）
+	RecipientID    *uuid.UUID  `json:"recipient_id,omitempty"`     // type=follow 专用：被关注者（#219）；其他类型不带、consumer 也不读
 	Snippet        string      `json:"snippet,omitempty"`          // comment 类：正文快照（已 SanitizeForPg）；like/collect/审核结果由 consumer 反查帖子标题
 	Ts             int64       `json:"ts"`                         // 事件时间 Unix 毫秒
+}
+
+// ==================== 分享事件（#232） ====================
+
+// ShareEventType 分享事件类型（固定为帖子外部分享）。
+const ShareEventType = "post_share"
+
+// ShareEventMessage 帖子首次分享事件（topic: redpanda.share_event_topic，默认 post_share_events；key = post_id）。
+//
+// 只在某用户对某帖子**首次**分享（post_share 新插入一行）时发布，重复分享不发；分享不可撤销，没有负向事件。
+// 供声望（#234 / #235）消费：作者「被分享」与分享人「每日首次分享」都能直接从事件取到，不需要反查。
+// 投递语义 at-least-once：消费方按 ShareID 去重（ShareID = domains.post_share.id，一次首次分享对应唯一一行）。
+// 新增字段一律 omitempty，旧消息解码后为零值。
+type ShareEventMessage struct {
+	Type     string    `json:"type"`      // 固定 "post_share"
+	ShareID  uuid.UUID `json:"share_id"`  // domains.post_share.id（UUIDv7），消费方幂等键
+	UserID   uuid.UUID `json:"user_id"`   // 分享人
+	PostID   uuid.UUID `json:"post_id"`   // 被分享的帖子
+	AuthorID uuid.UUID `json:"author_id"` // 帖子作者（post.user_id）
+	CircleID uuid.UUID `json:"circle_id"` // 帖子所属圈子（post.circle_id）
+	Ts       int64     `json:"ts"`        // 分享时间 Unix 毫秒（应用侧生成，按 Asia/Shanghai 等时区切「每日」由消费方决定）
 }

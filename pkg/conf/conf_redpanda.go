@@ -42,4 +42,7 @@ type Redpanda struct {
 	// 帖子 AI 审核事件（#117）：仅 moderation 启用（enabled 且配置了 api_key）时创建生产者 / 消费者。
 	PostModerationTopic         string `mapstructure:"post_moderation_topic" json:"post_moderation_topic" yaml:"post_moderation_topic"`                            // 帖子审核事件 topic
 	PostModerationConsumerGroup string `mapstructure:"post_moderation_consumer_group" json:"post_moderation_consumer_group" yaml:"post_moderation_consumer_group"` // 帖子审核 worker 消费者组
+
+	// 帖子首次分享事件（#232）：本期只有生产者，声望（#234 / #235）加消费者时再加 consumer_group。为空兜底 "post_share_events"。
+	ShareEventTopic string `mapstructure:"share_event_topic" json:"share_event_topic" yaml:"share_event_topic"`
 }

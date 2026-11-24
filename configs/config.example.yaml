@@ -134,6 +134,7 @@ redpanda:
   notice_event_flush_interval: 5 # 通知落库间隔(秒)
   post_moderation_topic: "post_moderation" # 帖子 AI 审核事件topic（仅 moderation 启用时使用）
   post_moderation_consumer_group: "post_moderation_consumer_group" # 帖子审核 worker 消费者组
+  share_event_topic: "post_share_events" # 帖子首次分享事件topic（#232，供声望消费；为空兜底 post_share_events）
 
 # 消息中心配置（设计见 docs/notice-design.md）
 notice:
@@ -147,12 +148,23 @@ notice_stream:
   coalesce_ms: 1000        # 合并推送窗口(毫秒)，<=0 兜底 1000
   retry_ms: 5000           # 写给客户端的重连建议(毫秒)，<=0 兜底 5000
 
+# 用户关注配置（设计见 docs/follow-design.md）
+follow:
+  max_following: 2000 # 每个用户最多关注人数(<=0 兜底 2000)；粉丝数不设上限
+
+# 私信配置（设计见 docs/message-design.md 第十二节）
+message:
+  send_rate: # 发送频率限制，按发送者计（Redis 计数，多实例共享）；超限返回 429
+    per_minute: 20                # 每分钟最多发送条数(<=0 兜底 20)
+    per_day: 500                  # 每天（自当天首条起 24h）最多发送条数(<=0 兜底 500)
+    new_conversations_per_day: 20 # 每天最多主动开启的新会话数(<=0 兜底 20)；发往已有会话不计
+
 # 热度计算配置（权重 + 上限）
 hot:
   weight:
     post_like: 2      # 帖子点赞
     post_collect: 5   # 帖子收藏
-    post_share: 7     # 帖子分享（TODO: 分享功能未实现，预留）
+    post_share: 7     # 帖子分享（首次分享累加，一人一帖只记一次，#232）
     comment: 5        # 评论
     comment_like: 1   # 评论点赞
   cap:

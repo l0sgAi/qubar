@@ -23,11 +23,25 @@ func (s *homeFeedSearcherES) Search(ctx context.Context, sort string, circleIDs,
 	if err != nil {
 		return nil, nil, err
 	}
+	return postIDs(res), res.SearchAfter, nil
+}
+
+// SearchFollowing 调 ES SearchFollowingFeed（圈子 或 作者，发帖时间倒序）。
+func (s *homeFeedSearcherES) SearchFollowing(ctx context.Context, circleIDs, authorIDs, excludeCircleIDs []uuid.UUID, size int, searchAfter []interface{}) ([]uuid.UUID, []interface{}, error) {
+	res, err := elasticsearch.SearchFollowingFeed(ctx, circleIDs, authorIDs, excludeCircleIDs, size, searchAfter)
+	if err != nil {
+		return nil, nil, err
+	}
+	return postIDs(res), res.SearchAfter, nil
+}
+
+// postIDs 按命中顺序提取帖子 ID（解析失败的跳过）。
+func postIDs(res *elasticsearch.PostListResponse) []uuid.UUID {
 	ids := make([]uuid.UUID, 0, len(res.Posts))
 	for _, doc := range res.Posts {
 		if id, perr := uuid.Parse(doc.ID); perr == nil {
 			ids = append(ids, id)
 		}
 	}
-	return ids, res.SearchAfter, nil
+	return ids
 }

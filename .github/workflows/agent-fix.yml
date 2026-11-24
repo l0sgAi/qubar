@@ -54,7 +54,7 @@ jobs:
       run: ${{ steps.pr.outputs.run }}
     steps:
       - id: pr
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           PR_INPUT: ${{ inputs.pr }}
           REASON_INPUT: ${{ inputs.reason }}
@@ -173,7 +173,7 @@ jobs:
 
       - name: Post note
         if: always()
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           OUTPUT: ${{ steps.claude.outputs.structured_output }}
           NUMBER: ${{ needs.prepare.outputs.number }}

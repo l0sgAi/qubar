@@ -49,7 +49,7 @@ jobs:
       review: ${{ steps.pr.outputs.review }}
     steps:
       - id: pr
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           PR_INPUT: ${{ inputs.pr }}
           CARRY: ${{ inputs.carry }}
@@ -148,7 +148,7 @@ jobs:
       #   3. agent/<N>- / fix/<N>- 分支名。
       # 编号是 PR 或不存在时跳过；最多 10 个。没有关联时写明，审查记为无法核对。
       - name: Collect linked issues
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           NUMBER: ${{ needs.prepare.outputs.number }}
         with:
@@ -287,7 +287,7 @@ jobs:
 
       - name: Report status
         if: always()
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           OUTPUT: ${{ steps.claude.outputs.structured_output }}
           STEP_OUTCOME: ${{ steps.claude.outcome }}

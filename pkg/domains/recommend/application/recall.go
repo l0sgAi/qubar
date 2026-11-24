@@ -221,6 +221,16 @@ func (s *recommendServiceImpl) safeJoined(ctx context.Context, userID uuid.UUID,
 	return ids
 }
 
+// safeFollowees 用户关注的全部用户 ID（关注流用）。读取失败返回空：关注流降级为仅圈子。
+func (s *recommendServiceImpl) safeFollowees(ctx context.Context, userID uuid.UUID) []uuid.UUID {
+	ids, err := s.follow.ListFolloweeIDs(ctx, userID)
+	if err != nil {
+		logger.Log.Error("followee ids: " + err.Error())
+		return nil
+	}
+	return ids
+}
+
 // ===== 合并工具 =====
 
 // channelSize 配额百分比 → 该路应取条数。

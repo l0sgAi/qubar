@@ -721,75 +721,20 @@ func parseActiveCirclesResponse(res *esapi.Response) (*ActiveCircleAggResult, er
 // 供 recommend 域 C1/C2/C3/C4 召回路；返回 PostListResponse，调用方提取 PostDoc.ID 做纯 ID 合并。
 //
 // excludeCircleIDs：查看者不可见的私密圈（must_not，见 excludeCircles）。
+// 查询体由 homeFeedQuery 构造（见 home_feed_query.go）。
 func SearchHomeFeed(ctx context.Context, sort string, circleIDs, excludeCircleIDs []uuid.UUID, size int, searchAfter []interface{}) (*PostListResponse, error) {
 	if size <= 0 || size > 100 {
 		size = 20
 	}
+	return runHomeFeedQuery(ctx, GetPostIndexName(), homeFeedQuery(sort, circleIDs, nil, excludeCircleIDs, size, searchAfter), size)
+}
 
-	mustConditions := []map[string]interface{}{
-		{"term": map[string]interface{}{"deleted": 0}},
-		{"term": map[string]interface{}{"status": 1}},
-	}
-	if len(circleIDs) > 0 {
-		ids := make([]string, 0, len(circleIDs))
-		for _, c := range circleIDs {
-			ids = append(ids, c.String())
-		}
-		mustConditions = append(mustConditions, map[string]interface{}{
-			"terms": map[string]interface{}{"circle_id": ids},
-		})
-	}
-
-	var sortRules []map[string]interface{}
-	var runtimeMappings map[string]interface{}
-
-	switch sort {
-	case "latest": // 最新：按发帖时间降序
-		sortRules = []map[string]interface{}{
-			{"create_time": map[string]interface{}{"order": "desc"}},
-			{"id": map[string]interface{}{"order": "desc"}},
-		}
-	default: // 近期热点：rank_score = hot / (age_hours + 2)^0.8
-		runtimeMappings = map[string]interface{}{
-			"rank_score": map[string]interface{}{
-				"type": "double",
-				"script": map[string]interface{}{
-					"source": "double ageHours = (System.currentTimeMillis() - doc['create_time'].value.toInstant().toEpochMilli()) / 3600000.0; emit(doc['hot'].value / Math.pow(ageHours + 2, 0.8));",
-				},
-			},
-		}
-		sortRules = []map[string]interface{}{
-			{"rank_score": map[string]interface{}{"order": "desc"}},
-			{"id": map[string]interface{}{"order": "desc"}},
-		}
-	}
-
-	searchQuery := map[string]interface{}{
-		"query": map[string]interface{}{
-			"bool": map[string]interface{}{
-				"must": mustConditions,
-			},
-		},
-		"size": size,
-		"sort": sortRules,
-	}
-
-	if runtimeMappings != nil {
-		searchQuery["runtime_mappings"] = runtimeMappings
-	}
-
-	if len(searchAfter) > 0 {
-		searchQuery["search_after"] = searchAfter
-	}
-
-	excludeCircles(searchQuery, excludeCircleIDs)
-
+// runHomeFeedQuery 在 postIndex 上执行首页流查询体并解析结果。
+func runHomeFeedQuery(ctx context.Context, postIndex string, searchQuery map[string]interface{}, size int) (*PostListResponse, error) {
 	queryJSON, err := json.Marshal(searchQuery)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal query: %w", err)
 	}
-
-	postIndex := GetPostIndexName()
 
 	res, err := Client.Search(
 		Client.Search.WithContext(ctx),

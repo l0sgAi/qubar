@@ -43,6 +43,7 @@ func shutdown() {
 	_ = redpanda.ClosePostInteractionProducer()
 	_ = redpanda.CloseNotificationEventProducer()
 	_ = redpanda.ClosePostModerationProducer()
+	_ = redpanda.CloseShareEventProducer()
 	redpanda.StopCircleHotSyncer()
 	redpanda.StopItemCFSyncer()
 	redpanda.StopTrendingSyncer()
