@@ -30,7 +30,21 @@ var (
 	ErrSendLimitReached = errors.New("dm limit reached")
 	// ErrInvalidClientMsgID 发送幂等键 client_msg_id 超长或含白名单以外的字符（#248，handler 映射 400）。
 	ErrInvalidClientMsgID = errors.New("invalid client_msg_id")
+	// ErrRecipientFollowingOnly 私信权限（#240）：接收方设置了「仅我关注的人」，而接收方没有关注发送方（handler 映射 403）。
+	ErrRecipientFollowingOnly = errors.New("recipient only accepts messages from people they follow")
+	// ErrRecipientMutualOnly 私信权限（#240）：接收方设置了「仅互相关注」，而双方不是互相关注（handler 映射 403）。
+	ErrRecipientMutualOnly = errors.New("recipient only accepts messages from mutual follows")
+	// ErrRecipientDMClosed 私信权限（#240）：接收方关闭了私信（handler 映射 403）。
+	ErrRecipientDMClosed = errors.New("recipient has turned off private messages")
 )
+
+// SendLimitState 未关注发送限制（#239）的只读状态，供「我能否给对方发私信」判断（#240）。
+type SendLimitState struct {
+	// SentCount 发送方在该会话已发的条数（没有会话 / 没有成员行时为 0）。
+	SentCount int
+	// PeerReplied 接收方是否在会话里发过消息（接收方成员行 first_sent_time 非 NULL）。
+	PeerReplied bool
+}
 
 // SendResult SendDirect 的结果。
 type SendResult struct {
@@ -111,4 +125,7 @@ type Repository interface {
 	Hide(ctx context.Context, conversationID, userID uuid.UUID) error
 	// SumUnread 返回 userID 的私信未读总数：各会话（成员行未退出）未读数之和（#241）。
 	SumUnread(ctx context.Context, userID uuid.UUID) (int64, error)
+	// GetSendLimitState 只读地返回 senderID 给 receiverID 发消息时的未关注发送限制状态（按 OrderPair 命中 uk_conversation_pair，不加锁），
+	// 口径与 SendDirect 事务内的限制判断一致。两人之间没有会话时返回零值状态（不是错误）。
+	GetSendLimitState(ctx context.Context, senderID, receiverID uuid.UUID) (*SendLimitState, error)
 }

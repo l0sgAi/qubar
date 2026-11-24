@@ -1,5 +1,5 @@
 // Package composition 的 message_bridges.go：注入 message（私信）领域的跨域桥接器
-// （user → message：接收方状态、对方简要信息；follow → message：未关注发送限制的关注关系；
+// （user → message：接收方状态、对方简要信息、私信权限设置；follow → message：未关注发送限制 / 私信权限的关注关系；
 // message → notice StreamHub：未读与新消息推送）。
 package composition
 
@@ -12,6 +12,7 @@ import (
 	messageapp "interestBar/pkg/domains/message/application"
 	noticeapp "interestBar/pkg/domains/notice/application"
 	userapp "interestBar/pkg/domains/user/application"
+	userdomain "interestBar/pkg/domains/user/domain"
 	"interestBar/pkg/logger"
 
 	"github.com/google/uuid"
@@ -114,4 +115,32 @@ func (n *messageStreamNotifier) NewMessage(receiverID uuid.UUID, ev messageapp.N
 		return
 	}
 	n.hub.Push(receiverID, sseEventDMMessage, data)
+}
+
+// ===== user → message（私信权限设置，#240）=====
+
+// messageDMPermissionReader 把 user.application.SettingService 适配为 message.application.DMPermissionReader。
+type messageDMPermissionReader struct {
+	delegate userapp.SettingService
+}
+
+var _ messageapp.DMPermissionReader = (*messageDMPermissionReader)(nil)
+
+// GetDMPermission 复用 SettingService.GetSettings（没有设置行时为默认值「所有人」），把 user 域取值映射为 message 域枚举；
+// 未知取值（应用层只写合法值，理论上不会出现）按关闭处理。
+func (r *messageDMPermissionReader) GetDMPermission(ctx context.Context, userID uuid.UUID) (messageapp.DMPermission, error) {
+	settings, err := r.delegate.GetSettings(ctx, userID)
+	if err != nil {
+		return messageapp.DMPermissionClosed, err
+	}
+	switch settings.DMPermission {
+	case userdomain.DMPermissionEveryone:
+		return messageapp.DMPermissionEveryone, nil
+	case userdomain.DMPermissionFollowing:
+		return messageapp.DMPermissionFollowing, nil
+	case userdomain.DMPermissionMutual:
+		return messageapp.DMPermissionMutual, nil
+	default:
+		return messageapp.DMPermissionClosed, nil
+	}
 }

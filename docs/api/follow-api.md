@@ -17,6 +17,7 @@
 5. **列表页**：`GET /follow/following/:user_id`、`GET /follow/followers/:user_id`（访客也能调），游标分页；每项带 `relation`（**我**与这个人的关系），直接渲染关注按钮。
    进列表前看 stats 的 `list_visible`：为 `false` 说明对方把列表设为私密，数字照常显示但不可点（硬调接口会得到 403）。
 6. **个人中心开关**：`GET /user/settings` 读、`PUT /user/settings` 改 `follow_list_visibility`（`0` 公开 / `1` 私密）。一个开关同时控制关注列表和粉丝列表。
+   同一接口还有私信权限 `dm_permission`（#240，`0` 所有人 / `1` 仅我关注的人 / `2` 仅互相关注 / `3` 关闭）。
 7. **我的互关**：`GET /follow/mutual`（需登录，只能看自己的）。
 8. **别处的关注按钮**（搜索结果、评论区等）：拿到一批用户 ID 后调 `POST /follow/relations` 一次取回所有关系，不要逐个调 stats。
 
@@ -239,9 +240,10 @@ Query 与响应结构同 §2.4（`cursor` / `size`；`items` / `has_more` / `nex
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `follow_list_visibility` | int | 关注列表 / 粉丝列表可见性：`0` 公开（默认），`1` 私密 |
+| `dm_permission` | int | 谁可以给我发私信（#240）：`0` 所有人（默认）/ `1` 仅我关注的人 / `2` 仅互相关注 / `3` 关闭。规则见 [message-api.md](message-api.md) §2.1 |
 
 ```json
-{ "code": 200, "message": "Success", "data": { "follow_list_visibility": 0 } }
+{ "code": 200, "message": "Success", "data": { "follow_list_visibility": 0, "dm_permission": 0 } }
 ```
 
 ### 2.9 PUT /user/settings — 修改我的设置
@@ -257,12 +259,16 @@ Query 与响应结构同 §2.4（`cursor` / `size`；`items` / `has_more` / `nex
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `follow_list_visibility` | int | `0` 公开 / `1` 私密。一个开关同时控制关注列表和粉丝列表 |
+| `dm_permission` | int | 谁可以给我发私信（#240）：`0` 所有人 / `1` 仅我关注的人 / `2` 仅互相关注 / `3` 关闭 |
+
+两项可以一起传；任一项非法时整个请求 400，什么都不改。
 
 **错误**
 
 | HTTP | message | 场景 |
 |---|---|---|
 | 400 | `follow_list_visibility must be 0 (public) or 1 (private)` | 取值不是 0 / 1 |
+| 400 | `dm_permission must be 0 (everyone), 1 (people I follow), 2 (mutual follows) or 3 (no one)` | 取值不是 0–3 |
 | 400 | `At least one setting must be provided` | 请求体里没有任何设置项（或值为 `null`） |
 | 400 | `Invalid request parameters` | 请求体不是合法 JSON，或字段类型不对 |
 | 401 | `Token not found` | 未登录 |

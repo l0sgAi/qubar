@@ -39,6 +39,7 @@ func IsPasswordIncompleteErr(err error) bool { return errors.Is(err, errPassword
 var (
 	errNoSettingField       = errors.New("at least one setting must be provided")
 	errFollowListVisibility = errors.New("follow_list_visibility must be 0 (public) or 1 (private)")
+	errDMPermission         = errors.New("dm_permission must be 0 (everyone), 1 (people I follow), 2 (mutual follows) or 3 (no one)")
 )
 
 // IsNoSettingFieldErr 判断是否为"至少修改一个设置项"错误。
@@ -46,3 +47,6 @@ func IsNoSettingFieldErr(err error) bool { return errors.Is(err, errNoSettingFie
 
 // IsFollowListVisibilityErr 判断是否为"列表可见性取值非法"错误。
 func IsFollowListVisibilityErr(err error) bool { return errors.Is(err, errFollowListVisibility) }
+
+// IsDMPermissionErr 判断是否为"私信权限取值非法"错误。
+func IsDMPermissionErr(err error) bool { return errors.Is(err, errDMPermission) }

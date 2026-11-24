@@ -69,3 +69,15 @@ func (f *postMediaFetcherForCircle) GetMediaByPostIDs(ctx context.Context, postI
 func (f *postMediaFetcherForCircle) BatchGetShareCounts(ctx context.Context, postIDs []uuid.UUID) map[uuid.UUID]int {
 	return f.delegate.BatchGetShareCounts(ctx, postIDs)
 }
+
+func (f *postMediaFetcherForCircle) BatchGetStats(ctx context.Context, postIDs []uuid.UUID) map[uuid.UUID]circleapp.CirclePostStats {
+	stats := f.delegate.BatchGetCachedStats(ctx, postIDs)
+	out := make(map[uuid.UUID]circleapp.CirclePostStats, len(stats))
+	for id, st := range stats {
+		out[id] = circleapp.CirclePostStats{
+			ViewCount: st.ViewCount, CommentCount: st.CommentCount,
+			LikeCount: st.LikeCount, CollectCount: st.CollectCount,
+		}
+	}
+	return out
+}
