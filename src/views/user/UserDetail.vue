@@ -65,6 +65,27 @@
                 </div>
             </NAvatar>
               <h2 class="sidebar-username">{{ userInfo.username || t('user.notSet') }}</h2>
+
+              <!-- 关注数 / 粉丝数（后端 v0.9.0）：list_visible=false 时只显示数字 -->
+              <FollowStats
+                v-if="followStats"
+                class="sidebar-follow-stats"
+                :user-id="profileId"
+                :following-count="followStats.following_count"
+                :follower-count="followStats.follower_count"
+                :list-visible="followStats.list_visible" />
+
+              <!-- 操作按钮区：关注 + 私信，横向排列，可再追加按钮 -->
+              <div v-if="showActions" class="profile-actions">
+                <FollowButton
+                  v-if="showFollowButton"
+                  class="profile-action"
+                  size="medium"
+                  :user-id="profileId"
+                  :relation="followStats?.relation ?? 0"
+                  @change="handleFollowChange" />
+                <!-- v0.9.0 C: DM button（机器人账号不显示；按钮加 class="profile-action"） -->
+              </div>
             </div>
 
             <!-- 用户基本信息 -->
@@ -127,7 +148,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import {
   NConfigProvider,
@@ -147,6 +168,12 @@ import { useAppShell } from '@/composables/useAppShell'
 import MyPosts from '@/components/user/MyPosts.vue'
 import MyGroups from '@/components/user/MyGroups.vue'
 import { getUserDetail } from '@/api/user'
+import { getFollowStats } from '@/api/follow'
+import FollowButton from '@/components/follow/FollowButton.vue'
+import FollowStats from '@/components/follow/FollowStats.vue'
+import { ensureViewer } from '@/composables/usePostReport'
+import { auth } from '@/utils/auth'
+import { isFollowingRelation } from '@/utils/follow'
 import { usePageTitle } from '@/composables/usePageTitle'
 import { useI18n } from 'vue-i18n'
 
@@ -192,6 +219,61 @@ const handlePostsTotalChange = (total) => {
 const groupsTotal = ref(0)
 const handleGroupsTotalChange = (total) => {
   groupsTotal.value = total || 0
+}
+
+// 主页用户 ID（路由参数）
+const profileId = computed(() => String(route.params.id || ''))
+
+// 当前登录用户 ID：访客为 null；已登录但还没拿到时 viewerLoaded=false，先不显示关注按钮，避免看自己时一闪
+const viewerId = ref(null)
+const viewerLoaded = ref(!auth.isAuthenticated())
+const isSelf = computed(() => !!viewerId.value && viewerId.value === profileId.value)
+
+// 关注统计（GET /follow/stats/:id，访客可读）：{ following_count, follower_count, relation, list_visible }
+const followStats = ref(null)
+// stats 请求已结束（成功或失败）：关注按钮等它，避免先显示「关注」再跳成「已关注」
+const followStatsSettled = ref(false)
+
+// 关注按钮：看自己不显示；访客显示（点击弹登录引导）
+const showFollowButton = computed(() => viewerLoaded.value && followStatsSettled.value && !isSelf.value && !!userInfo.value.id)
+// 操作区：看自己时整块不渲染（C 的私信按钮同样不对自己显示）
+const showActions = computed(() => viewerLoaded.value && !isSelf.value && !!userInfo.value.id)
+
+const fetchFollowStats = async () => {
+  const id = profileId.value
+  if (!id) return
+  try {
+    const res = await getFollowStats(id)
+    if (id === profileId.value && res?.data) followStats.value = res.data
+  } catch (error) {
+    // 统计失败不影响主页其余内容；用户不存在由 getUserDetail 兜底
+    console.error('获取关注统计失败:', error)
+  } finally {
+    if (id === profileId.value) followStatsSettled.value = true
+  }
+}
+
+// 关注 / 取关成功：粉丝数本地 ±1 立即反馈，再以 stats 为准
+const handleFollowChange = ({ relation, prev }) => {
+  if (followStats.value) {
+    const delta = Number(isFollowingRelation(relation)) - Number(isFollowingRelation(prev))
+    followStats.value = {
+      ...followStats.value,
+      relation,
+      follower_count: Math.max(0, (followStats.value.follower_count || 0) + delta)
+    }
+  }
+  fetchFollowStats()
+}
+
+const loadViewer = async () => {
+  if (!auth.isAuthenticated()) {
+    viewerId.value = null
+    viewerLoaded.value = true
+    return
+  }
+  viewerId.value = await ensureViewer()
+  viewerLoaded.value = true
 }
 
 // 获取用户信息
@@ -275,8 +357,19 @@ const getRoleType = (role) => {
 }
 
 onMounted(() => {
-  // 用户公开主页访客可读：/user/detail/:id 已开放 anonymous
+  // 用户公开主页访客可读：/user/detail/:id、/follow/stats/:id 已开放 anonymous
   fetchUserInfo()
+  fetchFollowStats()
+  loadViewer()
+})
+
+// 从一个用户主页跳到另一个（如关注列表 → 主页）时路由组件复用，需要重新加载
+watch(() => route.params.id, (id, oldId) => {
+  if (!id || id === oldId || route.name !== 'user-detail') return
+  followStats.value = null
+  followStatsSettled.value = false
+  fetchUserInfo()
+  fetchFollowStats()
 })
 </script>
 
@@ -343,6 +436,27 @@ onMounted(() => {
   -webkit-text-fill-color: transparent;
   background-clip: text;
   text-align: center;
+}
+
+/* 关注数 / 粉丝数 */
+.sidebar-follow-stats {
+  margin-top: 14px;
+}
+
+/* 操作按钮区：关注 + 私信等，横排等宽，窄屏自动换行 */
+.profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  margin-top: 16px;
+}
+
+.profile-actions > .profile-action {
+  flex: 1 1 0;
+  min-width: 96px;
+  max-width: 200px;
 }
 
 /* 侧边栏区块 */

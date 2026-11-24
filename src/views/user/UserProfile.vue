@@ -14,6 +14,15 @@
           <div class="mobile-profile-text">
             <h2 class="mobile-username">{{ userInfo.username || t('user.notSet') }}</h2>
             <p v-if="userInfo.email" class="mobile-email">{{ userInfo.email }}</p>
+            <!-- 我的关注数 / 粉丝数 / 互关入口（本人始终可看自己的列表） -->
+            <FollowStats
+              v-if="myFollowStats"
+              class="mobile-follow-stats"
+              :user-id="userInfo.id"
+              :following-count="myFollowStats.following_count"
+              :follower-count="myFollowStats.follower_count">
+              <SmartLink class="mutual-link" :to="{ name: 'follow-mutual' }">{{ t('follow.mutualEntry') }}</SmartLink>
+            </FollowStats>
           </div>
         </div>
 
@@ -83,6 +92,9 @@
         </NCard>
         </div>
 
+        <!-- 移动端隐私设置分组（关注列表公开、私信权限…，各项在 ProfileSettings 内追加） -->
+        <ProfileSettings v-if="mobileShell" class="mobile-privacy-settings" />
+
         <!-- 移动端设置列表：语言 / 协议 / 退出登录（原桌面头像下拉菜单的入口） -->
         <div v-if="mobileShell" class="mobile-settings">
           <div class="settings-title">{{ t('mobile.me.settings') }}</div>
@@ -119,6 +131,15 @@
                 </div>
               </NAvatar>
               <h2 class="sidebar-username">{{ userInfo.username || t('user.notSet') }}</h2>
+              <!-- 我的关注数 / 粉丝数 / 互关入口 -->
+              <FollowStats
+                v-if="myFollowStats"
+                class="sidebar-follow-stats"
+                :user-id="userInfo.id"
+                :following-count="myFollowStats.following_count"
+                :follower-count="myFollowStats.follower_count">
+                <SmartLink class="mutual-link" :to="{ name: 'follow-mutual' }">{{ t('follow.mutualEntry') }}</SmartLink>
+              </FollowStats>
               <NButton type="primary" size="small" @click="handleEditClick" style="width: 100%; margin-top: 16px; border-radius: 20px;">
                 <template #icon>
                   <NIcon :size="14">
@@ -172,6 +193,8 @@
               </div>
             </div>
 
+            <!-- 设置区（隐私设置分组：关注列表公开、私信权限…，各项在 ProfileSettings 内追加） -->
+            <ProfileSettings class="sidebar-settings" />
           </NCard>
         </div>
       </div>
@@ -358,6 +381,9 @@ import MyGroups from '@/components/user/MyGroups.vue'
 import MyInvitesEntry from '@/components/user/MyInvitesEntry.vue'
 import MyFavorites from '@/components/user/MyFavorites.vue'
 import BrowseHistory from '@/components/user/BrowseHistory.vue'
+import ProfileSettings from '@/components/user/ProfileSettings.vue'
+import FollowStats from '@/components/follow/FollowStats.vue'
+import { getFollowStats } from '@/api/follow'
 import ImageCropperModal from '@/components/common/ImageCropperModal.vue'
 import { auth } from '@/utils/auth'
 import request from '@/utils/request'
@@ -495,6 +521,18 @@ const mockData = ref({
   ]
 })
 
+// 我的关注数 / 粉丝数（GET /follow/stats/:me）；失败不影响页面其余部分
+const myFollowStats = ref(null)
+const fetchMyFollowStats = async () => {
+  if (!userInfo.value.id) return
+  try {
+    const res = await getFollowStats(userInfo.value.id)
+    myFollowStats.value = res?.data || null
+  } catch (error) {
+    console.error('获取关注统计失败:', error)
+  }
+}
+
 // 获取用户信息
 const fetchUserInfo = async () => {
   try {
@@ -505,6 +543,7 @@ const fetchUserInfo = async () => {
       if (userInfo.value.username) {
         setTitleData('title.profileName', { name: userInfo.value.username })
       }
+      fetchMyFollowStats()
     }
   } catch (error) {
     console.error(t('user.editModal.fetchFailed') + ':', error)
@@ -1070,6 +1109,7 @@ onMounted(() => {
   }
 
   .mobile-profile-card,
+  .mobile-privacy-settings,
   .mobile-settings {
     margin: 0 12px;
   }
@@ -1132,6 +1172,37 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 关注数 / 粉丝数 / 互关入口 */
+.sidebar-follow-stats {
+  margin-top: 12px;
+}
+
+.sidebar-settings {
+  margin-top: 24px;
+}
+
+.mobile-follow-stats {
+  justify-content: flex-start;
+  gap: 4px;
+  margin: 6px 0 0 -8px;
+}
+
+.mutual-link {
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+@media (hover: hover) {
+  .mutual-link:hover {
+    background: rgba(102, 234, 194, 0.14);
+    color: #8af0d0;
+  }
 }
 
 .mobile-settings {
