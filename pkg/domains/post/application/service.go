@@ -300,6 +300,10 @@ type PostService interface {
 	// BatchGetShareCounts 批量取帖子分享数（口径同详情 / 列表，供 circle 圈内帖子列表回填，#233）。
 	// best-effort：取不到的帖子不在结果里。
 	BatchGetShareCounts(ctx context.Context, postIDs []uuid.UUID) map[uuid.UUID]int
+	// BatchGetCachedStats 批量取 Redis post:stats 里的实时计数（view/comment/like/collect，口径同 applyStatsOverlay）。
+	// 供 circle 圈内帖子列表覆盖 ES 快照（#250）。一页一次 pipeline，不回种；
+	// best-effort：未命中的帖子不在结果里（调用方保留快照），Redis 出错只记日志、返回空 map。
+	BatchGetCachedStats(ctx context.Context, postIDs []uuid.UUID) map[uuid.UUID]domain.PostStatistics
 
 	// SetUserFacade 注入 user Facade（组装作者信息用）。
 	SetUserFacade(f UserFacade)
@@ -1204,18 +1208,35 @@ func (s *postServiceImpl) applyStatsOverlay(ctx context.Context, posts []PostLis
 	for _, p := range posts {
 		postIDs = append(postIDs, p.ID)
 	}
-	statsMap, err := s.statsCache.BatchGet(ctx, postIDs)
-	if err != nil || len(statsMap) == 0 {
-		return
-	}
+	statsMap := s.BatchGetCachedStats(ctx, postIDs)
 	for i := range posts {
-		if st, ok := statsMap[posts[i].ID]; ok && st != nil {
+		if st, ok := statsMap[posts[i].ID]; ok {
 			posts[i].ViewCount = st.ViewCount
 			posts[i].CommentCount = st.CommentCount
 			posts[i].LikeCount = st.LikeCount
 			posts[i].CollectCount = st.CollectCount
 		}
 	}
+}
+
+// BatchGetCachedStats 批量取 Redis post:stats 命中的实时计数；未命中的帖子不在结果里，不回种。
+// applyStatsOverlay 与 circle 圈内帖子列表（经 composition 桥接，#250）共用，保证同一口径。
+func (s *postServiceImpl) BatchGetCachedStats(ctx context.Context, postIDs []uuid.UUID) map[uuid.UUID]domain.PostStatistics {
+	out := make(map[uuid.UUID]domain.PostStatistics)
+	if len(postIDs) == 0 {
+		return out
+	}
+	statsMap, err := s.statsCache.BatchGet(ctx, postIDs)
+	if err != nil {
+		logger.Log.Error("Failed to batch get post stats from cache: " + err.Error())
+		return out
+	}
+	for id, st := range statsMap {
+		if st != nil {
+			out[id] = *st
+		}
+	}
+	return out
 }
 
 // GetMediaByPostIDs 批量获取帖子图片（供 circle 领域调用）。
