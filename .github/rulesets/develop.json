@@ -34,6 +34,7 @@
         "strict_required_status_checks_policy": true,
         "do_not_enforce_on_create": false,
         "required_status_checks": [
+          { "context": "web", "integration_id": 15368 },
           { "context": "go", "integration_id": 15368 },
           { "context": "db", "integration_id": 15368 },
           { "context": "image", "integration_id": 15368 },

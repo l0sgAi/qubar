@@ -22,12 +22,12 @@
 
 ## 本地开发
 
-需要 **Node.js 20**（与 CI 一致）和 npm。
+需要 **Node.js 20.20.2**（与 CI 一致）和 npm。
 
 ```bash
-git clone https://github.com/<your-fork>/qubar-frontend.git
-cd qubar-frontend
-npm install
+git clone https://github.com/<your-fork>/qubar.git
+cd qubar/web
+npm ci
 npm run dev     # http://localhost:5173
 ```
 
@@ -96,38 +96,9 @@ npm run check          # 覆盖率测试 + 生产构建，与 CI 一致
 - 覆盖率门槛配置在 [vitest.config.js](vitest.config.js)，**只升不降**。新用例让覆盖率提高后，请同步调高门槛；
   不要为了让 CI 通过而调低。
 
-## 分支、提交与 PR
+## 分支与审查
 
-- 从 **`main`** 拉分支，PR 也指向 **`main`**。每次合并到 `main` 都会部署到线上。
-- 分支命名：`<类型>/<主题>-<YYYYMMDD>`，例如 `feature/multi-device-login-20261022`、
-  `fix/sse-conn-evicted-20261022`、`ci/claude-review-20261022`。
-- 提交信息遵循 [Conventional Commits](https://www.conventionalcommits.org/)，用英文写，例如
-  `feat(circle): add pending-post moderation queue page` 或 `fix(notice): close SSE on conn-evicted`。
-- 一个 PR 解决一个 issue（描述里写 `Closes #N`）。说明改了什么、怎么验证的（`npm run check`、点过哪些页面、
-  桌面和手机宽度），以及哪些没能验证。
-
-### Review 与合并
-
-- 每个指向 `main` 的 PR 都会运行 `ci.yml` 里的两个必需检查：`unit`（单测 + 覆盖率门槛）和 `build`（生产构建）。
-- 本仓库分支发起的非草稿 PR 还会由 Claude 自动 review（`claude-review.yml`），发行内评论和一条总结。
-  fork 发起的 PR 拿不到仓库 secrets，会跳过这一步。
-- 对仓库有写权限的人可以在 issue 或 PR 里评论 `@claude ...`，按需让 Claude 处理（`claude.yml`）。
-- 由维护者 review 并合并。如果 `main` 比你的分支新，把 `origin/main` 合并进来（或在 GitHub 上点「Update branch」）。
-
-## 关于 AI agent
-
-这个仓库的很多开发工作由 AI 编程 agent 完成。它们的改动走完全相同的流程：issue、PR、`unit` / `build` 检查，
-合并前经过人工 review。
-
-仓库里和 agent 相关的配置：
-
-- [.claude/skills/frontend-constraints](.claude/skills/frontend-constraints) 和
-  [.agents/skills/frontend-constraints](.agents/skills/frontend-constraints) – 同一套前端约束，
-  分别打包给 Claude Code 和其他 agent 使用
-- `.claude/launch.json` – agent 预览时如何启动开发服务器
-- [.github/workflows/claude-review.yml](.github/workflows/claude-review.yml) – PR 自动 review 使用的提示词
-
-作为人类贡献者，你不需要用到这些；不过 skill 里的样式和 i18n 规则值得一读。
+[主仓贡献指南](../CONTRIBUTING.zh-CN.md) 说明了分支、CI 与人工审核流程。从 `develop` 开分支，PR 目标为 `develop`。
 
 ## 许可证
 

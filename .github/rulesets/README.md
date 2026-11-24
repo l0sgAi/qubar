@@ -6,7 +6,7 @@ GitHub 上的分支规则、仓库设置和标签不在代码里，这里记录�
 ## develop 分支规则（`develop.json`）
 
 - 只能通过 PR 合入；禁止 force push、禁止删除分支。
-- 必须通过的检查：`go` / `db` / `image` / `iac` / `gitleaks` / `integration`，以及 P3 的 `risk-gate`（`pr-gate.yml`）和 `claude-review`（`claude-review.yml`），且来源限定为 GitHub Actions（`integration_id: 15368`），防止伪造的同名 status 放行。新增必须的 CI job 时同步加到这里。
+- 必须通过的检查：`web` / `go` / `db` / `image` / `iac` / `gitleaks` / `integration`，以及 P3 的 `risk-gate`（`pr-gate.yml`）和 `claude-review`（`claude-review.yml`），且来源限定为 GitHub Actions（`integration_id: 15368`），防止伪造的同名 status 放行。新规则在工作流合入、PR 和补跑都上报 web 后由管理员按下文应用。
 - 要求分支与 develop 保持最新（strict）。没有 merge queue（个人账号仓库不支持），由它防止两个各自绿的 PR 合并后互相冲突；落后时 `gh pr update-branch <PR>` 或在 PR 页面点 Update branch。
 - 不要求 approve：仓库只有一个人，GitHub 不允许作者 approve 自己的 PR。人工审核由必需检查 `risk-gate` 强制：带 `risk:high` 的 PR 要维护者评论 `/approve <head-sha>` 才能合并（新的 push 会让之前的批准失效）。
 - `claude-review` 是必需检查：没配 `CLAUDE_CODE_OAUTH_TOKEN` 或额度用完时所有 PR 都会卡住，需要 admin 在 PR 上越过规则合并。
@@ -25,7 +25,7 @@ gh api -X PUT repos/l0sgAi/qubar/rulesets/$id --input .github/rulesets/develop.j
 
 ## Dependabot（`.github/dependabot.yml`）
 
-- **版本更新**：`gomod`（根目录）和 `github-actions`（工作流 + `.github/actions/*`）每周一检查，PR 提到 `develop`，
+- **版本更新**：`npm`（/web）、`gomod`（根目录）和 `github-actions`（工作流 + `.github/actions/*`）每周一检查，PR 提到 `develop`，
   minor / patch 合成一个分组 PR，major 单独开（gomod 忽略 major：Go 的 major 是换模块路径，要人工改 import）。
 - **claude-review**：Dependabot 触发的工作流拿不到 Actions 密钥（`GITHUB_TOKEN` 仍按 `permissions` 授权），Claude 审查跑不了。
   `claude-review.yml` 的 prepare 对满足以下全部条件的 PR 直接记 `success`（`dependabot: dependency-only PR, CI is the gate`）：

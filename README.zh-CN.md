@@ -4,6 +4,10 @@
 
 一个基于 Go 语言、采用 DDD 领域驱动设计的现代化兴趣社区后端，类似百度贴吧/Reddit 社区。
 
+## Web 前端
+
+前端位于 [web/](web/README.zh-CN.md)。使用 Node 20.20.2，依次运行 `npm --prefix web ci` 和 `npm --prefix web run dev`。提交前运行 `npm --prefix web run check`。本地 API 默认为 `http://localhost:8888`。
+
 ## ✨ 功能特性
 
 Qubar 是一个完整的兴趣社区平台，提供：

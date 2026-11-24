@@ -22,12 +22,12 @@ This guide covers what you need to go from a fresh clone to a merged pull reques
 
 ## Local setup
 
-You need **Node.js 20** (the version CI uses) and npm.
+You need **Node.js 20.20.2** (the version CI uses) and npm.
 
 ```bash
-git clone https://github.com/<your-fork>/qubar-frontend.git
-cd qubar-frontend
-npm install
+git clone https://github.com/<your-fork>/qubar.git
+cd qubar/web
+npm ci
 npm run dev     # http://localhost:5173
 ```
 
@@ -102,40 +102,9 @@ npm run check          # coverage tests + production build — same as CI
 - Coverage thresholds are set in [vitest.config.js](vitest.config.js) and **only go up**. If your tests raise
   coverage, raise the thresholds to match; never lower them to make CI pass.
 
-## Branches, commits and pull requests
+## Branches and review
 
-- Branch from **`main`** and target **`main`** with your PR. Every merge to `main` deploys to production.
-- Branch names: `<type>/<topic>-<YYYYMMDD>`, e.g. `feature/multi-device-login-20261022`,
-  `fix/sse-conn-evicted-20261022`, `ci/claude-review-20261022`.
-- Commits follow [Conventional Commits](https://www.conventionalcommits.org/) in English, e.g.
-  `feat(circle): add pending-post moderation queue page` or `fix(notice): close SSE on conn-evicted`.
-- One PR solves one issue (`Closes #N` in the description). Say what changed, how you verified it (`npm run check`,
-  pages you clicked through, desktop and mobile widths), and what you couldn't verify.
-
-### Review and merge
-
-- Every PR to `main` runs two required checks from `ci.yml`: `unit` (tests + coverage thresholds) and `build`
-  (production build).
-- Non-draft PRs from branches in this repo also get an automatic Claude review (`claude-review.yml`), which posts
-  inline comments and a summary. PRs from forks skip it because they can't access the repository secrets.
-- Anyone with write access can ask Claude for more by commenting `@claude ...` on an issue or PR (`claude.yml`).
-- A maintainer reviews and merges. If `main` moves ahead of your branch, merge `origin/main` into it (or use
-  "Update branch" on GitHub).
-
-## A note on AI agents
-
-Much of this repo is developed with AI coding agents. Their changes go through exactly the same process: an issue,
-a PR, the `unit` / `build` checks, and a human review before merging.
-
-Agent-facing config lives in the repo:
-
-- [.claude/skills/frontend-constraints](.claude/skills/frontend-constraints) and
-  [.agents/skills/frontend-constraints](.agents/skills/frontend-constraints) – the same frontend rules, packaged as a
-  skill for Claude Code and for other agents
-- `.claude/launch.json` – how an agent starts the dev server for previews
-- [.github/workflows/claude-review.yml](.github/workflows/claude-review.yml) – the review prompt used on PRs
-
-You don't need any of that as a human contributor; the skill is still a good read for the styling and i18n rules.
+Branch from `develop` and target `develop`. See the [repository contribution guide](../CONTRIBUTING.md) for checks and review.
 
 ## License
 

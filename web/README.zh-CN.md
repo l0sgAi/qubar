@@ -43,15 +43,15 @@
 
 ### 环境要求
 
-- **Node.js 20**（与 CI 一致）和 npm
+- **Node.js 20.20.2**（与 CI 一致）和 npm
 - 一个可访问的[趣吧后端](https://github.com/l0sgAi/qubar)（本地或远程均可）
 
 ### 安装与启动
 
 ```bash
-git clone https://github.com/l0sgAi/qubar-frontend.git
-cd qubar-frontend
-npm install
+git clone https://github.com/l0sgAi/qubar.git
+cd qubar/web
+npm ci
 npm run dev
 ```
 
@@ -69,7 +69,7 @@ npm run dev
 
 ### 环境变量
 
-后端地址**没有**写死在代码里。Vite 从仓库根目录的 `.env.*` 读取，再由
+后端地址**没有**写死在代码里。Vite 从`web/` 目录的 `.env.*` 读取，再由
 [src/config/index.js](src/config/index.js) 以 `API_BASE` / `APP_DOWNLOAD_URL` 提供给应用其他部分使用。
 
 | 变量 | 必填 | 用途 |
@@ -97,7 +97,7 @@ npm run dev
 ## 📁 项目结构
 
 ```
-qubar-frontend/
+web/
 ├── src/
 │   ├── api/            # 按后端领域划分的接口封装（auth、post、comment、circle、notice、agent、moderation 等）
 │   ├── assets/         # main.css：全局样式与设计 token
@@ -118,7 +118,6 @@ qubar-frontend/
 ├── public/             # 原样复制：CNAME、favicon、独立宣传页（/landing）
 ├── docs/               # 方案与对接文档
 ├── scripts/            # 构建诊断脚本
-├── .github/workflows/  # CI、部署、Claude review
 ├── .env.development    # 开发环境变量
 ├── .env.production     # 生产环境变量
 ├── vite.config.js
@@ -138,20 +137,7 @@ npm run check   # 覆盖率测试 + 生产构建，与 CI 一致
   并校验中英文的 key 和插值占位符一致。
 - 用例写法见 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md#测试)。
 
-[.github/workflows](.github/workflows) 下的工作流：
-
-| 工作流 | 触发条件 | 内容 |
-|--------|----------|------|
-| `ci.yml` | 指向 `main` 的 PR（也被 `deploy.yml` 调用） | 两个检查：`unit`（单测 + 覆盖率门槛）和 `build`（生产构建） |
-| `deploy.yml` | push `main` | 先跑同一套 CI，通过后构建并部署到 GitHub Pages |
-| `claude-review.yml` | 本仓库分支发起的、指向 `main` 的非草稿 PR | Claude 自动代码审查（行内评论 + 一条总结评论） |
-| `claude.yml` | issue / PR 评论或 review 中出现 `@claude` | 按需运行 Claude；只有对仓库有写权限的用户能触发 |
-
-## 🌐 部署
-
-每次 push `main`，`deploy.yml` 会把站点部署到 GitHub Pages。自定义域名配置在 `public/CNAME`；
-构建时会把 `index.html` 复制为 `404.html`，让 SPA 的深层链接可以直接打开。
-Pages 设置、分支保护和常见问题见 [DEPLOY.md](DEPLOY.md)。
+[主仓 CI](../.github/workflows/ci.yml) 在 Linux 运行覆盖率测试与生产构建，并校验 Pages 包。发布与域名交接见 [部署说明](DEPLOY.md)。
 
 ## 📚 文档索引
 
