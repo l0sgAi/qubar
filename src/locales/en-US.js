@@ -950,7 +950,7 @@ export default {
       actions: 'Actions'
     },
     form: {
-      createDisabled: 'Create disabled',
+      createEnabledHint: 'New agents are enabled. You can disable an agent in the management list.',
       sectionBasic: 'Basic Info',
       sectionApi: 'Model Access',
       sectionTrigger: 'Trigger & Rate Limit',

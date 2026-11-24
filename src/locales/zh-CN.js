@@ -952,7 +952,7 @@ export default {
       actions: '操作'
     },
     form: {
-      createDisabled: '创建时停用',
+      createEnabledHint: '机器人创建后默认启用，可在管理列表中停用。',
       sectionBasic: '基本信息',
       sectionApi: '模型接入',
       sectionTrigger: '触发与限频',
