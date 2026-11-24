@@ -8,9 +8,17 @@ vi.mock('@/composables/useNoticeStream', async () => {
   const { ref } = await import('vue')
   return {
     useNoticeStream: (options = {}) => {
+      const handlers = new Set()
       const inst = {
         options,
         unreadCount: ref(0),
+        dmUnreadCount: ref(0),
+        handlers,
+        onDmMessage: vi.fn((fn) => {
+          handlers.add(fn)
+          return () => handlers.delete(fn)
+        }),
+        refreshDmUnread: vi.fn().mockResolvedValue(),
         start: vi.fn(),
         stop: vi.fn()
       }
@@ -25,6 +33,8 @@ const {
   acquireUnreadNotice,
   releaseUnreadNotice,
   stopUnreadNotice,
+  onDmMessage,
+  refreshDmUnreadCount,
   __resetUnreadNotice,
   STOP_GRACE_MS
 } = await import('@/composables/useUnreadNotice')
@@ -176,5 +186,58 @@ describe('useUnreadNotice', () => {
 
     a.wrapper.unmount()
     expect(() => stream().options.onAuthExpired()).not.toThrow()
+  })
+
+  describe('私信（v0.9.0）', () => {
+    const mountDmConsumer = (options) => {
+      const captured = {}
+      const Comp = defineComponent({
+        setup() {
+          Object.assign(captured, useUnreadNotice(options))
+          return () => h('div')
+        }
+      })
+      return { wrapper: mount(Comp), captured }
+    }
+
+    it('dmUnreadCount 共享且只读，与 unreadCount 独立', () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const a = mountDmConsumer()
+      const b = mountDmConsumer()
+      stream().dmUnreadCount.value = 5
+      expect(a.captured.dmUnreadCount.value).toBe(5)
+      expect(b.captured.dmUnreadCount.value).toBe(5)
+      expect(a.captured.unreadCount.value).toBe(0)
+      a.captured.dmUnreadCount.value = 1
+      expect(stream().dmUnreadCount.value).toBe(5)
+      a.wrapper.unmount()
+      b.wrapper.unmount()
+    })
+
+    it('onDmMessage 选项：挂载注册、卸载注销', () => {
+      const handler = vi.fn()
+      const { wrapper } = mountDmConsumer({ onDmMessage: handler })
+      expect(stream().handlers.has(handler)).toBe(true)
+      wrapper.unmount()
+      expect(stream().handlers.has(handler)).toBe(false)
+    })
+
+    it('模块级 onDmMessage 返回注销函数，refreshDmUnreadCount 透传', async () => {
+      const handler = vi.fn()
+      const off = onDmMessage(handler)
+      expect(stream().handlers.has(handler)).toBe(true)
+      off()
+      expect(stream().handlers.has(handler)).toBe(false)
+      await refreshDmUnreadCount()
+      expect(stream().refreshDmUnread).toHaveBeenCalledTimes(1)
+    })
+
+    it('stopUnreadNotice 同时清零私信未读', () => {
+      const { wrapper } = mountDmConsumer()
+      stream().dmUnreadCount.value = 3
+      stopUnreadNotice()
+      expect(stream().dmUnreadCount.value).toBe(0)
+      wrapper.unmount()
+    })
   })
 })

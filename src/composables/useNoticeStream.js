@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import { auth } from '@/utils/auth'
 import { getUnreadCount } from '@/api/notice'
+import { getDmUnreadCount } from '@/api/message'
 import { API_BASE } from '@/config'
 
 // 轮询降级间隔（对接文档建议 ≥30s）
@@ -20,17 +21,25 @@ const POLL_INTERVAL = 30000
  * - 收到 auth-expired（登出/过期/被踢下线）→ 主动 close（防自动重连 401 死循环）
  *   → 清 token → 回调 onAuthExpired 由调用方跳转登录页
  *
+ * 私信（后端 v0.9.0 #241，docs/api/message-api.md §3）复用同一条连接：
+ * - dm-unread：私信未读总数全量（首包紧跟 unread-count），直接替换 dmUnreadCount；与 unreadCount 互不覆盖
+ * - dm-message：新私信摘要（只推给接收方，content 前 100 字，truncated 标记截断），分发给 onDmMessage 注册的回调；
+ *   不保证送达，断线 / 轮询期间收不到，重连后以拉取为准
+ * - 轮询降级时同时轮询 GET /message/unread-count（同为 30s）
+ *
  * @param {Object} [options]
  * @param {Function} [options.onAuthExpired] - 登录态失效回调（清 token 之后调用）
- * @returns {{ unreadCount: Ref<number>, start: Function, stop: Function }}
+ * @returns {{ unreadCount: Ref<number>, dmUnreadCount: Ref<number>, onDmMessage: Function,
+ *   refreshDmUnread: Function, start: Function, stop: Function }}
  */
 export function useNoticeStream({ onAuthExpired } = {}) {
   const unreadCount = ref(0)
+  const dmUnreadCount = ref(0)
+  const dmMessageHandlers = new Set()
   let es = null
   let pollingTimer = null
 
-  const fetchOnce = async () => {
-    if (!auth.isAuthenticated()) return
+  const fetchNoticeUnread = async () => {
     try {
       const res = await getUnreadCount()
       if (res.data) {
@@ -38,6 +47,51 @@ export function useNoticeStream({ onAuthExpired } = {}) {
       }
     } catch (error) {
       console.error('获取未读通知数失败:', error)
+    }
+  }
+
+  const fetchDmUnread = async () => {
+    try {
+      const res = await getDmUnreadCount()
+      if (res.data) {
+        dmUnreadCount.value = res.data.unread_count || 0
+      }
+    } catch (error) {
+      console.error('获取私信未读数失败:', error)
+    }
+  }
+
+  // 两个计数互不影响：一个失败不阻塞另一个
+  const fetchOnce = async () => {
+    if (!auth.isAuthenticated()) return
+    await Promise.all([fetchNoticeUnread(), fetchDmUnread()])
+  }
+
+  /** 立即拉一次私信未读数（标记已读 / 删除会话后、SSE 不可用时校正角标用）。未登录为空操作。 */
+  const refreshDmUnread = async () => {
+    if (!auth.isAuthenticated()) return
+    await fetchDmUnread()
+  }
+
+  /**
+   * 注册 dm-message 回调，返回注销函数。回调参数为解析后的事件数据：
+   * { id, conversation_id, sender_id, sender: {id, username, avatar_url} | null, msg_type, content, truncated, create_time }
+   * 回调抛错不影响其它回调。
+   */
+  const onDmMessage = (handler) => {
+    if (typeof handler !== 'function') return () => {}
+    dmMessageHandlers.add(handler)
+    return () => dmMessageHandlers.delete(handler)
+  }
+
+  const emitDmMessage = (msg) => {
+    // 复制一份：回调里注销自己不影响本轮分发
+    for (const handler of [...dmMessageHandlers]) {
+      try {
+        handler(msg)
+      } catch (error) {
+        console.error('dm-message 回调出错:', error)
+      }
     }
   }
 
@@ -79,6 +133,25 @@ export function useNoticeStream({ onAuthExpired } = {}) {
       }
     })
 
+    es.addEventListener('dm-unread', (e) => {
+      try {
+        const data = JSON.parse(e.data)
+        dmUnreadCount.value = data.unread_count ?? 0
+      } catch {
+        // 坏帧忽略，下一帧覆盖
+      }
+    })
+
+    es.addEventListener('dm-message', (e) => {
+      let msg
+      try {
+        msg = JSON.parse(e.data)
+      } catch {
+        return // 坏帧忽略：不保证送达，页面以拉取为准
+      }
+      if (msg && msg.conversation_id) emitDmMessage(msg)
+    })
+
     es.addEventListener('auth-expired', () => {
       closeEs()
       auth.clearToken()
@@ -115,5 +188,5 @@ export function useNoticeStream({ onAuthExpired } = {}) {
     stopPolling()
   }
 
-  return { unreadCount, start, stop }
+  return { unreadCount, dmUnreadCount, onDmMessage, refreshDmUnread, start, stop }
 }
