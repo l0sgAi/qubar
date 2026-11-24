@@ -1,5 +1,5 @@
+<!-- 私信会话列表（路由 messages）：按最后一条消息倒序，dm-message 实时置顶 -->
 <template>
-  <!-- 私信会话列表（路由 messages）：按最后一条消息倒序，dm-message 实时置顶 -->
   <div class="conversations-page">
     <AppShell v-model:offset="offset" />
 

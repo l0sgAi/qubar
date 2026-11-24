@@ -1,5 +1,5 @@
+<!-- 私信聊天页（路由 message-chat，:userId 为对方用户 ID） -->
 <template>
-  <!-- 私信聊天页（路由 message-chat，:userId 为对方用户 ID） -->
   <div class="chat-page">
     <AppShell v-model:offset="offset" />
 

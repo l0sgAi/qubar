@@ -1,5 +1,5 @@
+<!-- 个人中心「谁可以给我发私信」：四档单选，切换即保存（PUT /user/settings 的 dm_permission） -->
 <template>
-  <!-- 个人中心「谁可以给我发私信」：四档单选，切换即保存（PUT /user/settings 的 dm_permission） -->
   <div class="dm-permission">
     <div class="dm-permission-label">{{ t('message.permission.label') }}</div>
     <div class="dm-permission-desc">{{ t('message.permission.desc') }}</div>
