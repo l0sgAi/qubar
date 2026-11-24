@@ -1131,7 +1131,8 @@ export default {
         like: 'like posts',
         collect: 'collect posts',
         comment: 'post comments',
-        join: 'join circles'
+        join: 'join circles',
+        follow: 'follow people'
       }
     }
   },
@@ -1200,6 +1201,7 @@ export default {
       comment: 'Comments',
       reply: 'Replies',
       mention: 'Mentions',
+      follow: 'Follows',
       review: 'Review'
     },
     readAll: 'Mark all as read',
@@ -1224,7 +1226,10 @@ export default {
       postRejected: 'Your post "{snippet}" didn\'t pass review',
       postReported: 'A post in your circle, "{snippet}", was reported. Please review it.',
       postSelfHarm: 'A post by {actor} in your circle, "{snippet}", may show signs of self-harm. Please check in.',
-      postRemoved: 'Your post "{snippet}" was reported and removed after review by a circle owner / admin'
+      postRemoved: 'Your post "{snippet}" was reported and removed after review by a circle owner / admin',
+      follow: '{actor} followed you',
+      // Follower deleted / disabled (no actor)
+      followAnonymous: 'Someone followed you'
     },
     mention: {
       button: 'Mention',
@@ -1254,9 +1259,20 @@ export default {
       mutual: 'No mutual follows yet'
     },
     settings: {
+      groupTitle: 'Privacy',
       listVisibility: 'Show my following and follower lists',
-      listVisibilityHint: 'When off, others only see the counts, not the names'
+      listVisibilityHint: 'When off, others only see the counts, not the names',
+      loadFailed: 'Failed to load settings',
+      saved: 'Saved',
+      saveFailed: 'Failed to save. Please try again later'
     },
+    mutualEntry: 'Mutual',
+    you: 'You',
+    retry: 'Retry',
+    loadFailed: 'Failed to load the list',
+    noMore: 'No more',
+    listOwner: "{name}'s following and followers",
+    followBack: 'Follow back',
     // Error copy: followErrorKey in utils/follow.js
     error: {
       limitReached: 'You have reached the follow limit',
@@ -1351,7 +1367,7 @@ export default {
   feed: {
     refreshed: 'Recommendations refreshed',
     empty: 'No content yet',
-    emptyFollowing: "You haven't joined any circles yet — explore circles you might like",
+    emptyFollowing: 'Posts from circles you join and people you follow show up here. Join a circle or follow people you find interesting',
     loadFailed: 'Failed to load',
     loginRequiredTab: 'This content requires login to view'
   },
