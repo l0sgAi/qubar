@@ -140,7 +140,10 @@ const transformPost = (p) => {
     collectCount: p.collect_count || 0,
     // 当前列表项是否已点赞/已收藏（PostCard 暂未渲染高亮，预留后续接入）
     isLiked: !!p.is_liked,
-    isCollected: !!p.is_collected
+    isCollected: !!p.is_collected,
+    // 分享数 / 我是否分享过（后端 v0.9.0，PostCard 渲染分享按钮用；缺省时 null 表示不显示数字）
+    shareCount: p.share_count ?? null,
+    isShared: !!p.is_shared
   }
 }
 
