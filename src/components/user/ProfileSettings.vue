@@ -24,17 +24,23 @@
           @update:value="handleListVisibilityChange" />
       </div>
 
-      <DmPermissionSetting class="setting-dm" />
+      <DmPermissionSetting
+        class="setting-dm"
+        :value="settings && (settings.dm_permission ?? 0)"
+        :loading="!settings"
+        :saving="saving.dm_permission"
+        @update:value="updateSetting('dm_permission', $event)" />
     </template>
   </section>
 </template>
 
 <script setup>
 import DmPermissionSetting from '@/components/message/DmPermissionSetting.vue'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { NButton, NSwitch, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { getUserSettings, updateUserSettings } from '@/api/user'
+import { auth } from '@/utils/auth'
 import { FOLLOW_LIST_VISIBILITY } from '@/utils/follow'
 
 const { t } = useI18n()
@@ -47,44 +53,54 @@ const switchId = `follow-list-visibility-${Math.random().toString(36).slice(2, 8
 const settings = ref(null)
 const loadFailed = ref(false)
 // 每个设置项各自的保存中状态（key → boolean）
-const saving = reactive({})
+const saving = ref({})
+let loadVersion = 0
 
 const loadSettings = async () => {
+  const version = ++loadVersion
+  settings.value = null
+  saving.value = {}
   loadFailed.value = false
+  if (!auth.isAuthenticated()) return
   try {
     const res = await getUserSettings()
+    if (version !== loadVersion) return
     settings.value = res?.data || null
     if (!settings.value) loadFailed.value = true
   } catch (error) {
+    if (version !== loadVersion) return
     console.error('获取设置失败:', error)
     loadFailed.value = true
   }
 }
 
 /**
- * 保存单个设置项（部分更新）。先乐观更新，失败回滚并提示；成功后以响应里的全部设置为准。
+ * 保存单个设置项（部分更新）。先乐观更新，失败回滚并提示；每个响应只确认本次修改的字段，避免覆盖另一项并发保存。
  * @param {'follow_list_visibility'|'dm_permission'} key
  * @param {number} value
  * @returns {Promise<boolean>} 是否保存成功
  */
 const updateSetting = async (key, value) => {
-  if (!settings.value || saving[key]) return false
+  if (!settings.value || saving.value[key] || !auth.isAuthenticated()) return false
+  const version = loadVersion
   const prev = settings.value[key]
   if (prev === value) return true
   settings.value = { ...settings.value, [key]: value }
-  saving[key] = true
+  saving.value[key] = true
   try {
     const res = await updateUserSettings({ [key]: value })
-    if (res?.data) settings.value = { ...settings.value, ...res.data }
-    message.success(t('follow.settings.saved'))
+    if (version !== loadVersion) return false
+    settings.value[key] = res?.data?.[key] ?? value
+    message.success(t(key === 'dm_permission' ? 'message.permission.saved' : 'follow.settings.saved'))
     return true
   } catch (error) {
+    if (version !== loadVersion) return false
     console.error('保存设置失败:', error)
     settings.value = { ...settings.value, [key]: prev }
-    message.error(t('follow.settings.saveFailed'))
+    message.error(t(key === 'dm_permission' ? 'message.permission.saveFailed' : 'follow.settings.saveFailed'))
     return false
   } finally {
-    saving[key] = false
+    if (version === loadVersion) saving.value[key] = false
   }
 }
 
@@ -95,6 +111,7 @@ const handleListVisibilityChange = (isPublic) => {
 }
 
 onMounted(loadSettings)
+onBeforeUnmount(() => { ++loadVersion })
 
 defineExpose({ settings, updateSetting, reload: loadSettings })
 </script>
