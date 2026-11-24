@@ -9,7 +9,7 @@
         :disabled="loading || saving || value === null"
         name="dm-permission"
         class="dm-permission-options"
-        @update:value="handleChange"
+        @update:value="emit('update:value', $event)"
       >
         <NRadio
           v-for="opt in DM_PERMISSION_OPTIONS"
@@ -25,48 +25,17 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import { NRadioGroup, NRadio, NSpin, useMessage } from 'naive-ui'
+import { NRadioGroup, NRadio, NSpin } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
-import { getUserSettings, updateUserSettings } from '@/api/user'
 import { DM_PERMISSION_OPTIONS } from '@/utils/message'
 
-const { t } = useI18n()
-const message = useMessage()
-
-const value = ref(null)
-const loading = ref(true)
-const saving = ref(false)
-
-onMounted(async () => {
-  try {
-    const res = await getUserSettings()
-    value.value = res.data?.dm_permission ?? 0
-  } catch (error) {
-    console.error('读取私信设置失败:', error)
-    message.error(t('message.permission.loadFailed'))
-  } finally {
-    loading.value = false
-  }
+defineProps({
+  value: { type: Number, default: null },
+  loading: Boolean,
+  saving: Boolean
 })
-
-const handleChange = async (next) => {
-  const prev = value.value
-  if (next === prev || saving.value) return
-  value.value = next
-  saving.value = true
-  try {
-    const res = await updateUserSettings({ dm_permission: next })
-    value.value = res.data?.dm_permission ?? next
-    message.success(t('message.permission.saved'))
-  } catch (error) {
-    console.error('保存私信设置失败:', error)
-    value.value = prev
-    message.error(t('message.permission.saveFailed'))
-  } finally {
-    saving.value = false
-  }
-}
+const emit = defineEmits(['update:value'])
+const { t } = useI18n()
 </script>
 
 <style scoped>

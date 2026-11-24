@@ -6,11 +6,7 @@
  * - 部分接口在匿名访问时，个性化字段（is_liked/is_collected/is_joined）会降级为 false，
  *   这是后端预期行为，前端无需特殊处理。
  *
- * 本模块只用于「响应拦截器判断 401 是否应触发硬跳转」——
- * 请求拦截器不阻断无 token 请求（符合后端「静默放行」语义），
- * 白名单的存在意义在于：当某个访客可读接口意外返回 401（token 失效被后端静默当访客的场景除外），
- * 或 /post/home?tab=recommend|following 这类「按 tab 区分」的 401，
- * 拦截器要能识别并放行，而不是粗暴清 token + 跳登录页。
+ * isGuestAccessible 用于接口契约自检，响应拦截器使用 isFeedTabRestricted 单独处理受限 feed。
  */
 
 /**
@@ -26,6 +22,8 @@ const GUEST_ACCESSIBLE = [
   { method: 'GET', path: '/user/detail' }, // /user/detail/:id
   { method: 'GET', path: '/circle/list' },
   { method: 'GET', path: '/circle/active' },
+  { method: 'GET', path: '/circle/random' },
+  { method: 'GET', path: '/circle/invite/preview' },
   { method: 'GET', path: '/circle/user' },
   { method: 'GET', path: '/circle/posts' },
   { method: 'GET', path: '/circle/detail' }, // /circle/detail/:id
@@ -34,6 +32,7 @@ const GUEST_ACCESSIBLE = [
   { method: 'GET', path: '/post/detail' }, // /post/detail/:id
   { method: 'GET', path: '/comment/list' },
   { method: 'GET', path: '/comment/replies' },
+  { method: 'GET', path: '/comment/locate' },
   { method: 'GET', path: '/comment/detail' }, // /comment/detail/:id
   { method: 'GET', path: '/trending' },
   { method: 'GET', path: '/discover' },
@@ -79,9 +78,9 @@ export function isGuestAccessible(method, url) {
 
   // /post/home 按 tab 特判
   if (m === 'GET' && path === '/post/home') {
-    const tab = new URLSearchParams(url.split('?')[1] || '').get('tab')
-    // 未带 tab 默认按 hot 处理（后端默认行为），hot/latest 可读
-    return tab === 'hot' || tab === 'latest' || !tab
+    const tab = new URLSearchParams(url.split('#')[0].split('?')[1] || '').get('tab')
+    // 未指定 tab 或 tab 为空时，请求无效（400）。
+    return tab === 'hot' || tab === 'latest'
   }
 
   return GUEST_ACCESSIBLE.some(

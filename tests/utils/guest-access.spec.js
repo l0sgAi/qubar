@@ -28,13 +28,25 @@ describe('isGuestAccessible', () => {
     expect(isGuestAccessible('GET', '/trending/')).toBe(true)
   })
 
+  it.each([
+    ['/circle/random?size=3', '/circle/join'],
+    ['/circle/invite/preview?token=example', '/circle/invite/accept'],
+    ['/comment/locate?comment_id=c1', '/comment/create']
+  ])('访客 GET %s 可读，对应 POST %s 需要登录', (read, write) => {
+    expect(isGuestAccessible('GET', read)).toBe(true)
+    expect(isGuestAccessible('POST', write)).toBe(false)
+  })
+
   it('非白名单接口不可读', () => {
     expect(isGuestAccessible('GET', '/user/info')).toBe(false)
     expect(isGuestAccessible('GET', '/notice/list')).toBe(false)
   })
 
   it.each([
-    ['/post/home', true],
+    ['/post/home', false],
+    ['/post/home?tab=', false],
+    ['/post/home?tab=unknown', false],
+    ['/post/home?tab=latest#top', true],
     ['/post/home?tab=hot', true],
     ['/post/home?tab=latest&page=2', true],
     ['/post/home?tab=recommend', false],
