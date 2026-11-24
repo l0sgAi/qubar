@@ -24,12 +24,13 @@
           @update:value="handleListVisibilityChange" />
       </div>
 
-      <!-- v0.9.0 C: DM permission setting（.setting-item 追加在这里；值 settings.dm_permission，保存 updateSetting('dm_permission', v)） -->
+      <DmPermissionSetting class="setting-dm" />
     </template>
   </section>
 </template>
 
 <script setup>
+import DmPermissionSetting from '@/components/message/DmPermissionSetting.vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { NButton, NSwitch, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
@@ -110,6 +111,10 @@ defineExpose({ settings, updateSetting, reload: loadSettings })
   padding: 14px 16px 6px;
   font-size: 13px;
   color: var(--text-tertiary);
+}
+
+.setting-dm {
+  padding: 10px 16px;
 }
 
 .setting-item {

@@ -130,6 +130,24 @@
         <NBadge :value="notificationCount" :max="99" class="notification-badge" />
       </div>
 
+      <!-- 私信入口：角标为私信未读总数（dm-unread），与消息中心铃铛分开 -->
+      <div class="notification-wrapper">
+        <NButton
+          quaternary
+          circle
+          size="large"
+          class="notification-btn"
+          :aria-label="t('message.entry')"
+          :title="t('message.entry')"
+          @click="handleMessages"
+        >
+          <NIcon size="20">
+            <MessageCircle />
+          </NIcon>
+        </NButton>
+        <NBadge :value="dmUnreadCount" :max="99" class="notification-badge" />
+      </div>
+
       <!-- 用户信息下拉菜单 -->
       <AppDropdown :options="userMenuOptions" @select="handleMenuSelect">
         <div class="user-info-trigger">
@@ -154,7 +172,7 @@ import { NButton, NIcon, NAvatar, NBadge, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { auth } from '@/utils/auth'
 import { AddCircleOutlineFilled as AddIcon } from '@vicons/material'
-import { Bell } from '@vicons/tabler'
+import { Bell, MessageCircle } from '@vicons/tabler'
 import request from '@/utils/request'
 import LanguageSwitcher from '@/components/common/LanguageSwitcher.vue'
 import AppDropdown from '@/components/common/AppDropdown.vue'
@@ -177,7 +195,7 @@ const userAvatarUrl = ref('')
 
 // 未读数：SSE 实时推送为主、30s 轮询降级。连接与本地校正事件（notice-read/notice-read-all）
 // 由 useUnreadNotice 单例统一管理（挂载即 acquire、卸载即 release），移动端 TabBar 共用同一份
-const { unreadCount: notificationCount } = useUnreadNotice({
+const { unreadCount: notificationCount, dmUnreadCount } = useUnreadNotice({
   onAuthExpired: () => {
     // 服务端检测到登出/过期/被踢下线（token 已在 composable 内清除）
     message.warning(t('common.logout'))
@@ -308,6 +326,11 @@ const handleCreatePost = () => {
 // 消息中心
 const handleNotification = () => {
   router.push('/notifications')
+}
+
+// 私信会话列表
+const handleMessages = () => {
+  router.push('/messages')
 }
 
 // 返回主页（匿名态回到发现页，避免被 /home 的登录守卫弹走）。

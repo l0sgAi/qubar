@@ -84,7 +84,7 @@
                   :user-id="profileId"
                   :relation="followStats?.relation ?? 0"
                   @change="handleFollowChange" />
-                <!-- v0.9.0 C: DM button（机器人账号不显示；按钮加 class="profile-action"） -->
+                <DmButton class="profile-action" size="medium" :user="userInfo" />
               </div>
             </div>
 
@@ -167,6 +167,7 @@ import AppShell from '@/components/layout/AppShell.vue'
 import { useAppShell } from '@/composables/useAppShell'
 import MyPosts from '@/components/user/MyPosts.vue'
 import MyGroups from '@/components/user/MyGroups.vue'
+import DmButton from '@/components/message/DmButton.vue'
 import { getUserDetail } from '@/api/user'
 import { getFollowStats } from '@/api/follow'
 import FollowButton from '@/components/follow/FollowButton.vue'

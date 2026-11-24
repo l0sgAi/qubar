@@ -1127,6 +1127,7 @@ export default {
       goRegister: 'Create an account',
       continueGuest: 'Not now, keep browsing',
       actions: {
+        message: 'send messages',
         like: 'like posts',
         collect: 'collect posts',
         comment: 'post comments',
@@ -1299,13 +1300,29 @@ export default {
     // Shown when remaining_count is a number (5-message limit before they follow you)
     remaining: 'You can send {count} more until they follow you or reply',
     newMessageFrom: '{name} sent you a message',
+    // Toast for a new message outside the DM pages (DmToastListener)
+    newMessageToast: '{name}: {content}',
+    someone: 'Someone',
+    // Conversation list: prefix when the last message is mine
+    ownPreview: 'You: {content}',
+    loadFailed: 'Failed to load. Tap to retry',
+    deleted: 'Conversation deleted',
+    deleteFailed: 'Failed to delete. Please try again later',
+    retry: 'Retry',
+    charCount: '{count} / {max}',
+    cannotMessageSelf: "You can't message yourself",
+    peerDeleted: 'This account has been deleted. You can no longer send messages',
     // Who can message me (DM_PERMISSION_OPTIONS in utils/message.js)
     permission: {
       label: 'Who can message me',
       everyone: 'Everyone',
       following: 'People I follow',
       mutual: 'Mutual follows only',
-      closed: 'No one'
+      closed: 'No one',
+      desc: 'Takes effect right away. People who are not allowed see the reason in the chat',
+      saved: 'Message settings updated',
+      saveFailed: 'Failed to save. Please try again later',
+      loadFailed: 'Failed to load message settings'
     },
     // Cannot send / send failed: dmReasonKey, dmSendErrorKey in utils/message.js
     error: {
