@@ -65,6 +65,7 @@
                 </div>
             </NAvatar>
               <h2 class="sidebar-username">{{ userInfo.username || t('user.notSet') }}</h2>
+              <DmButton class="profile-action" size="medium" :user="userInfo" style="margin-top: 16px" />
             </div>
 
             <!-- 用户基本信息 -->
@@ -146,6 +147,7 @@ import AppShell from '@/components/layout/AppShell.vue'
 import { useAppShell } from '@/composables/useAppShell'
 import MyPosts from '@/components/user/MyPosts.vue'
 import MyGroups from '@/components/user/MyGroups.vue'
+import DmButton from '@/components/message/DmButton.vue'
 import { getUserDetail } from '@/api/user'
 import { usePageTitle } from '@/composables/usePageTitle'
 import { useI18n } from 'vue-i18n'

@@ -86,6 +86,7 @@
         <!-- 移动端设置列表：语言 / 协议 / 退出登录（原桌面头像下拉菜单的入口） -->
         <div v-if="mobileShell" class="mobile-settings">
           <div class="settings-title">{{ t('mobile.me.settings') }}</div>
+          <DmPermissionSetting />
           <div class="settings-row">
             <span>{{ t('mobile.me.language') }}</span>
             <LanguageSwitcher />
@@ -171,7 +172,7 @@
                 </div>
               </div>
             </div>
-
+            <DmPermissionSetting />
           </NCard>
         </div>
       </div>
@@ -364,6 +365,7 @@ import request from '@/utils/request'
 import { usePageTitle } from '@/composables/usePageTitle'
 import { updateUserInfo, resetPassword } from '@/api/user'
 import { useImageUpload } from '@/composables/useImageUpload'
+import DmPermissionSetting from '@/components/message/DmPermissionSetting.vue'
 import { useI18n } from 'vue-i18n'
 
 const router = useRouter()
