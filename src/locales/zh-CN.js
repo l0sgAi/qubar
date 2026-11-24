@@ -1128,10 +1128,12 @@ export default {
       goRegister: '注册新账号',
       continueGuest: '暂不登录，继续浏览',
       actions: {
+        message: '发私信',
         like: '点赞',
         collect: '收藏',
         comment: '发表评论',
-        join: '加入圈子'
+        join: '加入圈子',
+        follow: '关注用户'
       }
     }
   },
@@ -1200,6 +1202,7 @@ export default {
       comment: '评论',
       reply: '回复',
       mention: '提及',
+      follow: '关注',
       review: '审核'
     },
     readAll: '全部已读',
@@ -1225,7 +1228,10 @@ export default {
       postRejected: '你的帖子《{snippet}》未通过审核',
       postReported: '本圈帖子《{snippet}》被举报，请及时复核',
       postSelfHarm: '本圈 {actor} 的帖子《{snippet}》疑似有自伤 / 轻生倾向，请关注',
-      postRemoved: '你的帖子《{snippet}》被举报，经圈主 / 管理员复核已下架'
+      postRemoved: '你的帖子《{snippet}》被举报，经圈主 / 管理员复核已下架',
+      follow: '{actor} 关注了你',
+      // 关注者已注销 / 禁用（actor 缺省）
+      followAnonymous: '有人关注了你'
     },
     mention: {
       button: '提及',
@@ -1255,9 +1261,20 @@ export default {
       mutual: '还没有互相关注的人'
     },
     settings: {
+      groupTitle: '隐私设置',
       listVisibility: '公开我的关注和粉丝列表',
-      listVisibilityHint: '关闭后其他人只能看到数量，看不到名单'
+      listVisibilityHint: '关闭后其他人只能看到数量，看不到名单',
+      loadFailed: '设置加载失败',
+      saved: '已保存',
+      saveFailed: '保存失败，请稍后重试'
     },
+    mutualEntry: '互关',
+    you: '我',
+    retry: '重试',
+    loadFailed: '列表加载失败',
+    noMore: '没有更多了',
+    listOwner: '{name} 的关注与粉丝',
+    followBack: '回关',
     // 错误文案：utils/follow.js 的 followErrorKey
     error: {
       limitReached: '关注人数已达上限',
@@ -1285,13 +1302,29 @@ export default {
     // remaining_count 为数字时的提示（未关注 5 条限制）
     remaining: '对方关注你或回复前，还可发送 {count} 条',
     newMessageFrom: '{name} 给你发了私信',
+    // 非私信页收到新私信时的提示（DmToastListener）
+    newMessageToast: '{name}：{content}',
+    someone: '有人',
+    // 会话列表：我发的最后一条加前缀
+    ownPreview: '我：{content}',
+    loadFailed: '加载失败，点击重试',
+    deleted: '会话已删除',
+    deleteFailed: '删除失败，请稍后重试',
+    retry: '重试',
+    charCount: '{count} / {max}',
+    cannotMessageSelf: '不能给自己发私信',
+    peerDeleted: '对方账号已注销，无法发送私信',
     // 谁可以给我发私信（utils/message.js 的 DM_PERMISSION_OPTIONS）
     permission: {
       label: '谁可以给我发私信',
       everyone: '所有人',
       following: '仅我关注的人',
       mutual: '仅互相关注',
-      closed: '关闭私信'
+      closed: '关闭私信',
+      desc: '修改后立即生效，不满足条件的人在聊天页会看到原因',
+      saved: '私信设置已更新',
+      saveFailed: '保存失败，请稍后重试',
+      loadFailed: '读取私信设置失败'
     },
     // 不能发送 / 发送失败：utils/message.js 的 dmReasonKey、dmSendErrorKey
     error: {
@@ -1314,6 +1347,7 @@ export default {
   // 帖子分享（后端 v0.9.0；D 线页面文案在本段追加）
   share: {
     button: '分享',
+    shared: '已分享',
     linkCopied: '链接已复制',
     copyFailed: '复制失败，请手动复制链接',
     // 错误文案：utils/share.js 的 shareErrorKey
@@ -1336,7 +1370,7 @@ export default {
   feed: {
     refreshed: '推荐已刷新',
     empty: '暂无内容',
-    emptyFollowing: '还没有加入圈子，去发现感兴趣的圈子吧',
+    emptyFollowing: '这里会显示你加入的圈子和关注的人发的帖子，去加入圈子或关注感兴趣的人吧',
     loadFailed: '加载失败',
     loginRequiredTab: '此内容需要登录后查看'
   },

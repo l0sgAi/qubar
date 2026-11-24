@@ -92,6 +92,10 @@
             </NIcon>
             <span>{{ formatNumber(post.collect_count, STATS_COUNT_CAP) }}</span>
           </div>
+          <div v-if="shareState.count !== null" class="stat-item" :class="{ 'is-shared': shareState.shared }">
+            <NIcon class="stat-icon" size="18"><ShareIcon /></NIcon>
+            <span>{{ formatNumber(shareState.count, STATS_COUNT_CAP) }}</span>
+          </div>
         </div>
       </div>
     </div>
@@ -141,6 +145,16 @@
         </template>
         {{ post.is_collected ? t('post.actions.favorited') : t('post.actions.favorite') }}
       </NButton>
+
+      <!-- 分享：访客也可分享链接（不计数）；状态与列表卡片共用 usePostShare -->
+      <ShareButton
+        class="post-share"
+        variant="button"
+        :post-id="sharePostId"
+        :title="post.title"
+        :share-count="post.share_count ?? null"
+        :is-shared="!!post.is_shared"
+      />
     </div>
 
     <!-- 插槽：评论编辑器和评论列表 -->
@@ -149,17 +163,21 @@
 </template>
 
 <script setup>
+import { computed } from 'vue'
 import { NCard, NTag, NAvatar, NButton, NIcon } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import MentionPreview from '@/components/post/detail/MentionPreview.vue'
 import SmartLink from '@/components/common/SmartLink.vue'
 import PostStatusBanner from '@/components/post/detail/PostStatusBanner.vue'
 import PostMoreMenu from '@/components/post/PostMoreMenu.vue'
+import ShareButton from '@/components/post/ShareButton.vue'
+import { Share as ShareIcon } from '@vicons/tabler'
+import { usePostShareState } from '@/composables/usePostShare'
 import { isPostPublished } from '@/composables/usePostReview'
 import { usePostStatus } from '@/composables/usePostStatus'
 import { useFormatTime, useFormatNumber } from '@/utils/i18n'
 
-defineProps({
+const props = defineProps({
   post: {
     type: Object,
     required: true
@@ -198,6 +216,14 @@ const { getPostStatusInfo } = usePostStatus()
 
 const VIEW_COUNT_CAP = 1_000_000_000
 const STATS_COUNT_CAP = 100_000_000
+
+// 分享：分享数 / 是否已分享合并会话内的分享结果，与列表卡片保持一致
+const sharePostId = computed(() => props.postId || props.post.id)
+const shareState = usePostShareState(
+  sharePostId,
+  () => props.post.share_count,
+  () => props.post.is_shared
+)
 </script>
 
 <style scoped>
@@ -308,6 +334,11 @@ const STATS_COUNT_CAP = 100_000_000
   color: rgba(255, 255, 255, 0.5);
 }
 
+.stat-item.is-shared,
+.stat-item.is-shared .stat-icon {
+  color: #66eac2;
+}
+
 .post-content {
   margin: 14px 0;
   padding: 24px;
@@ -370,6 +401,15 @@ const STATS_COUNT_CAP = 100_000_000
   .post-actions .n-button {
     min-width: 0;
     flex: 1;
+    height: 44px;
+  }
+
+  .post-actions .post-share {
+    flex: 1;
+  }
+
+  .post-actions .post-share :deep(.n-button) {
+    min-width: 0;
     height: 44px;
   }
 

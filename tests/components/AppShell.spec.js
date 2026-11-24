@@ -32,6 +32,9 @@ vi.mock('@/components/layout/mobile/MobileTopBar.vue', () => ({
 vi.mock('@/components/layout/mobile/MobileTabBar.vue', () => ({
   default: { name: 'MobileTabBar', render: () => h('div', { class: 'stub-tabbar' }) }
 }))
+vi.mock('@/components/message/DmToastListener.vue', () => ({
+  default: { name: 'DmToastListener', render: () => null }
+}))
 
 const { default: AppShell } = await import('@/components/layout/AppShell.vue')
 const { useAppShell } = await import('@/composables/useAppShell')

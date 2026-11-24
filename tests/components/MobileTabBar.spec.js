@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { ref } from 'vue'
 
-const unread = vi.hoisted(() => ({ count: null }))
+const unread = vi.hoisted(() => ({ count: null, dm: null }))
 vi.mock('@/composables/useUnreadNotice', () => ({
-  useUnreadNotice: () => ({ unreadCount: unread.count })
+  useUnreadNotice: () => ({ unreadCount: unread.count, dmUnreadCount: unread.dm })
 }))
 const invites = vi.hoisted(() => ({ count: null, refresh: null }))
 vi.mock('@/composables/usePendingInvites', () => ({
@@ -18,7 +18,7 @@ vi.mock('naive-ui', async (importOriginal) => ({
 const { default: MobileTabBar } = await import('@/components/layout/mobile/MobileTabBar.vue')
 const { createTestI18n, createTestRouter } = await import('../helpers/plugins')
 
-const ROUTES = ['/', '/home', '/discover', '/hot', '/notifications', '/profile', '/post/:id'].map(path => ({ path }))
+const ROUTES = ['/', '/home', '/discover', '/hot', '/messages', '/notifications', '/profile', '/post/:id'].map(path => ({ path }))
 
 const mountAt = async (path) => {
   const router = createTestRouter(ROUTES)
@@ -32,6 +32,7 @@ const active = (wrapper) => wrapper.findAll('.tab-item.active').map(el => el.fin
 describe('MobileTabBar', () => {
   beforeEach(() => {
     unread.count = ref(0)
+    unread.dm = ref(0)
     invites.count = ref(0)
     invites.refresh = vi.fn()
   })
@@ -42,7 +43,7 @@ describe('MobileTabBar', () => {
     invites.count = ref(3)
     const wrapper = await mountAt('/home')
     expect(invites.refresh).toHaveBeenCalled()
-    const me = wrapper.findAll('.tab-item').at(3)
+    const me = wrapper.findAll('.tab-item').at(4)
     expect(me.find('.badge').text()).toBe('3')
     expect(wrapper.findAll('.badge')).toHaveLength(1)
   })
@@ -54,11 +55,26 @@ describe('MobileTabBar', () => {
     expect(loginHref).toBe('/?redirect=/post/1&tab=login')
   })
 
-  it('登录态：首页 / 发现 / 消息 / 我的', async () => {
+  it('登录态：首页 / 发现 / 私信 / 消息 / 我的', async () => {
     localStorage.setItem('qubar_token', 'tok')
     localStorage.setItem('qubar_token_expire', String(Date.now() + 60_000))
     const wrapper = await mountAt('/home')
-    expect(labels(wrapper)).toEqual(['首页', '发现', '消息', '我的'])
+    expect(labels(wrapper)).toEqual(['首页', '发现', '私信', '消息', '我的'])
+  })
+
+  it('私信角标用私信未读数，与消息中心角标分开', async () => {
+    localStorage.setItem('qubar_token', 'tok')
+    localStorage.setItem('qubar_token_expire', String(Date.now() + 60_000))
+    unread.count.value = 2
+    unread.dm.value = 7
+    const wrapper = await mountAt('/messages')
+    const tabs = wrapper.findAll('.tab-item')
+    expect(tabs.at(2).find('.badge').text()).toBe('7')
+    expect(tabs.at(3).find('.badge').text()).toBe('2')
+    expect(active(wrapper)).toEqual(['私信'])
+    unread.dm.value = 0
+    await wrapper.vm.$nextTick()
+    expect(tabs.at(2).find('.badge').exists()).toBe(false)
   })
 
   it.each([

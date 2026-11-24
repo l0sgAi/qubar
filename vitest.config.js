@@ -23,7 +23,7 @@ export default mergeConfig(viteConfig, defineConfig({
         statements: 55,
         branches: 90,
         functions: 66,
-        '{src/composables/{useInteractionToggle,useBreakpoint,useAppShell,useUnreadNotice,useNoticeStream,useCommentSubmit,usePostReview}.js,src/utils/{request,sanitize,throttle,guest-access,mention,mentionResolve,mobileNav,share,agentAutoReply,apiError,follow,message}.js,src/router/**}': {
+        '{src/composables/{useInteractionToggle,useBreakpoint,useAppShell,useUnreadNotice,useNoticeStream,useCommentSubmit,usePostReview,useFollowToggle,useFollowList,usePostShare}.js,src/utils/{request,sanitize,throttle,guest-access,mention,mentionResolve,mobileNav,share,agentAutoReply,apiError,follow,message}.js,src/router/**}': {
           lines: 95,
           statements: 95,
           branches: 90
