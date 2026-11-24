@@ -14,7 +14,7 @@
 # 升级 Go 时：先改 go.mod 的 `go` 指令，再把下面的标签改成同一版本，digest 用
 #   docker buildx imagetools inspect golang:<版本> --format '{{json .Manifest.Digest}}'
 # 取 index 的 digest（不是某个平台的 manifest digest）。
-FROM --platform=$BUILDPLATFORM golang:1.26.10@sha256:cfa27959837144bf4649802ba38e59daffd0dd2a7994aa83daaf113285b0f551 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.11@sha256:4165ee6bf3b7811fd7b40373290405c83d0167dcb87ee5f29c427cdcef45ff8f AS build
 ARG TARGETOS TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
