@@ -37,6 +37,10 @@ const GUEST_ACCESSIBLE = [
   { method: 'GET', path: '/comment/detail' }, // /comment/detail/:id
   { method: 'GET', path: '/trending' },
   { method: 'GET', path: '/discover' },
+  // —— 用户关注（后端 v0.9.0 #217 / #218）：计数与列表访客可读，关注 / 互关 / 批量关系需登录 ——
+  { method: 'GET', path: '/follow/stats' }, // /follow/stats/:user_id
+  { method: 'GET', path: '/follow/following' }, // /follow/following/:user_id
+  { method: 'GET', path: '/follow/followers' }, // /follow/followers/:user_id
   // /post/home 不在此处直接列出——由 isGuestAccessible 内部按 tab 特判
 ]
 

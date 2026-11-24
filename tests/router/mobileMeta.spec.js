@@ -50,6 +50,13 @@ describe('路由表 meta.mobile', () => {
     ])
   })
 
+  it('私信聊天页：返回式顶栏、无 TabBar；关注列表：返回式顶栏', () => {
+    expect(getMobileMeta(routes.find(r => r.name === 'message-chat')))
+      .toEqual({ supported: true, topBar: 'back', tabBar: false })
+    expect(getMobileMeta(routes.find(r => r.name === 'user-following')).topBar).toBe('back')
+    expect(getMobileMeta(routes.find(r => r.name === 'messages'))).toEqual(MOBILE_META_DEFAULTS)
+  })
+
   it('帖子详情：返回式顶栏、无 TabBar', () => {
     const route = routes.find(r => r.name === 'post-detail')
     expect(getMobileMeta(route)).toEqual({ supported: true, topBar: 'back', tabBar: false })

@@ -1,8 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const api = vi.hoisted(() => ({ getUnreadCount: null }))
+const api = vi.hoisted(() => ({ getUnreadCount: null, getDmUnreadCount: null }))
 vi.mock('@/api/notice', () => ({
   getUnreadCount: (...args) => api.getUnreadCount(...args)
+}))
+vi.mock('@/api/message', () => ({
+  getDmUnreadCount: (...args) => api.getDmUnreadCount(...args)
 }))
 
 const { useNoticeStream } = await import('@/composables/useNoticeStream')
@@ -48,6 +51,7 @@ describe('composables/useNoticeStream', () => {
     FakeEventSource.instances = []
     vi.stubGlobal('EventSource', FakeEventSource)
     api.getUnreadCount = vi.fn().mockResolvedValue({ data: { unread_count: 7 } })
+    api.getDmUnreadCount = vi.fn().mockResolvedValue({ data: { unread_count: 2 } })
   })
 
   it('未登录时 start 为空操作', () => {
@@ -163,5 +167,144 @@ describe('composables/useNoticeStream', () => {
     stop()
     await vi.advanceTimersByTimeAsync(POLL_INTERVAL * 2)
     expect(api.getUnreadCount).toHaveBeenCalledTimes(1)
+  })
+
+  describe('私信事件（v0.9.0 dm-unread / dm-message）', () => {
+    const DM = {
+      id: '019a7b10-2c3d-7e4f-8a9b-0c1d2e3f4a5b',
+      conversation_id: '019a7b10-2c3a-7d11-9e22-3f4a5b6c7d8e',
+      sender_id: 'u2',
+      sender: { id: 'u2', username: 'alice', avatar_url: '' },
+      msg_type: 1,
+      content: '你好',
+      truncated: false,
+      create_time: '2026-11-11T14:30:00+08:00'
+    }
+
+    it('dm-unread 全量替换 dmUnreadCount，与 unreadCount 互不覆盖；坏帧忽略', () => {
+      login()
+      const { start, unreadCount, dmUnreadCount } = useNoticeStream()
+      start()
+      lastEs().emit('unread-count', JSON.stringify({ unread_count: 3 }))
+      lastEs().emit('dm-unread', JSON.stringify({ unread_count: 5 }))
+      expect(unreadCount.value).toBe(3)
+      expect(dmUnreadCount.value).toBe(5)
+      lastEs().emit('dm-unread', 'oops')
+      expect(dmUnreadCount.value).toBe(5)
+      lastEs().emit('dm-unread', JSON.stringify({}))
+      expect(dmUnreadCount.value).toBe(0)
+      expect(unreadCount.value).toBe(3)
+    })
+
+    it('dm-message 分发给全部回调；注销后不再收到；坏帧 / 缺 conversation_id 忽略', () => {
+      login()
+      const { start, onDmMessage } = useNoticeStream()
+      start()
+      const a = vi.fn()
+      const b = vi.fn()
+      const offA = onDmMessage(a)
+      onDmMessage(b)
+
+      lastEs().emit('dm-message', JSON.stringify(DM))
+      expect(a).toHaveBeenCalledWith(DM)
+      expect(b).toHaveBeenCalledTimes(1)
+
+      offA()
+      lastEs().emit('dm-message', JSON.stringify({ ...DM, id: 'x2' }))
+      expect(a).toHaveBeenCalledTimes(1)
+      expect(b).toHaveBeenCalledTimes(2)
+
+      lastEs().emit('dm-message', '{bad')
+      lastEs().emit('dm-message', JSON.stringify({ id: 'x3' }))
+      lastEs().emit('dm-message', 'null')
+      expect(b).toHaveBeenCalledTimes(2)
+    })
+
+    it('回调抛错不影响其它回调；回调里注销自己不影响本轮分发；非函数注册为空操作', () => {
+      login()
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      const { start, onDmMessage } = useNoticeStream()
+      start()
+      const bad = vi.fn(() => { throw new Error('boom') })
+      let offSelf = null
+      const self = vi.fn(() => offSelf())
+      const good = vi.fn()
+      onDmMessage(bad)
+      offSelf = onDmMessage(self)
+      onDmMessage(good)
+      expect(onDmMessage('not a function')).toBeTypeOf('function')
+      onDmMessage('not a function')()
+
+      lastEs().emit('dm-message', JSON.stringify(DM))
+      expect(good).toHaveBeenCalledTimes(1)
+      expect(self).toHaveBeenCalledTimes(1)
+      expect(console.error).toHaveBeenCalled()
+
+      lastEs().emit('dm-message', JSON.stringify(DM))
+      expect(self).toHaveBeenCalledTimes(1)
+      expect(good).toHaveBeenCalledTimes(2)
+    })
+
+    it('回调在 stop / 重新 start 之间保留（单例连接重建后仍生效）', () => {
+      login()
+      const { start, stop, onDmMessage } = useNoticeStream()
+      const handler = vi.fn()
+      onDmMessage(handler)
+      start()
+      stop()
+      start()
+      lastEs().emit('dm-message', JSON.stringify(DM))
+      expect(handler).toHaveBeenCalledTimes(1)
+    })
+
+    it('SSE 不可用时轮询同时拉私信未读数（30s）', async () => {
+      login()
+      const { start, unreadCount, dmUnreadCount } = useNoticeStream()
+      start()
+      lastEs().readyState = FakeEventSource.CLOSED
+      lastEs().onerror()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(api.getDmUnreadCount).toHaveBeenCalledTimes(1)
+      expect(unreadCount.value).toBe(7)
+      expect(dmUnreadCount.value).toBe(2)
+
+      api.getDmUnreadCount.mockResolvedValue({ data: { unread_count: 4 } })
+      await vi.advanceTimersByTimeAsync(POLL_INTERVAL)
+      expect(api.getDmUnreadCount).toHaveBeenCalledTimes(2)
+      expect(dmUnreadCount.value).toBe(4)
+    })
+
+    it('轮询时一个计数失败不影响另一个；响应缺 data 时保持原值', async () => {
+      login()
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      api.getUnreadCount = vi.fn().mockRejectedValue(new Error('notice down'))
+      const { start, dmUnreadCount } = useNoticeStream()
+      start()
+      lastEs().emit('conn-evicted')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dmUnreadCount.value).toBe(2)
+
+      api.getUnreadCount = vi.fn().mockResolvedValue({ data: { unread_count: 1 } })
+      api.getDmUnreadCount = vi.fn().mockRejectedValue(new Error('dm down'))
+      await vi.advanceTimersByTimeAsync(POLL_INTERVAL)
+      expect(dmUnreadCount.value).toBe(2)
+      expect(console.error).toHaveBeenCalledWith('获取私信未读数失败:', expect.any(Error))
+
+      api.getDmUnreadCount = vi.fn().mockResolvedValue({})
+      await vi.advanceTimersByTimeAsync(POLL_INTERVAL)
+      expect(dmUnreadCount.value).toBe(2)
+      api.getDmUnreadCount = vi.fn().mockResolvedValue({ data: {} })
+      await vi.advanceTimersByTimeAsync(POLL_INTERVAL)
+      expect(dmUnreadCount.value).toBe(0)
+    })
+
+    it('refreshDmUnread：登录时拉一次，未登录为空操作', async () => {
+      const { refreshDmUnread, dmUnreadCount } = useNoticeStream()
+      await refreshDmUnread()
+      expect(api.getDmUnreadCount).not.toHaveBeenCalled()
+      login()
+      await refreshDmUnread()
+      expect(dmUnreadCount.value).toBe(2)
+    })
   })
 })

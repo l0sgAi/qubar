@@ -150,6 +150,43 @@ export const routes = [
     meta: { requiresAuth: true, titleKey: 'title.myInvites', mobile: { topBar: 'back' } }
   },
   {
+    // 关注列表（后端 v0.9.0 #218）：访客可读（GET /follow/following/:user_id 开放 anonymous）；
+    // 对方设为私密时接口 403，页面内按 stats.list_visible / 403 展示。:id 为列表主人的用户 ID
+    path: '/user/:id/following',
+    name: 'user-following',
+    component: () => import('@/views/follow/FollowList.vue'),
+    meta: { titleKey: 'title.following', mobile: { topBar: 'back' } }
+  },
+  {
+    // 粉丝列表：访客可读，规则同关注列表
+    path: '/user/:id/followers',
+    name: 'user-followers',
+    component: () => import('@/views/follow/FollowList.vue'),
+    meta: { titleKey: 'title.followers', mobile: { topBar: 'back' } }
+  },
+  {
+    // 我的互关：需登录（GET /follow/mutual 只能看自己的）
+    path: '/follow/mutual',
+    name: 'follow-mutual',
+    component: () => import('@/views/follow/MutualList.vue'),
+    meta: { requiresAuth: true, titleKey: 'title.mutual', mobile: { topBar: 'back' } }
+  },
+  {
+    // 私信会话列表（后端 v0.9.0 #238）：需登录
+    path: '/messages',
+    name: 'messages',
+    component: () => import('@/views/message/ConversationList.vue'),
+    meta: { requiresAuth: true, titleKey: 'title.messages' }
+  },
+  {
+    // 私信聊天页：需登录。:userId 为对方用户 ID——用户主页和会话列表都能直接拿到，
+    // 页面内调 GET /message/conversations/with/:userId 取会话（可能为 null = 还没聊过）与 can_send
+    path: '/messages/:userId',
+    name: 'message-chat',
+    component: () => import('@/views/message/ChatView.vue'),
+    meta: { requiresAuth: true, titleKey: 'title.chat', mobile: { topBar: 'back', tabBar: false } }
+  },
+  {
     // 帖子详情：访客可读（/post/detail/:id 已开放 anonymous）
     // pageFade：进出该页时启用页面级淡入淡出（见 App.vue）
     path: '/post/:id',
