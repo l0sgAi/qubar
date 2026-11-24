@@ -207,6 +207,9 @@ jobs:
           echo "required=$required" >> "$GITHUB_OUTPUT"
 
   web-build:
+    permissions:
+      contents: read
+      actions: read
     needs: web-scope
     if: needs.web-scope.outputs.required == 'true'
     uses: ./.github/workflows/web-build.yml

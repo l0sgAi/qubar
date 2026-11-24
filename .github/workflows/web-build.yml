@@ -3,6 +3,7 @@ on: workflow_call
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   build:
@@ -30,16 +31,25 @@ jobs:
       - run: npm run build
       - name: 打包生产站点（含隐藏目录）
         run: tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -C dist -cf "$RUNNER_TEMP/artifact.tar" .
-      - uses: actions/upload-artifact@v7
+      - id: archive
+        uses: actions/upload-artifact@v7
         with:
           name: github-pages
           path: ${{ runner.temp }}/artifact.tar
           if-no-files-found: error
           overwrite: true
           retention-days: 7
-      - uses: actions/download-artifact@v8
-        with:
-          name: github-pages
-          path: ${{ runner.temp }}/uploaded
-      - name: 校验实际上传的 Pages 包
-        run: python3 ../scripts/verify-pages.py "$RUNNER_TEMP/uploaded/artifact.tar" >> "$GITHUB_STEP_SUMMARY"
+      - name: 按上传 ID 核验实际 Pages 包
+        env:
+          ARCHIVE_ID: ${{ steps.archive.outputs.artifact-id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 刚完成上传时，GitHub 按名称查询偶尔尚不可见。按 ID 重试读取同一不可变产物。
+          cd "$RUNNER_TEMP"
+          for delay in 1 2 4 8 16; do
+            if gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARCHIVE_ID/zip" > uploaded.zip; then break; fi
+            sleep "$delay"
+          done
+          unzip -p uploaded.zip artifact.tar > uploaded.tar
+          cmp artifact.tar uploaded.tar
+          python3 "$GITHUB_WORKSPACE/scripts/verify-pages.py" uploaded.tar >> "$GITHUB_STEP_SUMMARY"
