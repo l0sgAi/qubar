@@ -41,7 +41,7 @@ describe('dmHelpers', () => {
   it('bumpConversation：重复 / 更旧的消息不重复计未读；我发的不计未读；没命中返回 found=false', () => {
     const list = [conv('c1', 'a', '01'), conv('c2', 'b', '09', 1)]
     const dup = bumpConversation(list, { id: '09', conversation_id: 'c2', sender_id: 'b' })
-    expect(dup.list[0].unread_count).toBe(1)
+    expect(dup.list).toBe(list)
     const mine = bumpConversation(list, { id: '10', conversation_id: 'c1', sender_id: 'me' })
     expect(mine.list[0].unread_count).toBe(0)
     const noLast = bumpConversation([{ conversation_id: 'c3', peer_id: 'z', last_message: null }], { id: '1', conversation_id: 'c3', sender_id: 'z' })

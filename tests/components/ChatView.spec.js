@@ -16,7 +16,7 @@ vi.mock('@/api/user', () => ({ getUserDetail: (...a) => api.getUserDetail(...a) 
 vi.mock('@/composables/useUnreadNotice', () => ({
   useUnreadNotice: ({ onDmMessage } = {}) => {
     notice.handler = onDmMessage
-    return { dmUnreadCount: notice.dm }
+    return { dmUnreadCount: notice.dm, dmSyncVersion: notice.sync }
   },
   refreshDmUnreadCount: (...a) => notice.refresh(...a)
 }))
@@ -76,6 +76,7 @@ const networkError = () => Object.assign(new Error('timeout of 10000ms exceeded'
 describe('ChatView', () => {
   beforeEach(() => {
     notice.dm = ref(0)
+    notice.sync = ref(0)
     notice.refresh = vi.fn()
     notice.handler = null
     toast.error = vi.fn()
@@ -228,8 +229,10 @@ describe('ChatView', () => {
 
     api.getConversationMessages = vi.fn(() => Promise.resolve({ data: { items: [msg('04', PEER, 'x'.repeat(150)), msg('03', PEER)], has_more: false, next_cursor: '' } }))
     notice.handler({ ...msg('04', PEER, 'x'.repeat(100)), truncated: true })
+    notice.handler({ ...msg('04', PEER, 'x'.repeat(100)), truncated: true })
     await flushPromises()
     expect(api.getConversationMessages).toHaveBeenCalledWith(CONV, { size: 20 })
+    expect(api.getConversationMessages).toHaveBeenCalledTimes(1)
     expect(bubbles(wrapper)[1]).toHaveLength(150)
 
     notice.handler({ ...msg('05', 'other'), conversation_id: 'conv-2', sender: { username: 'bob' }, truncated: false })
@@ -246,6 +249,119 @@ describe('ChatView', () => {
     notice.dm.value = 1
     await flushPromises()
     expect(bubbles(wrapper)).toEqual(['m03', 'm04'])
+  })
+
+  it('切换 peer 后旧“更早”请求不影响新聊天的分页、内容和读状态', async () => {
+    api.getConversationWith.mockImplementation(async id => ({
+      data: { conversation: conversation({ conversation_id: id, peer_id: id }), can_send: true }
+    }))
+    let finishOld
+    api.getConversationMessages.mockImplementation(async (id, { cursor }) => {
+      if (id === PEER && cursor) return new Promise(resolve => { finishOld = resolve })
+      return { data: {
+        items: [msg(cursor ? '01' : '02', id, id + (cursor || ''))],
+        has_more: !cursor, next_cursor: id + '-cursor'
+      } }
+    })
+    const wrapper = await mountChat()
+    await wrapper.get('.older-btn').trigger('click')
+    await wrapper.vm.$router.push('/messages/bob')
+    await flushPromises()
+    finishOld({ data: { items: [msg('00', PEER, '旧数据')], has_more: false } })
+    await flushPromises()
+    await wrapper.get('.older-btn').trigger('click')
+    await flushPromises()
+    expect(api.getConversationMessages).toHaveBeenLastCalledWith('bob', { cursor: 'bob-cursor', size: 20 })
+    expect(bubbles(wrapper)).toEqual(['bobbob-cursor', 'bob'])
+    expect(api.markConversationRead.mock.calls).toEqual([[PEER], ['bob']])
+    expect(wrapper.find('textarea').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it.each([
+    [true, null], [false, 'dm_closed'], [false, 'recipient_not_found']
+  ])('只有轮询收到首条回复：输入框依据后端 can_send=%s / reason=%s', async (allowed, reason) => {
+    api.getConversationWith.mockResolvedValueOnce({ data: {
+      conversation: conversation(), can_send: false, cannot_send_reason: 'dm_limit_reached'
+    } })
+    api.getConversationMessages.mockResolvedValueOnce({ data: { items: [msg('01', ME)] } })
+    const wrapper = await mountChat()
+    api.getConversationWith.mockResolvedValueOnce({ data: {
+      conversation: conversation(reason === 'recipient_not_found' ? { peer: null } : {}),
+      can_send: allowed, cannot_send_reason: reason
+    } })
+    api.getConversationMessages.mockResolvedValueOnce({ data: { items: [msg('02', PEER, '首次回复'), msg('01', ME)] } })
+    notice.dm.value++
+    await flushPromises()
+    expect(api.getConversationWith).toHaveBeenCalledTimes(2)
+    expect(bubbles(wrapper)).toEqual(['m01', '首次回复'])
+    expect(wrapper.get('textarea').element.disabled).toBe(!allowed)
+    if (reason === 'dm_closed') expect(wrapper.get('.composer-hint').text()).toBe('对方已关闭私信')
+    if (reason === 'recipient_not_found') expect(wrapper.find('.peer-link.deleted').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('未读数相同仍恢复另一端发言；超过一页的断层使用后端新游标，旧翻页迟到不会跳页', async () => {
+    const items = (end, start) => Array.from({ length: end - start + 1 }, (_, index) =>
+      msg(String(end - index).padStart(2, '0'), ME))
+    api.getConversationWith.mockResolvedValue({ data: { conversation: conversation(), can_send: true } })
+    let finishOld
+    api.getConversationMessages
+      .mockResolvedValueOnce({ data: { items: items(21, 2), has_more: true, next_cursor: 'before-2' } })
+      .mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve }))
+      .mockResolvedValueOnce({ data: { items: items(42, 23), has_more: true, next_cursor: 'before-23' } })
+      .mockResolvedValueOnce({ data: { items: items(22, 3), has_more: true, next_cursor: 'before-3' } })
+      .mockResolvedValueOnce({ data: { items: items(2, 1), has_more: false } })
+    const wrapper = await mountChat()
+    await wrapper.get('.older-btn').trigger('click')
+    notice.sync.value++
+    await flushPromises()
+    finishOld({ data: { items: items(1, 1), has_more: false } })
+    await flushPromises()
+    expect(bubbles(wrapper)).toEqual(items(42, 23).reverse().map(m => m.content))
+    await wrapper.get('.older-btn').trigger('click')
+    await flushPromises()
+    await wrapper.get('.older-btn').trigger('click')
+    await flushPromises()
+    expect(bubbles(wrapper)).toEqual(items(42, 1).reverse().map(m => m.content))
+    expect(api.getConversationMessages.mock.calls.slice(-2).map(([, page]) => page.cursor)).toEqual(['before-23', 'before-3'])
+    wrapper.unmount()
+  })
+
+  it('首屏会话尚未返回时的重连与轮询只拉一次历史，重复消息只标读一次', async () => {
+    let resolve
+    api.getConversationWith.mockImplementationOnce(() => new Promise(done => { resolve = done }))
+    const wrapper = await mountChat()
+    notice.sync.value++
+    notice.dm.value++
+    await flushPromises()
+    resolve({ data: { conversation: conversation(), can_send: true } })
+    await flushPromises()
+    expect(api.getConversationMessages).toHaveBeenCalledTimes(1)
+    expect(api.getConversationWith).toHaveBeenCalledTimes(1)
+    notice.handler(msg('02', PEER))
+    notice.handler(msg('02', PEER))
+    await flushPromises()
+    expect(api.markConversationRead).toHaveBeenCalledTimes(2)
+    expect(bubbles(wrapper)).toEqual(['m02'])
+    wrapper.unmount()
+  })
+
+  it('另一个设备删除后的新历史只显示删除之后的记录，新的草稿各有一个键', async () => {
+    api.getConversationWith.mockResolvedValue({ data: { conversation: conversation(), can_send: true } })
+    api.getConversationMessages.mockResolvedValueOnce({ data: { items: [msg('01', PEER, '历史')] } })
+    const wrapper = await mountChat()
+    api.getConversationMessages.mockResolvedValueOnce({ data: { items: [msg('02', PEER, '删除后')] } })
+    notice.sync.value++
+    await flushPromises()
+    expect(bubbles(wrapper)).toEqual(['删除后'])
+    await typeAndSend(wrapper, 'a')
+    await flushPromises()
+    await typeAndSend(wrapper, 'b')
+    await flushPromises()
+    expect(new Set(api.sendMessage.mock.calls.map(([body]) => body.client_msg_id)).size).toBe(2)
+    expect(wrapper.find('.composer-hint').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   it('打开自己的聊天页：提示不能给自己发私信', async () => {

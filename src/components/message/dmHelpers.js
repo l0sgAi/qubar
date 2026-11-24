@@ -23,27 +23,25 @@ export function sentToMessageVO(data) {
 /**
  * 收到 dm-message 后更新会话列表：命中的会话顶到最前、更新摘要、未读 +1。
  * 没命中（新会话 / 被删除后重新出现 / 还没翻到那一页）时返回 found=false，调用方刷新第一页。
- * 同一条消息重复到达（id 不大于当前 last_message.id）只置顶不重复计未读。
+ * 同一条消息重复到达（id 不大于当前 last_message.id）保留当前顺序和未读数。
  * @returns {{ list: Array, found: boolean }}
  */
 export function bumpConversation(list, msg) {
   const index = list.findIndex(c => c.conversation_id === msg?.conversation_id)
   if (index === -1) return { list, found: false }
   const conv = list[index]
-  const isNew = !conv.last_message || msg.id > conv.last_message.id
-  const updated = isNew
-    ? {
-        ...conv,
-        last_message: {
-          id: msg.id,
-          sender_id: msg.sender_id,
-          msg_type: msg.msg_type,
-          content: msg.content,
-          create_time: msg.create_time
-        },
-        unread_count: (conv.unread_count || 0) + (msg.sender_id === conv.peer_id ? 1 : 0)
-      }
-    : conv
+  if (conv.last_message && msg.id <= conv.last_message.id) return { list, found: true }
+  const updated = {
+    ...conv,
+    last_message: {
+      id: msg.id,
+      sender_id: msg.sender_id,
+      msg_type: msg.msg_type,
+      content: msg.content,
+      create_time: msg.create_time
+    },
+    unread_count: (conv.unread_count || 0) + (msg.sender_id === conv.peer_id ? 1 : 0)
+  }
   return { list: [updated, ...list.slice(0, index), ...list.slice(index + 1)], found: true }
 }
 

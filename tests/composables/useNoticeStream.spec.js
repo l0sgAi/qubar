@@ -111,7 +111,7 @@ describe('composables/useNoticeStream', () => {
     expect(api.getUnreadCount).not.toHaveBeenCalled()
   })
 
-  it('建连彻底失败（CLOSED）回落轮询；onopen 停止轮询', async () => {
+  it('建连彻底失败（CLOSED）回落轮询；旧 onopen 不能停止降级', async () => {
     login()
     const { start } = useNoticeStream()
     start()
@@ -123,7 +123,50 @@ describe('composables/useNoticeStream', () => {
 
     es.onopen()
     await vi.advanceTimersByTimeAsync(POLL_INTERVAL * 2)
-    expect(api.getUnreadCount).toHaveBeenCalledTimes(1)
+    expect(api.getUnreadCount).toHaveBeenCalledTimes(3)
+  })
+
+  it('首次 open 不同步；抖动后只发一次重连信号，相同未读数也能驱动校正', () => {
+    login()
+    const { start, dmSyncVersion, dmUnreadCount } = useNoticeStream()
+    start()
+    const es = lastEs()
+    es.onopen()
+    es.emit('dm-unread', JSON.stringify({ unread_count: 2 }))
+    expect(dmSyncVersion.value).toBe(0)
+    es.onerror()
+    es.onerror()
+    es.onopen()
+    es.onopen()
+    es.emit('dm-unread', JSON.stringify({ unread_count: 2 }))
+    expect(dmSyncVersion.value).toBe(1)
+    expect(dmUnreadCount.value).toBe(2)
+  })
+
+  it('轮询每轮同步（同值也触发）；旧 HTTP 与已关闭连接的事件不能覆盖新值', async () => {
+    login()
+    const { start, stop, dmSyncVersion, dmUnreadCount, unreadCount } = useNoticeStream()
+    start()
+    const old = lastEs()
+    old.emit('conn-evicted')
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL)
+    expect(dmSyncVersion.value).toBe(2)
+    let lateDm, lateNotice
+    api.getDmUnreadCount.mockImplementationOnce(() => new Promise(resolve => { lateDm = resolve }))
+    api.getUnreadCount.mockImplementationOnce(() => new Promise(resolve => { lateNotice = resolve }))
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL)
+    stop()
+    start()
+    lastEs().emit('dm-unread', '{"unread_count":3}')
+    lastEs().emit('unread-count', '{"unread_count":8}')
+    old.emit('auth-expired')
+    old.onerror()
+    old.onopen()
+    lateDm({ data: { unread_count: 99 } })
+    lateNotice({ data: { unread_count: 100 } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect([dmUnreadCount.value, unreadCount.value, dmSyncVersion.value]).toEqual([3, 8, 2])
+    expect(lastEs().close).not.toHaveBeenCalled()
   })
 
   it('auth-expired：close、清 token、回调调用方', () => {

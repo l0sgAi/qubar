@@ -166,6 +166,12 @@ const draft = ref('')
 // 页面世代：切换对方 / 卸载后作废进行中的请求与重试
 let generation = 0
 let alive = true
+let historyRevision = 0
+let historyHead = ''
+let permissionRevision = 0
+let syncNeeded = false
+let syncing = false
+const truncatedIds = new Set()
 // 最近一次收到 dm-message 的时间（轮询兜底时判断是否需要主动拉取）
 let lastDmEventAt = 0
 
@@ -238,6 +244,12 @@ const init = async () => {
   messages.value = []
   hasMore.value = false
   cursor = ''
+  historyHead = ''
+  loadingOlder.value = false
+  lastDmEventAt = 0
+  syncNeeded = false
+  syncing = false
+  truncatedIds.clear()
   dividerId.value = null
   pending.value = []
   remainingCount.value = null
@@ -268,15 +280,17 @@ const init = async () => {
     if (conversation) {
       conversationId.value = conversation.conversation_id
       peer.value = conversation.peer || null
+      syncNeeded = false
       const page = await fetchLatest(gen)
       if (!page) return
       messages.value = mergeMessagesById([], page.items || [])
+      historyHead = messages.value.at(-1)?.id || ''
       hasMore.value = !!page.has_more
       cursor = page.next_cursor || ''
       // 「以下为新消息」：用标记已读之前的位置
       dividerId.value = newMessagesDividerId(messages.value, page.last_read_message_id, userId)
       await markRead()
-      refreshDmUnreadCount()
+      if (gen === generation) refreshDmUnreadCount()
     } else {
       // 还没聊过：取对方资料作页头；对方不存在时保持 null（输入框已按 can_send 置灰）
       try {
@@ -292,8 +306,10 @@ const init = async () => {
     if (peer.value?.username) setTitleData('title.userDetailName', { name: peer.value.username })
     initLoading.value = false
     await nextTick()
+    if (gen !== generation) return
     scrollToDividerOrBottom()
     fillViewport()
+    if (syncNeeded) syncLatest()
   } catch (error) {
     if (gen !== generation) return
     console.error('加载私信失败:', error)
@@ -323,11 +339,12 @@ const fillViewport = () => {
 const loadOlder = async () => {
   if (!conversationId.value || !hasMore.value || loadingOlder.value) return
   const gen = generation
+  const revision = historyRevision
   const el = listRef.value
   loadingOlder.value = true
   try {
     const res = await getConversationMessages(conversationId.value, { cursor, size: DM_PAGE_SIZE })
-    if (gen !== generation) return
+    if (gen !== generation || revision !== historyRevision) return
     const data = res.data || {}
     const prevHeight = el ? el.scrollHeight : 0
     const prevTop = el ? el.scrollTop : 0
@@ -336,61 +353,93 @@ const loadOlder = async () => {
     cursor = data.next_cursor || ''
     await nextTick()
     // 保持当前可见位置不跳动
+    if (gen !== generation || revision !== historyRevision) return
     if (el) el.scrollTop = el.scrollHeight - prevHeight + prevTop
   } catch (error) {
+    if (gen !== generation || revision !== historyRevision) return
     console.error('加载更早的私信失败:', error)
     toast.error(t('message.loadFailed'))
+    return
   } finally {
-    if (gen === generation) loadingOlder.value = false
+    if (gen === generation && revision === historyRevision) loadingOlder.value = false
   }
   if (gen === generation) fillViewport()
 }
 
-// 重新拉第一页合并（截断消息取全文 / 轮询兜底），然后标记已读
-const syncLatest = async () => {
-  const gen = generation
-  try {
-    if (!conversationId.value) {
-      // 还没有会话：对方可能刚发来第一条
-      const res = await getConversationWith(peerId.value)
-      if (gen !== generation) return
-      applyConversationState(res.data)
-      const conversation = res.data?.conversation
-      if (!conversation?.last_message) return
-      conversationId.value = conversation.conversation_id
-      if (conversation.peer) peer.value = conversation.peer
-    }
-    const stick = isNearBottom()
-    const page = await fetchLatest(gen)
-    if (!page) return
-    messages.value = mergeMessagesById(messages.value, page.items || [])
-    if (!cursor && page.has_more) {
-      hasMore.value = true
-      cursor = page.next_cursor || ''
-    }
-    if (stick) scrollToBottom()
-    await markRead()
-  } catch (error) {
-    console.error('同步私信失败:', error)
+// 后端的 can_send 同时考虑对方设置、注销和五条限制。旧查询不能覆盖较新的发送结果。
+const recheckCanSend = async (gen, peerReplied = false) => {
+  const revision = ++permissionRevision
+  const { data } = await getConversationWith(peerId.value)
+  if (gen !== generation || revision !== permissionRevision) return
+  applyConversationState(data)
+  if (data.can_send && (peerReplied || remainingCount.value === 0)) remainingCount.value = null
+  if (data.conversation) {
+    conversationId.value = data.conversation.conversation_id
+    peer.value = data.conversation.peer
   }
 }
 
-// 对方回复后未关注限制解除 / 对方改了设置：重新查一次能否发送
-const recheckCanSend = async () => {
+// HTTP 首屏完全覆盖旧窗口，或中间漏过了一页以上时，以当前后端游标重新开始向上翻。
+// 只有与上次 HTTP 首屏重叠才保留旧游标；SSE 消息本身不能证明中间的历史连续。
+const syncLatest = async () => {
+  syncNeeded = true
+  if (initLoading.value || syncing || initError.value || selfChat.value) return
   const gen = generation
+  syncing = true
   try {
-    const res = await getConversationWith(peerId.value)
-    if (gen !== generation) return
-    applyConversationState(res.data)
-    if (res.data?.can_send) remainingCount.value = null
+    while (syncNeeded && gen === generation) {
+      syncNeeded = false
+      const neededConversation = !conversationId.value
+      if (neededConversation) {
+        await recheckCanSend(gen)
+        if (gen !== generation) return
+      }
+      if (!conversationId.value) continue
+
+      syncNeeded = false
+      const requestedIds = [...truncatedIds]
+      const newestAtStart = messages.value.at(-1)?.id || ''
+      const page = await fetchLatest(gen)
+      if (!page) return
+      for (const id of requestedIds) truncatedIds.delete(id)
+      if (syncNeeded) continue
+      const items = page.items || []
+      const overlap = items.some(m => m.id === historyHead)
+      const stick = isNearBottom()
+      if (page.has_more && overlap) {
+        messages.value = mergeMessagesById(messages.value, items)
+      } else {
+        // 保留请求期间由发送响应或推送带来的更新，废弃已失效的“更早”请求。
+        const live = messages.value.filter(m => m.id > newestAtStart)
+        messages.value = mergeMessagesById(live, items)
+        historyRevision++
+        loadingOlder.value = false
+        hasMore.value = !!page.has_more
+        cursor = page.next_cursor || ''
+      }
+      const peerReplied = items.some(m => m.sender_id === peerId.value && m.id > historyHead)
+      historyHead = items[0]?.id || ''
+      if (!neededConversation && (!canSend.value || (peerReplied && hasDmRemainingLimit(remainingCount.value)))) {
+        await recheckCanSend(gen, peerReplied)
+        if (gen !== generation) return
+      }
+      if (stick) scrollToBottom()
+      if (items.some(m => m.sender_id === peerId.value && m.id > (page.last_read_message_id || ''))) {
+        await markRead()
+      }
+    }
   } catch (error) {
-    console.error('查询私信状态失败:', error)
+    if (gen === generation) {
+      truncatedIds.clear()
+      console.error('同步私信失败:', error)
+    }
+  } finally {
+    if (gen === generation) syncing = false
   }
 }
 
 // ---- 实时消息 ----
 const handleDmMessage = (msg) => {
-  lastDmEventAt = Date.now()
   const inThisChat = conversationId.value
     ? msg.conversation_id === conversationId.value
     : msg.sender_id === peerId.value
@@ -399,23 +448,33 @@ const handleDmMessage = (msg) => {
     toast.info(t('message.newMessageToast', { name, content: msg.content }))
     return
   }
+  lastDmEventAt = Date.now()
+  if (initLoading.value) {
+    syncNeeded = true
+    return
+  }
+  if (messages.value.some(item => item.id === msg.id)) return
   if (!conversationId.value) conversationId.value = msg.conversation_id
   if (msg.truncated) {
+    if (truncatedIds.has(msg.id)) return
+    truncatedIds.add(msg.id)
     syncLatest()
-  } else {
-    const stick = isNearBottom()
-    messages.value = mergeMessagesById(messages.value, [toMessageVO(msg)])
-    if (stick) scrollToBottom()
-    markRead()
+    return
   }
-  if (!canSend.value || hasDmRemainingLimit(remainingCount.value)) recheckCanSend()
+  const stick = isNearBottom()
+  messages.value = mergeMessagesById(messages.value, [toMessageVO(msg)])
+  if (stick) scrollToBottom()
+  markRead()
+  if (!canSend.value || hasDmRemainingLimit(remainingCount.value)) {
+    recheckCanSend(generation, true).catch(error => console.error('查询私信状态失败:', error))
+  }
 }
 
-const { dmUnreadCount } = useUnreadNotice({ onDmMessage: handleDmMessage })
+const { dmUnreadCount, dmSyncVersion } = useUnreadNotice({ onDmMessage: handleDmMessage })
 
-// SSE 断开时只有轮询更新的未读数：未读增加且最近没收到 dm-message，就主动拉一次
-watch(dmUnreadCount, (count, prev) => {
-  if (count > prev && !initLoading.value && Date.now() - lastDmEventAt > 3000) syncLatest()
+// 同一轮轮询同时发布未读数与校正信号，Vue 会在一次回调里处理。
+watch([dmSyncVersion, dmUnreadCount], ([version, count], [previous, previousCount]) => {
+  if (version !== previous || (count > previousCount && Date.now() - lastDmEventAt > 3000)) syncLatest()
 })
 
 // ---- 发送 ----
@@ -432,6 +491,7 @@ const doSend = async (item, gen) => {
     pending.value = pending.value.filter(p => p !== item)
     messages.value = mergeMessagesById(messages.value, [sentToMessageVO(data)])
     if (!conversationId.value && data.conversation_id) conversationId.value = data.conversation_id
+    permissionRevision++
     if (hasDmRemainingLimit(data.remaining_count)) {
       remainingCount.value = data.remaining_count
       // 0 = 再发会被拒：直接置灰，不等第 6 条失败
@@ -455,6 +515,7 @@ const doSend = async (item, gen) => {
     item.status = 'failed'
     item.errorText = t(dmReasonKey(reason), { max: DM_CONTENT_MAX })
     if (isDmBlockedReason(reason)) {
+      permissionRevision++
       canSend.value = false
       cannotReason.value = reason
     } else if (reason === DM_REASON.RATE_LIMITED) {

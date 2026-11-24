@@ -13,6 +13,7 @@ vi.mock('@/composables/useNoticeStream', async () => {
         options,
         unreadCount: ref(0),
         dmUnreadCount: ref(0),
+        dmSyncVersion: ref(0),
         handlers,
         onDmMessage: vi.fn((fn) => {
           handlers.add(fn)
