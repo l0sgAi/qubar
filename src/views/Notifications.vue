@@ -41,7 +41,7 @@
               v-for="item in notices"
               :key="item.id"
               class="notice-item"
-              :class="{ unread: !item.is_read }"
+              :class="{ unread: !item.is_read, inert: isInert(item) }"
               :to="noticeTarget(item)"
               v-bind="lookupAttrs(item)"
               @click="handleItemClick(item)"
@@ -72,6 +72,13 @@
                 <div class="notice-text">{{ renderText(item) }}</div>
                 <div class="notice-time">{{ formatTime(item.create_time) }}</div>
               </div>
+              <!-- 被关注通知：直接回关（关系由 POST /follow/relations 批量取，取到前不显示） -->
+              <FollowButton
+                v-if="followRelationOf(item) !== null"
+                class="notice-follow-btn"
+                :user-id="followNoticeActorId(item)"
+                :relation="followRelationOf(item)"
+                @update:relation="(v) => setFollowRelation(followNoticeActorId(item), v)" />
               <span v-if="!item.is_read" class="unread-dot"></span>
             </SmartLink>
 
@@ -101,6 +108,8 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import AppShell from '@/components/layout/AppShell.vue'
 import { useAppShell } from '@/composables/useAppShell'
+import FollowButton from '@/components/follow/FollowButton.vue'
+import { getFollowRelations } from '@/api/follow'
 import SmartLink from '@/components/common/SmartLink.vue'
 import { getNoticeList, markNoticesRead, markAllNoticesRead } from '@/api/notice'
 import { getPostDetail } from '@/api/post'
@@ -108,7 +117,7 @@ import { getManagedCircles } from '@/api/circle'
 import { useFormatTime } from '@/utils/i18n'
 import {
   renderNoticeText, noticeTarget, isSystemNotice, needsCircleLookup, reportedQueueTarget, MANAGED_CIRCLES_TARGET,
-  NOTICE_TYPE, REVIEW_NOTICE_TYPES
+  NOTICE_TYPE, REVIEW_NOTICE_TYPES, FOLLOW_NOTICE_TYPES, followNoticeActorId
 } from '@/utils/noticeDisplay'
 
 const message = useMessage()
@@ -129,6 +138,7 @@ const tabs = computed(() => [
   { type: 4, label: t('notice.tabs.comment') },
   { type: 5, label: t('notice.tabs.reply') },
   { type: 6, label: t('notice.tabs.mention') },
+  { type: FOLLOW_NOTICE_TYPES, label: t('notice.tabs.follow') },
   { type: REVIEW_NOTICE_TYPES, label: t('notice.tabs.review') }
 ])
 const activeType = ref(0)
@@ -141,6 +151,32 @@ const readingAll = ref(false)
 
 // 文案模板按类型渲染，见 utils/noticeDisplay.js
 const renderText = (item) => renderNoticeText(item, t)
+
+// 没有跳转目标的通知（如关注者已注销的类型 12）：不可点，去掉手型与悬浮高亮
+const isInert = (item) => !noticeTarget(item) && !needsCircleLookup(item)
+
+// 被关注通知的回关按钮：关注者 ID → 我与 TA 的关系（通知本身不带关系，按页批量查询）
+const followRelations = ref({})
+const followRelationOf = (item) => {
+  const id = followNoticeActorId(item)
+  if (!id) return null
+  const rel = followRelations.value[id]
+  return typeof rel === 'number' ? rel : null
+}
+const setFollowRelation = (userId, relation) => {
+  followRelations.value = { ...followRelations.value, [userId]: relation }
+}
+const loadFollowRelations = async (items) => {
+  const ids = items.map(followNoticeActorId).filter(id => id && !(id in followRelations.value))
+  if (!ids.length) return
+  try {
+    const res = await getFollowRelations(ids)
+    followRelations.value = { ...followRelations.value, ...(res?.data?.relations || {}) }
+  } catch (error) {
+    // 关系查不到只是不显示回关按钮，不打扰用户
+    console.error('获取关注关系失败:', error)
+  }
+}
 
 // 加载世代：切换过滤类型后旧请求的响应直接丢弃，不得覆盖新列表/游标
 let loadGen = 0
@@ -163,6 +199,7 @@ const loadNotices = async (isRefresh = false) => {
     if (res.data) {
       const items = res.data.notices || []
       notices.value = isRefresh ? items : [...notices.value, ...items]
+      loadFollowRelations(items)
       // 空字符串游标 = 没有更多
       cursor.value = res.data.cursor || ''
       hasMore.value = cursor.value !== ''
@@ -478,6 +515,26 @@ onUnmounted(() => {
 
 .notice-avatar {
   flex-shrink: 0;
+}
+
+/* 无跳转目标（如关注者已注销）：不可点 */
+.notice-item.inert {
+  cursor: default;
+}
+
+@media (hover: hover) {
+  .notice-item.inert:hover {
+    background: none;
+  }
+
+  .notice-item.inert.unread:hover {
+    background: rgba(102, 234, 194, 0.06);
+  }
+}
+
+.notice-follow-btn {
+  flex-shrink: 0;
+  align-self: center;
 }
 
 /* 系统通知头像：主题绿图标 */

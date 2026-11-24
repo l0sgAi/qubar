@@ -9,7 +9,11 @@ import {
   noticeTarget,
   needsCircleLookup,
   reportedQueueTarget,
-  REVIEW_NOTICE_TYPES
+  REVIEW_NOTICE_TYPES,
+  FOLLOW_NOTICE_TYPES,
+  NOTICE_TYPE,
+  isFollowNotice,
+  followNoticeActorId
 } from '@/utils/noticeDisplay'
 
 // 用真实文案编译，顺带校验模板 key 与占位符对得上
@@ -77,6 +81,37 @@ describe('noticeDisplay', () => {
           expect(renderNoticeText({ notice_type: type, snippet: 'S' }, t)).toContain('S')
         }
       }
+    })
+  })
+
+  describe('12：被关注', () => {
+    it('文案「{actor} 关注了你」，不拼 snippet', () => {
+      expect(renderNoticeText({ notice_type: 12, actor: { id: 'u1', username: 'Bob' }, snippet: '' }, zh)).toBe('Bob 关注了你')
+      expect(renderNoticeText({ notice_type: 12, actor: { id: 'u1', username: 'Bob' }, snippet: '' }, en)).toBe('Bob followed you')
+    })
+
+    it('actor 缺省时兜底「有人关注了你」，且不可跳转', () => {
+      const item = { notice_type: 12, snippet: '' }
+      expect(renderNoticeText(item, zh)).toBe('有人关注了你')
+      expect(renderNoticeText(item, en)).toBe('Someone followed you')
+      expect(noticeTarget(item)).toBeNull()
+      expect(followNoticeActorId(item)).toBeNull()
+      expect(needsCircleLookup(item)).toBe(false)
+    })
+
+    it('有 actor 时跳关注者主页，不走帖子详情', () => {
+      const item = { notice_type: 12, actor: { id: 'u1', username: 'Bob' } }
+      expect(noticeTarget(item)).toEqual({ name: 'user-detail', params: { id: 'u1' } })
+      expect(followNoticeActorId(item)).toBe('u1')
+      expect(isFollowNotice(item)).toBe(true)
+      expect(isSystemNotice(item)).toBe(false)
+    })
+
+    it('其它类型不算关注通知；「关注」tab 只过滤 12', () => {
+      expect(isFollowNotice({ notice_type: 1, actor: { id: 'u1' } })).toBe(false)
+      expect(followNoticeActorId({ notice_type: 1, actor: { id: 'u1' } })).toBeNull()
+      expect(NOTICE_TYPE.FOLLOW).toBe(12)
+      expect(FOLLOW_NOTICE_TYPES).toBe('12')
     })
   })
 
