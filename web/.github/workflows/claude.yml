@@ -1,0 +1,45 @@
+name: Claude
+
+# 在 PR / issue 评论中 @claude 手动触发（如 "@claude review this PR"）。
+# action 会校验评论者对仓库有写权限，外部用户的 @claude 不会触发运行。
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: read
+
+jobs:
+  claude:
+    name: claude
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      # 允许 Claude 读取 PR 上的 CI 结果
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          # 二选一配置即可：API Key 按量计费；OAuth Token（claude setup-token）占用 Pro/Max 订阅额度
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          additional_permissions: |
+            actions: read

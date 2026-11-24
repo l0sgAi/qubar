@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  # 指向 main 的 PR：合并前自动检查（在分支保护中设为必需检查）
+  pull_request:
+    branches: [main]
+  # 供 deploy.yml 复用：push main 时先跑同一套检查，失败则不部署
+  workflow_call:
+  # 允许手动触发
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 被 workflow_call 调用时 github.workflow 为调用方名称，与 PR / 手动触发的运行不在同一并发组，
+# 避免部署链路上的 CI 被取消；仅 PR 的新提交会取消该 PR 上的旧运行。
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  unit:
+    name: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests with coverage
+        run: npm run test:coverage
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          node -e '
+            const fs = require("fs")
+            const file = "coverage/coverage-summary.json"
+            if (!fs.existsSync(file)) process.exit(0)
+            const { total } = JSON.parse(fs.readFileSync(file, "utf8"))
+            const rows = ["lines", "statements", "branches", "functions"]
+              .map(k => `| ${k} | ${total[k].pct}% | ${total[k].covered} / ${total[k].total} |`)
+            const md = ["### Coverage (src/utils, src/composables, src/router)", "", "| metric | % | covered |", "|---|---|---|", ...rows, ""].join("\n")
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, md)
+          '
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # 供后续 e2e job（在 vite preview 的生产产物上跑）复用
+      - name: Upload dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 3

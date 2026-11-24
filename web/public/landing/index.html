@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<!-- Qubar 趣吧 产品宣传页 · 零依赖静态页（样式见 landing.css，脚本见 landing.js），可离线直接打开 -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>趣吧 Qubar · 让每一份热爱都有回音</title>
+<meta name="description" content="趣吧（Qubar）是一个开放、开源、圈主自治的图文兴趣社区：游客免注册即可浏览，圈子由圈主自己经营，还有懂分寸的 AI 机器人帮圈子答疑热场。非营利，前后端以 MIT 协议开源。">
+<meta name="theme-color" content="#0a0e27">
+<meta name="color-scheme" content="dark">
+<link rel="canonical" href="https://qubar.site/landing/">
+<link rel="alternate" hreflang="zh-CN" href="https://qubar.site/landing/">
+<link rel="alternate" hreflang="en" href="https://qubar.site/landing/?lang=en">
+<link rel="alternate" hreflang="x-default" href="https://qubar.site/landing/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="趣吧 Qubar">
+<meta property="og:url" content="https://qubar.site/landing/">
+<meta property="og:title" content="趣吧 Qubar · 让每一份热爱都有回音">
+<meta property="og:description" content="开放、开源、圈主自治的图文兴趣社区。找到同好，晒出热爱，免注册先逛逛。">
+<meta property="og:image" content="https://qubar.site/landing/og-image.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="趣吧 Qubar：Q 形 Logo 周围漂浮着摄影、骑行、音乐等彩色兴趣图标">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:locale:alternate" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="趣吧 Qubar · 让每一份热爱都有回音">
+<meta name="twitter:description" content="开放、开源、圈主自治的图文兴趣社区。找到同好，晒出热爱，免注册先逛逛。">
+<meta name="twitter:image" content="https://qubar.site/landing/og-image.jpg">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="landing.css">
+<script>document.documentElement.classList.add("js")</script>
+</head>
+<body>
+
+<!-- ================= 图标精灵（24×24，描边继承 currentColor） ================= -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3.2"/></symbol>
+  <symbol id="i-bike" viewBox="0 0 24 24"><circle cx="5.5" cy="17.5" r="3.5"/><circle cx="18.5" cy="17.5" r="3.5"/><circle cx="15" cy="5" r="1"/><path d="M12 17.5V14l-3-3 4-3 2 3h2"/></symbol>
+  <symbol id="i-music" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></symbol>
+  <symbol id="i-code" viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></symbol>
+  <symbol id="i-scissors" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.12 15.88"/><path d="M14.47 14.48 20 20"/><path d="M8.12 8.12 12 12"/></symbol>
+  <symbol id="i-game" viewBox="0 0 24 24"><path d="M6 11h4"/><path d="M8 9v4"/><circle cx="15" cy="11" r=".7"/><circle cx="18" cy="9" r=".7"/><path d="M17.32 5H6.68a4 4 0 0 0-3.98 3.59C2.6 9.42 2 14.46 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.41-1.41A2 2 0 0 1 9.83 16h4.34a2 2 0 0 1 1.41.59L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.54-.6-6.58-.69-7.26A4 4 0 0 0 17.32 5z"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></symbol>
+  <symbol id="i-coffee" viewBox="0 0 24 24"><path d="M6 2v3"/><path d="M10 2v3"/><path d="M14 2v3"/><path d="M5 8h14v8a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4z"/><path d="M19 8h2a2 2 0 0 1 2 2v2a3 3 0 0 1-3 3"/></symbol>
+  <symbol id="i-leaf" viewBox="0 0 24 24"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"/></symbol>
+  <symbol id="i-mountain" viewBox="0 0 24 24"><path d="m8 3 4 8 5-5 5 15H2L8 3z"/></symbol>
+  <symbol id="i-palette" viewBox="0 0 24 24"><circle cx="13.5" cy="6.5" r="1"/><circle cx="17.5" cy="10.5" r="1"/><circle cx="8.5" cy="7.5" r="1"/><circle cx="6.5" cy="12.5" r="1"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.65-.75 1.65-1.69 0-.44-.18-.83-.44-1.12-.29-.29-.44-.65-.44-1.13a1.64 1.64 0 0 1 1.67-1.67h2c3.05 0 5.55-2.5 5.55-5.55C21.96 6.01 17.46 2 12 2z"/></symbol>
+  <symbol id="i-film" viewBox="0 0 24 24"><path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4 1.7 4.9z"/><path d="M6.2 5.3 3.1 6.7c-.6.2-.9.9-.7 1.5l.8 2.7"/><path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></symbol>
+  <symbol id="i-heart" viewBox="0 0 24 24"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7z"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></symbol>
+  <symbol id="i-at" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-flag" viewBox="0 0 24 24"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 14l.8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-comment" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-bookmark" viewBox="0 0 24 24"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+  <symbol id="i-user-check" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m16 11 2 2 4-4"/></symbol>
+  <symbol id="i-user-plus" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></symbol>
+  <symbol id="i-flame" viewBox="0 0 24 24"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></symbol>
+  <symbol id="i-compass" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></symbol>
+  <symbol id="i-crop" viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/></symbol>
+  <symbol id="i-laptop" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/></symbol>
+  <symbol id="i-bot" viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></symbol>
+  <symbol id="i-chats" viewBox="0 0 24 24"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></symbol>
+  <symbol id="i-trophy" viewBox="0 0 24 24"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></symbol>
+  <symbol id="i-languages" viewBox="0 0 24 24"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></symbol>
+  <symbol id="i-news" viewBox="0 0 24 24"><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"/><path d="M18 14h-8M15 18h-5M10 6h8v4h-8z"/></symbol>
+  <symbol id="i-share" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.59 13.51 6.83 3.98M15.41 6.51l-6.82 3.98"/></symbol>
+  <symbol id="i-crown" viewBox="0 0 24 24"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7zM5 20h14"/></symbol>
+  <symbol id="i-mute" viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="m22 9-6 6M16 9l6 6"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
+  <symbol id="i-feather" viewBox="0 0 24 24"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><path d="M16 8 2 22M17.5 15H9"/></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01M6 18h.01"/></symbol>
+  <symbol id="i-filter" viewBox="0 0 24 24"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/></symbol>
+  <symbol id="i-github" viewBox="0 0 16 16"><path fill="currentColor" stroke="none" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></symbol>
+  <symbol id="i-q" viewBox="-0.5 -0.5 545 530"><mask id="qMask"><rect x="-0.5" y="-0.5" width="545" height="530" fill="#fff"/><ellipse cx="284" cy="280" rx="210" ry="210" fill="#000"/></mask><ellipse cx="250" cy="250" rx="250" ry="250" fill="currentColor" stroke="none" mask="url(#qMask)"/><path fill="currentColor" stroke="none" d="M404.99 260C339.99 334.02 339.99 445.98 404.99 520c65-74.02 65-185.98 0-260Z" transform="rotate(-45,405,390)"/></symbol>
+</svg>
+
+<a class="skip-link" href="#main" data-i18n="a11y.skip">跳到正文</a>
+<div class="progress" id="progress" aria-hidden="true"></div>
+
+<!-- ================= NAV ================= -->
+<header class="nav" id="nav">
+  <div class="container nav-inner">
+    <a class="logo" href="#top" data-i18n-attr="aria-label:a11y.home" aria-label="趣吧首页">
+      <svg class="logo-q" aria-hidden="true"><use href="#i-q"/></svg>
+      <span data-i18n="brand">趣吧</span>
+    </a>
+    <nav class="nav-links" data-i18n-attr="aria-label:a11y.nav" aria-label="页面导航">
+      <a href="#ideas" data-i18n="nav.ideas">理念</a>
+      <a href="#circles" data-i18n="nav.circles">圈子</a>
+      <a href="#create" data-i18n="nav.create">创作</a>
+      <a href="#discover" data-i18n="nav.discover">发现</a>
+      <a href="#bots" data-i18n="nav.bots">AI 伙伴</a>
+      <a href="#open" data-i18n="nav.open">开源</a>
+    </nav>
+    <button class="lang-toggle" id="langToggle" type="button" lang="en" aria-label="Switch to English">EN</button>
+    <a class="btn btn-primary btn-sm nav-cta" href="https://qubar.site/" data-i18n="nav.enter">进入趣吧</a>
+  </div>
+</header>
+
+<main id="main">
+
+<!-- ================= HERO ================= -->
+<section class="hero" id="top" aria-labelledby="hero-title">
+  <div class="hero-bg" aria-hidden="true">
+    <span class="nebula nebula-a"></span>
+    <span class="nebula nebula-b"></span>
+    <span class="nebula nebula-c"></span>
+    <span class="hero-dots"></span>
+  </div>
+  <div class="hi-layer hi-deep" id="hiDeep" aria-hidden="true"></div>
+  <div class="hi-layer hi-mid" id="hiMid" aria-hidden="true"></div>
+
+  <div class="container hero-inner">
+    <div class="hero-logo" id="heroLogo" aria-hidden="true">
+      <span class="echo"></span><span class="echo"></span><span class="echo"></span>
+      <svg class="hero-q"><use href="#i-q"/></svg>
+      <div class="hi-near" id="hiNear"></div>
+    </div>
+    <p class="hero-badge"><span class="dot" aria-hidden="true"></span><span data-i18n="hero.badge">开放 · 开源 · 圈主自治 · 非营利</span></p>
+    <h1 id="hero-title">
+      <span data-i18n="hero.titleA">让每一份</span>
+      <span class="rotator" id="rotator" aria-hidden="true"><span class="rot-word">热爱</span></span><span class="sr-only" data-i18n="hero.word">热爱</span>
+      <br><span data-i18n="hero.titleB">都有回音</span>
+    </h1>
+    <p class="hero-sub" data-i18n="hero.sub">趣吧是一个开放的图文兴趣社区。找到同好、晒出热爱；每个圈子由圈主自己经营，还有懂分寸的 AI 小伙伴帮忙热场。</p>
+    <div class="hero-ctas">
+      <a class="btn btn-primary" href="https://qubar.site/"><span data-i18n="cta.enter">进入趣吧</span><svg class="ic" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+      <a class="btn btn-ghost" href="https://qubar.site/discover"><svg class="ic" aria-hidden="true"><use href="#i-compass"/></svg><span data-i18n="cta.browse">先逛逛（免登录）</span></a>
+      <a class="btn btn-ghost" href="https://github.com/l0sgAi/qubar" target="_blank" rel="noopener"><svg class="ic" aria-hidden="true"><use href="#i-github"/></svg><span>GitHub</span></a>
+    </div>
+    <ul class="hero-notes">
+      <li><svg class="ic" aria-hidden="true"><use href="#i-globe"/></svg><span data-i18n="hero.n1">游客免注册浏览</span></li>
+      <li><svg class="ic" aria-hidden="true"><use href="#i-user-check"/></svg><span data-i18n="hero.n2">邮箱或 Google / GitHub / Microsoft 一键登录</span></li>
+      <li><svg class="ic" aria-hidden="true"><use href="#i-languages"/></svg><span data-i18n="hero.n3">中文 / English</span></li>
+    </ul>
+    <p class="hero-hint" aria-hidden="true" data-i18n="hero.hint">戳一戳漂浮的兴趣图标试试 ✨</p>
+  </div>
+  <div class="hi-layer hi-front" id="hiFront" aria-hidden="true"></div>
+</section>
+
+<!-- ================= 圈子跑马灯 ================= -->
+<section class="strip" aria-labelledby="strip-title">
+  <div class="container strip-head">
+    <h2 id="strip-title" data-i18n="strip.title">总有一个圈子，在等你推门进来</h2>
+    <span class="demo-tag" data-i18n="demo.circles">示例圈子 · 名称为虚构</span>
+  </div>
+  <div class="marquee" data-dir="left">
+    <ul class="marquee-track">
+      <li class="chip c-coral"><svg class="ic" aria-hidden="true"><use href="#i-camera"/></svg><span data-i18n="cc.film">胶片扫街</span></li>
+      <li class="chip c-mint"><svg class="ic" aria-hidden="true"><use href="#i-bike"/></svg><span data-i18n="cc.ride">城市骑行</span></li>
+      <li class="chip c-lilac"><svg class="ic" aria-hidden="true"><use href="#i-music"/></svg><span data-i18n="cc.radio">深夜电台</span></li>
+      <li class="chip c-sun"><svg class="ic" aria-hidden="true"><use href="#i-scissors"/></svg><span data-i18n="cc.craft">周末手作</span></li>
+      <li class="chip c-sky"><svg class="ic" aria-hidden="true"><use href="#i-game"/></svg><span data-i18n="cc.indie">独立游戏小馆</span></li>
+      <li class="chip c-rose"><svg class="ic" aria-hidden="true"><use href="#i-book"/></svg><span data-i18n="cc.read">慢读会</span></li>
+    </ul>
+  </div>
+  <div class="marquee" data-dir="right">
+    <ul class="marquee-track">
+      <li class="chip c-sun"><svg class="ic" aria-hidden="true"><use href="#i-coffee"/></svg><span data-i18n="cc.coffee">咖啡研究所</span></li>
+      <li class="chip c-sky"><svg class="ic" aria-hidden="true"><use href="#i-code"/></svg><span data-i18n="cc.code">代码夜谈</span></li>
+      <li class="chip c-mint"><svg class="ic" aria-hidden="true"><use href="#i-leaf"/></svg><span data-i18n="cc.plant">阳台植物派</span></li>
+      <li class="chip c-coral"><svg class="ic" aria-hidden="true"><use href="#i-mountain"/></svg><span data-i18n="cc.hike">周末爬山搭子</span></li>
+      <li class="chip c-lilac"><svg class="ic" aria-hidden="true"><use href="#i-palette"/></svg><span data-i18n="cc.draw">每日一画</span></li>
+      <li class="chip c-rose"><svg class="ic" aria-hidden="true"><use href="#i-film"/></svg><span data-i18n="cc.movie">老电影放映室</span></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ================= 理念 ================= -->
+<section id="ideas" class="sec" aria-labelledby="ideas-title">
+  <div class="container">
+    <div class="sec-head reveal">
+      <span class="eyebrow" data-i18n="ideas.eyebrow">我们的理念</span>
+      <h2 id="ideas-title" data-i18n="ideas.title">一个社区，应该是大家的</h2>
+      <p class="sec-sub" data-i18n="ideas.sub">趣吧不以流量变现为目标，只想把这几件事做好。</p>
+      <p class="sec-hint" data-i18n="ideas.hint">把鼠标放上去，或点一下卡片，翻到背面看看</p>
+    </div>
+    <ul class="ideas">
+      <li class="idea c-mint reveal" tabindex="0" aria-describedby="idea1-back">
+        <div class="idea-inner">
+          <div class="idea-face idea-front">
+            <svg class="ic idea-ic" aria-hidden="true"><use href="#i-globe"/></svg>
+            <h3 data-i18n="ideas.c1t">开放</h3>
+            <p data-i18n="ideas.c1s">推门就能进</p>
+          </div>
+          <div class="idea-face idea-back" id="idea1-back">
+            <p data-i18n="ideas.c1b">游客不用注册也能随便逛；想参与时，邮箱或 Google / GitHub / Microsoft 一键登录，中英双语随时切换。</p>
+          </div>
+        </div>
+      </li>
+      <li class="idea c-sky reveal" style="--d:.06s" tabindex="0" aria-describedby="idea2-back">
+        <div class="idea-inner">
+          <div class="idea-face idea-front">
+            <svg class="ic idea-ic" aria-hidden="true"><use href="#i-code"/></svg>
+            <h3 data-i18n="ideas.c2t">开源</h3>
+            <p data-i18n="ideas.c2s">代码摊开给你看</p>
+          </div>
+          <div class="idea-face idea-back" id="idea2-back">
+            <p data-i18n="ideas.c2b">前后端代码都公开（MIT 协议），谁都能看。有想法、发现问题，欢迎来提，一起把趣吧变得更好。</p>
+          </div>
+        </div>
+      </li>
+      <li class="idea c-sun reveal" style="--d:.12s" tabindex="0" aria-describedby="idea3-back">
+        <div class="idea-inner">
+          <div class="idea-face idea-front">
+            <svg class="ic idea-ic" aria-hidden="true"><use href="#i-share"/></svg>
+            <h3 data-i18n="ideas.c3t">共享</h3>
+            <p data-i18n="ideas.c3s">内容属于社区</p>
+          </div>
+          <div class="idea-face idea-back" id="idea3-back">
+            <p data-i18n="ideas.c3b">内容和讨论属于社区。兴趣在圈子之间流动，好内容通过推荐、热门和发现，被更多同好看到。</p>
+          </div>
+        </div>
+      </li>
+      <li class="idea c-coral reveal" tabindex="0" aria-describedby="idea4-back">
+        <div class="idea-inner">
+          <div class="idea-face idea-front">
+            <svg class="ic idea-ic" aria-hidden="true"><use href="#i-crown"/></svg>
+            <h3 data-i18n="ideas.c4t">圈主自治</h3>
+            <p data-i18n="ideas.c4s">圈子的事，圈子说了算</p>
+          </div>
+          <div class="idea-face idea-back" id="idea4-back">
+            <p data-i18n="ideas.c4b">成员、圈规、审核和圈内机器人，都由圈主和管理员自己管理。</p>
+          </div>
+        </div>
+      </li>
+      <li class="idea c-lilac reveal" style="--d:.06s" tabindex="0" aria-describedby="idea5-back">
+        <div class="idea-inner">
+          <div class="idea-face idea-front">
+            <svg class="ic idea-ic" aria-hidden="true"><use href="#i-feather"/></svg>
+            <h3 data-i18n="ideas.c5t">非营利 · 轻量</h3>
+            <p data-i18n="ideas.c5s">不打扰，刚刚好</p>
+          </div>
+          <div class="idea-face idea-back" id="idea5-back">
+            <p data-i18n="ideas.c5b">不以流量变现为目标，没有打扰人的推送和花哨的干扰，界面简洁，用着舒服。</p>
+          </div>
+        </div>
+      </li>
+      <li class="idea c-rose reveal" style="--d:.12s" tabindex="0" aria-describedby="idea6-back">
+        <div class="idea-inner">
+          <div class="idea-face idea-front">
+            <svg class="ic idea-ic" aria-hidden="true"><use href="#i-bot"/></svg>
+            <h3 data-i18n="ideas.c6t">AI 是伙伴</h3>
+            <p data-i18n="ideas.c6s">帮忙，不抢戏</p>
+          </div>
+          <div class="idea-face idea-back" id="idea6-back">
+            <p data-i18n="ideas.c6b">机器人帮圈子答疑、活跃气氛；用独立账号发言、身份清楚，发言有频率上限。圈内机器人怎么用，由圈主决定。</p>
+          </div>
+        </div>
+      </li>
+    </ul>
+  </div>
+</section>
+
+<!-- ================= 圈子与圈主自治 ================= -->
+<section id="circles" class="sec sec-alt" aria-labelledby="circles-title">
+  <div class="container split">
+    <div class="split-copy reveal">
+      <span class="eyebrow c-coral-text" data-i18n="circles.eyebrow">圈子与圈主自治</span>
+      <h2 id="circles-title" data-i18n="circles.title">建一个圈子，<br>按你的方式经营</h2>
+      <p class="lead" data-i18n="circles.lead">任何人都可以创建圈子，建好就能用。写好简介和圈规，再请几位管理员一起打理；新帖先过一遍 AI 预审，拿不准的交给你们拍板。</p>
+      <ul class="feat-list">
+        <li><span class="feat-ic c-coral"><svg class="ic" aria-hidden="true"><use href="#i-sparkles"/></svg></span><div><b data-i18n="circles.f1t">建圈即用，资料自己定</b><p data-i18n="circles.f1p">任何人都能创建圈子，建好马上能用；圈子资料、简介和圈规，圈主随时可以编辑。公开圈子点一下就能加入。</p></div></li>
+        <li><span class="feat-ic c-sun"><svg class="ic" aria-hidden="true"><use href="#i-users"/></svg></span><div><b data-i18n="circles.f2t">圈主、管理员、成员</b><p data-i18n="circles.f2p">三级角色各司其职：圈主可以设置管理员、转让圈主；管理员可以禁言、拉黑捣乱的成员。「我加入的圈子」还能按自己的身份筛选。</p></div></li>
+        <li><span class="feat-ic c-mint"><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg></span><div><b data-i18n="circles.f3t">AI 预审，人来拍板</b><p data-i18n="circles.f3p">新帖先由 AI 看一遍文字，拿不准的进入圈子的审核队列，由管理员决定通过还是驳回，作者会收到结果通知。</p></div></li>
+        <li><span class="feat-ic c-lilac"><svg class="ic" aria-hidden="true"><use href="#i-flag"/></svg></span><div><b data-i18n="circles.f4t">举报有人管，提醒直达</b><p data-i18n="circles.f4p">成员可以举报帖子，圈主和管理员会收到提醒，可以选择保留或下架，被下架时作者会收到通知。点开提醒直接到圈子的「审核」页，待处理数量一目了然。</p></div></li>
+      </ul>
+    </div>
+
+    <div class="split-demo reveal" style="--d:.1s">
+      <div class="mock circle-card">
+        <div class="cc-cover" aria-hidden="true"></div>
+        <div class="cc-body">
+          <span class="cc-avatar" aria-hidden="true"><svg class="ic"><use href="#i-bike"/></svg></span>
+          <div class="cc-head">
+            <div class="cc-title">
+              <strong data-i18n="cc.ride">城市骑行</strong>
+              <span class="cc-slug">c/city-ride</span>
+            </div>
+            <button type="button" class="cc-join" id="ccJoin" aria-pressed="false"><svg class="ic" aria-hidden="true"><use href="#i-check"/></svg><span data-i18n="circles.join">加入圈子</span></button>
+          </div>
+          <p class="cc-intro" data-i18n="circles.intro">下班后一起在城市里慢慢骑，分享路线、装备和沿途风景。</p>
+          <div class="cc-rules">
+            <p class="cc-rules-title" data-i18n="circles.rulesTitle">圈规</p>
+            <ol>
+              <li data-i18n="circles.rule1">约骑请写清路线、时间和配速</li>
+              <li data-i18n="circles.rule2">不发广告，二手交易请注明</li>
+            </ol>
+          </div>
+          <ul class="roles">
+            <li><span class="av av-coral" aria-hidden="true">白</span><span data-i18n="circles.rOwner">圈主</span></li>
+            <li><span class="av av-sun" aria-hidden="true">鹿</span><span data-i18n="circles.rAdmin">管理员</span></li>
+            <li><span class="av av-sky" aria-hidden="true">满</span><span data-i18n="circles.rMember">成员</span></li>
+            <li class="muted"><span class="av av-gray" aria-hidden="true">?</span><span><svg class="ic" aria-hidden="true"><use href="#i-mute"/></svg><span data-i18n="circles.rMuted">已禁言</span></span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="mock mod-panel" id="modPanel">
+        <div class="mock-bar">
+          <span class="mock-title"><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg><span data-i18n="mod.title">城市骑行 · 审核</span></span>
+          <span class="pending" aria-live="polite"><span data-i18n="mod.pending">待处理</span> <b id="modCount">4</b></span>
+        </div>
+        <ul class="mod-list" id="modList">
+          <li class="mod-item" data-act="approve">
+            <div class="mod-meta"><span class="av av-sky" aria-hidden="true">满</span><b data-i18n="mod.i1a">小满</b><span class="ai-chip unsure"><svg class="ic" aria-hidden="true"><use href="#i-sparkles"/></svg><span data-i18n="mod.unsure">AI 预审：拿不准</span></span></div>
+            <p class="mod-title" data-i18n="mod.i1t">周日早骑东湖绿道 40km，想去的加我微信</p>
+            <p class="mod-why" data-i18n="mod.i1w">原因：包含联系方式</p>
+            <div class="mod-actions"><button type="button" class="mbtn reject" data-i18n="mod.reject">驳回</button><button type="button" class="mbtn approve" data-i18n="mod.approve">通过</button></div>
+          </li>
+          <li class="mod-item" data-act="reject">
+            <div class="mod-meta"><span class="av av-gray" aria-hidden="true">卖</span><b data-i18n="mod.i2a">路过的车商</b><span class="ai-chip unsure"><svg class="ic" aria-hidden="true"><use href="#i-sparkles"/></svg><span data-i18n="mod.unsure">AI 预审：拿不准</span></span></div>
+            <p class="mod-title" data-i18n="mod.i2t">全新公路车低价甩卖，加我私聊</p>
+            <p class="mod-why" data-i18n="mod.i2w">原因：疑似广告</p>
+            <div class="mod-actions"><button type="button" class="mbtn reject" data-i18n="mod.reject">驳回</button><button type="button" class="mbtn approve" data-i18n="mod.approve">通过</button></div>
+          </li>
+          <li class="mod-item report" data-act="approve">
+            <div class="mod-meta"><span class="av av-lilac" aria-hidden="true">鹿</span><b data-i18n="mod.i3a">成员举报</b><span class="ai-chip report-chip"><svg class="ic" aria-hidden="true"><use href="#i-flag"/></svg><span data-i18n="mod.report">举报</span></span></div>
+            <p class="mod-title" data-i18n="mod.i3t">《全网最低价车灯，戳链接购买》被举报</p>
+            <p class="mod-why" data-i18n="mod.i3w">举报理由：广告</p>
+            <div class="mod-actions"><button type="button" class="mbtn reject" data-i18n="mod.keep">保留</button><button type="button" class="mbtn approve" data-i18n="mod.takedown">下架</button></div>
+          </li>
+          <li class="mod-item" data-act="approve">
+            <div class="mod-meta"><span class="av av-mint" aria-hidden="true">禾</span><b data-i18n="mod.i4a">禾禾</b><span class="ai-chip unsure"><svg class="ic" aria-hidden="true"><use href="#i-sparkles"/></svg><span data-i18n="mod.unsure">AI 预审：拿不准</span></span></div>
+            <p class="mod-title" data-i18n="mod.i4t">新手求问：锁片怎么调？教程在这个链接里</p>
+            <p class="mod-why" data-i18n="mod.i4w">原因：包含外部链接</p>
+            <div class="mod-actions"><button type="button" class="mbtn reject" data-i18n="mod.reject">驳回</button><button type="button" class="mbtn approve" data-i18n="mod.approve">通过</button></div>
+          </li>
+        </ul>
+        <p class="mod-done" id="modDone" hidden><span aria-hidden="true">🎉</span> <span data-i18n="mod.done">全部处理完啦，喝口水吧</span></p>
+      </div>
+      <p class="demo-note" data-i18n="demo.note">示意界面 · 人名、圈子与内容均为虚构 · 按钮可以点</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 创作与互动 ================= -->
+<section id="create" class="sec" aria-labelledby="create-title">
+  <div class="container split split-rev">
+    <div class="split-copy reveal">
+      <span class="eyebrow c-sun-text" data-i18n="create.eyebrow">创作与互动</span>
+      <h2 id="create-title" data-i18n="create.title">写下热爱，<br>总有人接得住</h2>
+      <p class="lead" data-i18n="create.lead">加个标题、加粗重点、引用一句，再放上照片（一篇最多 9 张），选个圈子就能发。之后谁点了赞、谁回了你、谁 @ 了你，都会第一时间告诉你。</p>
+      <ul class="feat-list">
+        <li><span class="feat-ic c-sun"><svg class="ic" aria-hidden="true"><use href="#i-image"/></svg></span><div><b data-i18n="create.f1t">图文创作</b><p data-i18n="create.f1p">编辑器支持标题、加粗、引用等排版；一篇帖子最多 9 张图，发布到你选的圈子。</p></div></li>
+        <li><span class="feat-ic c-coral"><svg class="ic" aria-hidden="true"><use href="#i-chats"/></svg></span><div><b data-i18n="create.f2t">楼层式评论</b><p data-i18n="create.f2p">评论和回复一层一层排好，聊得再热闹也不乱；评论里也能带图。</p></div></li>
+        <li><span class="feat-ic c-rose"><svg class="ic" aria-hidden="true"><use href="#i-heart"/></svg></span><div><b data-i18n="create.f3t">点赞、收藏、浏览历史</b><p data-i18n="create.f3p">帖子和评论都能点赞，喜欢的帖子可以收藏；收藏和浏览历史都在你的个人主页里。</p></div></li>
+        <li><span class="feat-ic c-sky"><svg class="ic" aria-hidden="true"><use href="#i-at"/></svg></span><div><b data-i18n="create.f4t">@ 提及，精确到人</b><p data-i18n="create.f4p">@ 谁就提醒谁；收到通知点进来，直接定位到那条评论。</p></div></li>
+      </ul>
+    </div>
+
+    <div class="split-demo reveal" style="--d:.1s">
+      <div class="mock editor" id="editor">
+        <div class="ed-toolbar" aria-hidden="true"><span class="ed-tool">H</span><b class="ed-tool">B</b><span class="ed-tool">“ ”</span><svg class="ic"><use href="#i-image"/></svg></div>
+        <pre class="ed-text" id="edText"><span data-i18n="ed.md">初秋的胡同光影
+清晨六点出门，光是斜的，影子很长。</span><span class="caret" aria-hidden="true"></span></pre>
+        <div class="ed-images" aria-hidden="true">
+          <span class="ph ph-1"></span><span class="ph ph-2"></span><span class="ph ph-3"></span>
+          <span class="ed-count"><svg class="ic"><use href="#i-image"/></svg><span data-i18n="ed.count">3 / 9 张图</span></span>
+        </div>
+        <div class="ed-foot">
+          <span class="ed-circle"><svg class="ic" aria-hidden="true"><use href="#i-camera"/></svg><span data-i18n="ed.to">发布到：胶片扫街</span></span>
+          <span class="ed-publish" id="edPublish"><svg class="ic" aria-hidden="true"><use href="#i-send"/></svg><span data-i18n="ed.publish">发布</span></span>
+        </div>
+      </div>
+
+      <article class="mock post" id="post">
+        <header class="post-head">
+          <span class="av av-coral" aria-hidden="true">茶</span>
+          <div><b data-i18n="post.author">阿茶</b><span class="post-circle c-coral"><svg class="ic" aria-hidden="true"><use href="#i-camera"/></svg><span data-i18n="cc.film">胶片扫街</span></span></div>
+          <span class="post-time" data-i18n="post.time">刚刚</span>
+        </header>
+        <h3 class="post-title" data-i18n="post.title">初秋的胡同光影</h3>
+        <div class="post-photos" aria-hidden="true"><span class="ph ph-1"></span><span class="ph ph-2"></span><span class="ph ph-3"></span></div>
+        <div class="post-actions">
+          <button type="button" class="pa like" id="likeBtn" aria-pressed="false"><svg class="ic" aria-hidden="true"><use href="#i-heart"/></svg><span class="sr-only" data-i18n="post.like">点赞</span><b id="likeNum">26</b></button>
+          <button type="button" class="pa fav" id="favBtn" aria-pressed="false"><svg class="ic" aria-hidden="true"><use href="#i-star"/></svg><span data-i18n="post.fav">收藏</span></button>
+          <span class="pa"><svg class="ic" aria-hidden="true"><use href="#i-comment"/></svg><b>2</b></span>
+        </div>
+        <ol class="floors" id="floors">
+          <li class="floor"><span class="floor-no">#1</span><span class="av av-sun" aria-hidden="true">鹿</span><p><b data-i18n="post.c1a">小鹿</b><span data-i18n="post.c1">第二张的光也太好了吧！</span></p></li>
+          <li class="floor reply"><span class="floor-no">#1-1</span><span class="av av-coral" aria-hidden="true">茶</span><p><b data-i18n="post.author">阿茶</b><span data-i18n="post.c2">回复 <span class="mention">@小鹿</span>：蹲了一个早上才等到 😄</span></p></li>
+        </ol>
+      </article>
+      <p class="demo-note" data-i18n="demo.note2">示意界面 · 内容为虚构示例 · 试试点赞和收藏</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 推荐 · 热门 · 发现 + 搜索 ================= -->
+<section id="discover" class="sec sec-alt" aria-labelledby="discover-title">
+  <div class="container">
+    <div class="sec-head reveal">
+      <span class="eyebrow c-sky-text" data-i18n="disc.eyebrow">推荐 · 热门 · 发现</span>
+      <h2 id="discover-title" data-i18n="disc.title">三个入口，喂饱不同的好奇心</h2>
+      <p class="sec-sub" data-i18n="disc.sub">「推荐」根据你加入的圈子和浏览足迹，「热门」汇集全站热门内容，「发现」带你认识新圈子、看到新内容。想找特定的帖子、圈子或用户？直接搜。</p>
+    </div>
+    <div class="disc-grid reveal">
+      <div class="mock feed" id="feed">
+        <div class="feed-tabs" role="tablist" data-i18n-attr="aria-label:disc.tabsLabel" aria-label="信息流入口（示意）">
+          <button type="button" role="tab" class="feed-tab t-mint" id="tab-rec" aria-controls="panel-rec" aria-selected="true"><svg class="ic" aria-hidden="true"><use href="#i-sparkles"/></svg><span data-i18n="disc.t1">推荐</span></button>
+          <button type="button" role="tab" class="feed-tab t-coral" id="tab-hot" aria-controls="panel-hot" aria-selected="false" tabindex="-1"><svg class="ic" aria-hidden="true"><use href="#i-flame"/></svg><span data-i18n="disc.t2">热门</span></button>
+          <button type="button" role="tab" class="feed-tab t-sky" id="tab-new" aria-controls="panel-new" aria-selected="false" tabindex="-1"><svg class="ic" aria-hidden="true"><use href="#i-compass"/></svg><span data-i18n="disc.t3">发现</span></button>
+        </div>
+        <div class="feed-panel" role="tabpanel" id="panel-rec" aria-labelledby="tab-rec">
+          <p class="panel-desc" data-i18n="disc.p1">根据你加入的圈子和浏览足迹</p>
+          <ul class="fl">
+            <li><span class="fl-tag c-mint" data-i18n="cc.ride">城市骑行</span><span data-i18n="disc.r1">夜骑滨江，这条路线灯光最好看</span></li>
+            <li><span class="fl-tag c-coral" data-i18n="cc.film">胶片扫街</span><span data-i18n="disc.r2">过期胶卷到底还能不能用？</span></li>
+            <li><span class="fl-tag c-sun" data-i18n="cc.coffee">咖啡研究所</span><span data-i18n="disc.r3">手冲新手的第一把壶怎么选</span></li>
+          </ul>
+        </div>
+        <div class="feed-panel" role="tabpanel" id="panel-hot" aria-labelledby="tab-hot" hidden>
+          <p class="panel-desc" data-i18n="disc.p2">全站热门内容</p>
+          <ul class="fl">
+            <li><span class="fl-rank">1</span><span class="fl-tag c-lilac" data-i18n="cc.radio">深夜电台</span><span data-i18n="disc.h1">那首让你单曲循环一整周的歌</span></li>
+            <li><span class="fl-rank">2</span><span class="fl-tag c-sky" data-i18n="cc.indie">独立游戏小馆</span><span data-i18n="disc.h2">一个人做游戏的第 100 天</span></li>
+            <li><span class="fl-rank">3</span><span class="fl-tag c-mint" data-i18n="cc.plant">阳台植物派</span><span data-i18n="disc.h3">晒晒你家阳台的秋天</span></li>
+          </ul>
+        </div>
+        <div class="feed-panel" role="tabpanel" id="panel-new" aria-labelledby="tab-new" hidden>
+          <p class="panel-desc" data-i18n="disc.p3">新圈子、新内容</p>
+          <ul class="fl">
+            <li><span class="fl-tag c-new" data-i18n="disc.newCircle">新圈子</span><span data-i18n="disc.d1">「每日一画」刚刚开张，欢迎来交作业</span></li>
+            <li><span class="fl-tag c-new" data-i18n="disc.newPost">新内容</span><span data-i18n="disc.d2">禾禾在「周末爬山搭子」发了第一篇帖子</span></li>
+            <li><span class="fl-tag c-new" data-i18n="disc.newCircle">新圈子</span><span data-i18n="disc.d3">「老电影放映室」本周片单出炉</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="mock search" id="search">
+        <div class="search-box" aria-hidden="true">
+          <svg class="ic"><use href="#i-search"/></svg>
+          <span class="search-q" id="searchQ" data-i18n="search.q">咖啡</span><span class="caret"></span>
+        </div>
+        <div class="search-results" id="searchRes">
+          <p class="sr-group" data-i18n="search.g1">圈子</p>
+          <div class="sr-row"><span class="cc-avatar sm c-sun" aria-hidden="true"><svg class="ic"><use href="#i-coffee"/></svg></span><b data-i18n="cc.coffee">咖啡研究所</b></div>
+          <p class="sr-group" data-i18n="search.g2">帖子</p>
+          <div class="sr-row"><svg class="ic" aria-hidden="true"><use href="#i-news"/></svg><span data-i18n="search.r2">第一台咖啡机，半自动还是胶囊？</span></div>
+          <div class="sr-row"><svg class="ic" aria-hidden="true"><use href="#i-news"/></svg><span data-i18n="search.r3">骑行路上的咖啡店地图（持续更新）</span></div>
+          <p class="sr-group" data-i18n="search.g3">用户</p>
+          <div class="sr-row"><span class="av av-sun" aria-hidden="true">豆</span><span data-i18n="search.r4">咖啡豆豆</span></div>
+        </div>
+      </div>
+    </div>
+    <p class="demo-note center" data-i18n="demo.note3">示意界面 · 内容为虚构示例 · 标签可以点，也能用方向键切换</p>
+  </div>
+</section>
+
+<!-- ================= AI 机器人 ================= -->
+<section id="bots" class="sec" aria-labelledby="bots-title">
+  <div class="container split">
+    <div class="split-copy reveal">
+      <span class="eyebrow c-lilac-text" data-i18n="bots.eyebrow">AI 机器人伙伴</span>
+      <h2 id="bots-title" data-i18n="bots.title">请一位小 Q，<br>帮圈子热热场</h2>
+      <p class="lead" data-i18n="bots.lead">机器人可以接入不同的 AI 模型，自己起名字、换头像、写一段人设，还能用一句话规定它什么时候该回复。它只在该出现的时候出现，不抢大家的话。</p>
+      <div class="triggers" aria-labelledby="trig-title">
+        <p class="triggers-title" id="trig-title" data-i18n="bots.trigTitle">什么时候开口？</p>
+        <ul>
+          <li class="tchip c-sky"><svg class="ic" aria-hidden="true"><use href="#i-at"/></svg><span data-i18n="bots.t1">发帖时 @ 它</span></li>
+          <li class="tchip c-sun"><svg class="ic" aria-hidden="true"><use href="#i-search"/></svg><span data-i18n="bots.t2">评论命中关键词</span></li>
+          <li class="tchip c-mint"><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg><span data-i18n="bots.t3">管理员手动让它回复</span></li>
+          <li class="tchip c-coral"><svg class="ic" aria-hidden="true"><use href="#i-flame"/></svg><span data-i18n="bots.t4">自动回复热门帖子和评论</span></li>
+        </ul>
+      </div>
+      <ul class="feat-list compact">
+        <li><span class="feat-ic c-lilac"><svg class="ic" aria-hidden="true"><use href="#i-bot"/></svg></span><div><b data-i18n="bots.f1t">全局机器人 + 圈内机器人</b><p data-i18n="bots.f1p">全局机器人由平台提供；圈内机器人由圈主自己管理，只在本圈发言。</p></div></li>
+        <li><span class="feat-ic c-sky"><svg class="ic" aria-hidden="true"><use href="#i-filter"/></svg></span><div><b data-i18n="bots.f2t">用一句话管住它</b><p data-i18n="bots.f2p">用一句话告诉它什么时候该回复，什么时候别说话。</p></div></li>
+        <li><span class="feat-ic c-rose"><svg class="ic" aria-hidden="true"><use href="#i-heart"/></svg></span><div><b data-i18n="bots.f3t">有分寸</b><p data-i18n="bots.f3p">自动回复时，每条内容最多回一次；发言有频率上限；机器人之间不会互相接话；用独立账号发言，资料页上标着「机器人」。</p></div></li>
+      </ul>
+    </div>
+
+    <div class="split-demo reveal" style="--d:.1s">
+      <div class="mock chat" id="chat">
+        <div class="mock-bar"><span class="mock-title"><svg class="ic" aria-hidden="true"><use href="#i-bike"/></svg><span data-i18n="chat.title">城市骑行 · 帖子详情</span></span></div>
+        <div class="chat-post">
+          <b data-i18n="chat.postTitle">第一次骑 100 公里，需要准备什么？</b>
+        </div>
+        <div class="chat-body">
+          <div class="msg user" id="chatQ">
+            <span class="av av-sky" aria-hidden="true">满</span>
+            <p><b data-i18n="chat.uName">小满 · 发帖</b><span data-i18n="chat.q">第一次骑这么远，心里没底。<span class="mention">@小Q</span> 能帮我列个补给清单吗？</span></p>
+          </div>
+          <div class="typing" id="chatTyping" aria-hidden="true"><i></i><i></i><i></i></div>
+          <div class="msg bot" id="chatA">
+            <span class="av av-bot" aria-hidden="true">Q</span>
+            <div>
+              <p class="who"><b data-i18n="chat.bName">小Q</b><span class="bot-badge" data-i18n="chat.badge">AI 机器人</span><span class="bot-scope" data-i18n="chat.floor">在帖子下回复</span></p>
+              <p class="bot-text" id="chatText" data-i18n="chat.a">来啦！建议带两瓶水、三四根能量棒、备胎和打气筒，再加一盏车灯。出发前检查胎压，每骑 20 公里左右补一次水。慢慢骑，祝顺利 🚴</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="mock bot-card">
+        <span class="av av-bot lg" aria-hidden="true">Q</span>
+        <div class="bot-info">
+          <b data-i18n="chat.bName">小Q</b>
+          <p class="bot-persona"><span data-i18n="bots.persona">人设：</span><span data-i18n="bots.personaText">热心的骑行老手，说话简短，爱用表情</span></p>
+          <ul class="bot-rules">
+            <li data-i18n="bots.r1">自动回复每条只回一次</li>
+            <li data-i18n="bots.r2">频率有上限</li>
+            <li data-i18n="bots.r3">只在本圈发言</li>
+            <li data-i18n="bots.r4">不回复其他机器人</li>
+          </ul>
+        </div>
+      </div>
+      <p class="demo-note" data-i18n="demo.note4">示意界面 · 对话为虚构示例</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 实时通知 ================= -->
+<section id="notify" class="sec sec-alt" aria-labelledby="notify-title">
+  <div class="container split split-rev">
+    <div class="split-copy reveal">
+      <span class="eyebrow c-mint-text" data-i18n="nt.eyebrow">实时通知中心</span>
+      <h2 id="notify-title" data-i18n="nt.title">有人回应你，<br>马上就知道</h2>
+      <p class="lead" data-i18n="nt.lead">点赞、收藏、评论、回复、@ 提及、审核结果……都会实时推送到你面前。手机和电脑可以同时登录，消息同步到达。</p>
+      <ul class="feat-list compact">
+        <li><span class="feat-ic c-mint"><svg class="ic" aria-hidden="true"><use href="#i-bell"/></svg></span><div><b data-i18n="nt.f1t">实时送达</b><p data-i18n="nt.f1p">不用反复刷新，新消息自己会冒出来。</p></div></li>
+        <li><span class="feat-ic c-sky"><svg class="ic" aria-hidden="true"><use href="#i-laptop"/></svg></span><div><b data-i18n="nt.f2t">多设备同时登录</b><p data-i18n="nt.f2p">手机上看，电脑上回，消息同步到达。</p></div></li>
+        <li><span class="feat-ic c-coral"><svg class="ic" aria-hidden="true"><use href="#i-arrow"/></svg></span><div><b data-i18n="nt.f3t">一点直达</b><p data-i18n="nt.f3p">@ 提醒直接定位到那条评论；管理员收到的举报提醒，直接打开圈子的「审核」页。</p></div></li>
+      </ul>
+    </div>
+
+    <div class="split-demo devices reveal" style="--d:.1s" id="devices">
+      <div class="mock laptop">
+        <div class="mock-bar">
+          <span class="mock-title"><svg class="ic" aria-hidden="true"><use href="#i-laptop"/></svg><span data-i18n="nt.center">通知中心</span></span>
+          <span class="bell" aria-hidden="true"><svg class="ic"><use href="#i-bell"/></svg><b class="bell-badge" id="bellBadge">5</b></span>
+        </div>
+        <ul class="notes" id="notes">
+          <li class="note"><span class="n-ic c-rose"><svg class="ic" aria-hidden="true"><use href="#i-heart"/></svg></span><p data-i18n="nt.n1"><b>小鹿</b> 赞了你的帖子《初秋的胡同光影》</p><time data-i18n="nt.now">刚刚</time></li>
+          <li class="note"><span class="n-ic c-sun"><svg class="ic" aria-hidden="true"><use href="#i-comment"/></svg></span><p data-i18n="nt.n2"><b>老白</b> 评论了你的帖子：「这组色调好舒服」</p><time data-i18n="nt.now">刚刚</time></li>
+          <li class="note"><span class="n-ic c-sky"><svg class="ic" aria-hidden="true"><use href="#i-at"/></svg></span><p data-i18n="nt.n3"><b>阿茶</b> 在评论里 @ 了你</p><time data-i18n="nt.now">刚刚</time></li>
+          <li class="note"><span class="n-ic c-mint"><svg class="ic" aria-hidden="true"><use href="#i-check"/></svg></span><p data-i18n="nt.n4">你的帖子《周日早骑约起》<b>已通过审核</b></p><time data-i18n="nt.now">刚刚</time></li>
+          <li class="note"><span class="n-ic c-coral"><svg class="ic" aria-hidden="true"><use href="#i-flag"/></svg></span><p data-i18n="nt.n5">《全网最低价车灯》<b>被举报</b>，去处理 →</p><time data-i18n="nt.now">刚刚</time></li>
+        </ul>
+      </div>
+      <div class="phone" aria-hidden="true">
+        <span class="phone-notch"></span>
+        <span class="phone-time">9:41</span>
+        <div class="toasts" id="toasts"></div>
+      </div>
+      <p class="demo-note" data-i18n="demo.note5">示意界面 · 通知内容为虚构示例</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 开源与非营利 ================= -->
+<section id="open" class="sec" aria-labelledby="open-title">
+  <div class="container">
+    <div class="open-card reveal">
+      <div class="open-copy">
+        <span class="eyebrow c-sky-text" data-i18n="open.eyebrow">开源 · 非营利</span>
+        <h2 id="open-title" data-i18n="open.title">代码公开，<br>社区属于大家</h2>
+        <p class="lead" data-i18n="open.lead">趣吧的前后端代码都公开在 GitHub 上（MIT 协议），谁都可以看看它是怎么做的。我们不以流量变现为目标，只想把社区做好；有想法、发现问题，都欢迎来提，一起把趣吧变得更好。</p>
+      </div>
+      <div class="repos">
+        <a class="repo" href="https://github.com/l0sgAi/qubar" target="_blank" rel="noopener">
+          <svg class="ic repo-gh" aria-hidden="true"><use href="#i-github"/></svg>
+          <span class="repo-name">l0sgAi/qubar</span>
+          <span class="repo-desc" data-i18n="open.backend">后台代码 · MIT</span>
+          <svg class="ic repo-arrow" aria-hidden="true"><use href="#i-arrow"/></svg>
+        </a>
+        <a class="repo" href="https://github.com/l0sgAi/qubar-frontend" target="_blank" rel="noopener">
+          <svg class="ic repo-gh" aria-hidden="true"><use href="#i-github"/></svg>
+          <span class="repo-name">l0sgAi/qubar-frontend</span>
+          <span class="repo-desc" data-i18n="open.frontend">网页代码 · MIT</span>
+          <svg class="ic repo-arrow" aria-hidden="true"><use href="#i-arrow"/></svg>
+        </a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 结尾行动 ================= -->
+<section class="cta-final" aria-labelledby="cta-title">
+  <div class="cta-glow" aria-hidden="true"></div>
+  <div class="container">
+    <svg class="cta-q" aria-hidden="true"><use href="#i-q"/></svg>
+    <h2 id="cta-title" data-i18n="end.title">你的热爱，值得被听见</h2>
+    <p data-i18n="end.sub">先随便逛逛，喜欢再登录。也欢迎来 GitHub 一起把趣吧变得更好。</p>
+    <div class="hero-ctas">
+      <a class="btn btn-primary" href="https://qubar.site/"><span data-i18n="cta.enter">进入趣吧</span><svg class="ic" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+      <a class="btn btn-ghost" href="https://qubar.site/discover"><svg class="ic" aria-hidden="true"><use href="#i-compass"/></svg><span data-i18n="cta.browse">先逛逛（免登录）</span></a>
+      <a class="btn btn-ghost" href="https://github.com/l0sgAi/qubar" target="_blank" rel="noopener"><svg class="ic" aria-hidden="true"><use href="#i-github"/></svg><span>GitHub</span></a>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <div class="container foot-inner">
+    <div>
+      <a class="logo" href="#top" data-i18n-attr="aria-label:a11y.top" aria-label="回到顶部">
+        <svg class="logo-q" aria-hidden="true"><use href="#i-q"/></svg>
+        <span data-i18n="brand">趣吧</span>
+      </a>
+      <p class="foot-slogan" data-i18n="foot.slogan">让每一份热爱都有回音。</p>
+    </div>
+    <nav class="foot-links" data-i18n-attr="aria-label:a11y.footNav" aria-label="页脚链接">
+      <a href="https://qubar.site/" data-i18n="foot.site">qubar.site</a>
+      <a href="https://github.com/l0sgAi/qubar" target="_blank" rel="noopener" data-i18n="foot.be">GitHub 后端</a>
+      <a href="https://github.com/l0sgAi/qubar-frontend" target="_blank" rel="noopener" data-i18n="foot.fe">GitHub 前端</a>
+      <a href="https://github.com/l0sgAi/qubar/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+    </nav>
+    <p class="foot-copy" data-i18n="foot.copy">© 2026 Qubar · 前后端以 MIT 协议开源 · 本页示意界面中的人名、圈子和内容均为虚构示例</p>
+  </div>
+</footer>
+
+<script src="landing.js"></script>
+</body>
+</html>
