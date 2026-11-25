@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { ref, computed } from 'vue'
+import { NEmpty, NIcon } from 'naive-ui'
+import { InboxOutlined } from '@vicons/antd'
 import { auth } from '@/utils/auth'
 import { __resetPendingInvites, usePendingInvites } from '@/composables/usePendingInvites'
 
@@ -88,10 +90,15 @@ describe('MyInvites', () => {
     expect(usePendingInvites().pendingCount.value).toBe(2)
   })
 
-  it('空列表显示空态', async () => {
+  it('空列表显示空态并使用 NIcon 渲染 InboxOutlined 图标', async () => {
     api.getMyInvites = vi.fn(() => Promise.resolve({ data: [], total: 0 }))
     await mountPage()
+    const empty = wrapper.findComponent(NEmpty)
+    expect(empty.exists()).toBe(true)
     expect(wrapper.text()).toContain('暂无待接受的圈子邀请')
+    const icon = empty.findComponent(NIcon)
+    expect(icon.exists()).toBe(true)
+    expect(icon.findComponent(InboxOutlined).exists()).toBe(true)
     expect(usePendingInvites().pendingCount.value).toBe(0)
   })
 
