@@ -27,7 +27,7 @@
             class="list-empty"
           >
             <template #icon>
-              <NIcon><MailOpenedIcon /></NIcon>
+              <NIcon><InboxOutlined /></NIcon>
             </template>
           </NEmpty>
 
@@ -91,7 +91,7 @@ import { ref, watch, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { NAvatar, NButton, NEmpty, NIcon, NPagination, useDialog, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
-import { MailOpened as MailOpenedIcon } from '@vicons/tabler'
+import { InboxOutlined } from '@vicons/antd'
 import AppShell from '@/components/layout/AppShell.vue'
 import SmartLink from '@/components/common/SmartLink.vue'
 import { getMyInvites, respondEmailInvite } from '@/api/circleInvite'

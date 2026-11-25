@@ -130,34 +130,18 @@
         <NBadge :value="notificationCount" :max="99" class="notification-badge" />
       </div>
 
-      <!-- 私信入口：角标为私信未读总数（dm-unread），与消息中心铃铛分开 -->
-      <div class="notification-wrapper">
-        <NButton
-          quaternary
-          circle
-          size="large"
-          class="notification-btn"
-          :aria-label="t('message.entry')"
-          :title="t('message.entry')"
-          @click="handleMessages"
-        >
-          <NIcon size="20">
-            <MessageCircle />
-          </NIcon>
-        </NButton>
-        <NBadge :value="dmUnreadCount" :max="99" class="notification-badge" />
-      </div>
-
-      <!-- 用户信息下拉菜单 -->
+      <!-- 用户信息下拉菜单（有未读私信时头像右上角显示红点，与消息中心铃铛分开） -->
       <AppDropdown :options="userMenuOptions" @select="handleMenuSelect">
         <div class="user-info-trigger">
-          <NAvatar
-            round
-            :size="40"
-            :src="userAvatarUrl"
-            class="user-avatar">
-            <div v-if="userAvatarUrl===undefined || userAvatarUrl==''" >{{ username.charAt(0) }}</div>
-          </NAvatar>
+          <NBadge dot :show="dmUnreadCount > 0" :offset="[-4, 4]" class="avatar-unread-badge">
+            <NAvatar
+              round
+              :size="40"
+              :src="userAvatarUrl"
+              class="user-avatar">
+              <div v-if="userAvatarUrl===undefined || userAvatarUrl==''" >{{ username.charAt(0) }}</div>
+            </NAvatar>
+          </NBadge>
         </div>
       </AppDropdown>
       </template>
@@ -261,48 +245,64 @@ watch(() => route.query.q, (newQ) => {
   }
 })
 
+const formatUnreadBadge = (count) => (count > 99 ? '99+' : String(count))
+
 // 用户下拉菜单选项
-const userMenuOptions = computed(() => [
-  {
-    label: t('user.profile'),
-    key: 'profile',
-    icon: () => h('svg', {
-      viewBox: '0 0 24 24',
-      fill: 'none',
-      stroke: 'currentColor',
-      'stroke-width': '2',
-      style: { width: '16px', height: '16px' }
-    }, [
-      h('path', { d: 'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2' }),
-      h('circle', { cx: '12', cy: '7', r: '4' })
-    ])
-  },
-  {
-    type: 'divider',
-    key: 'd1'
-  },
-  {
-    label: t('common.logout'),
-    key: 'logout',
-    icon: () => h('svg', {
-      viewBox: '0 0 24 24',
-      fill: 'none',
-      stroke: 'currentColor',
-      'stroke-width': '2',
-      style: { width: '16px', height: '16px' }
-    }, [
-      h('path', { d: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4' }),
-      h('polyline', { points: '16 17 21 12 16 7' }),
-      h('line', { x1: '21', y1: '12', x2: '9', y2: '12' })
-    ])
-  }
-])
+const userMenuOptions = computed(() => {
+  const unread = dmUnreadCount.value
+  return [
+    {
+      label: t('user.profile'),
+      key: 'profile',
+      icon: () => h('svg', {
+        viewBox: '0 0 24 24',
+        fill: 'none',
+        stroke: 'currentColor',
+        'stroke-width': '2',
+        style: { width: '16px', height: '16px' }
+      }, [
+        h('path', { d: 'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2' }),
+        h('circle', { cx: '12', cy: '7', r: '4' })
+      ])
+    },
+    {
+      label: () => h('span', { class: 'user-menu-option' }, [
+        h('span', null, t('message.entry')),
+        unread > 0 ? h('span', { class: 'user-menu-badge' }, formatUnreadBadge(unread)) : null
+      ]),
+      key: 'messages',
+      icon: () => h(NIcon, { size: 16 }, { default: () => h(MessageCircle) })
+    },
+    {
+      type: 'divider',
+      key: 'd1'
+    },
+    {
+      label: t('common.logout'),
+      key: 'logout',
+      icon: () => h('svg', {
+        viewBox: '0 0 24 24',
+        fill: 'none',
+        stroke: 'currentColor',
+        'stroke-width': '2',
+        style: { width: '16px', height: '16px' }
+      }, [
+        h('path', { d: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4' }),
+        h('polyline', { points: '16 17 21 12 16 7' }),
+        h('line', { x1: '21', y1: '12', x2: '9', y2: '12' })
+      ])
+    }
+  ]
+})
 
 // 处理菜单选择
 const handleMenuSelect = (key) => {
   switch (key) {
     case 'profile':
       handleProfile()
+      break
+    case 'messages':
+      handleMessages()
       break
     case 'logout':
       handleLogout()
