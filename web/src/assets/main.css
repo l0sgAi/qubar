@@ -292,6 +292,30 @@ body {
   transform: scale(1);
 }
 
+/* 用户下拉菜单自定义 label（NDropdown 传送到 body，样式写全局）：私信项右侧未读角标 */
+.user-menu-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+}
+
+.user-menu-badge {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #f56c6c;
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
 /* =========================================================
  * 全局对话框（NDialog / useDialog）主题样式
  * NDialog 由 NDialogProvider 管理，DOM 被传送到 <body> 下，
