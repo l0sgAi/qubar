@@ -104,13 +104,6 @@ func TestBatchPostUpdates_ConcurrentNoDeadlock(t *testing.T) {
 	})
 	reportErrors(t, errs)
 
-	var divergent int
-	if err := db.Raw(`SELECT count(*) FROM domains.post p LEFT JOIN domains.post_stats s ON s.post_id = p.id
-		WHERE p.id IN ? AND (s.post_id IS NULL OR (p.view_count,p.comment_count,p.like_count,p.collect_count)
-			IS DISTINCT FROM (s.view_count,s.comment_count,s.like_count,s.collect_count))`, ids).Scan(&divergent).Error; err != nil || divergent != 0 {
-		t.Fatalf("dual write: divergent posts = %d, err = %v", divergent, err)
-	}
-
 	type counts struct {
 		ID           uuid.UUID
 		ViewCount    int64
@@ -119,7 +112,7 @@ func TestBatchPostUpdates_ConcurrentNoDeadlock(t *testing.T) {
 		Hot          int64
 	}
 	var got []counts
-	if err := db.Raw("SELECT id, view_count, like_count, collect_count, hot FROM domains.post WHERE id IN ?", ids).
+	if err := db.Raw("SELECT p.id, s.view_count, s.like_count, s.collect_count, p.hot FROM domains.post p JOIN domains.post_stats s ON s.post_id = p.id WHERE p.id IN ?", ids).
 		Scan(&got).Error; err != nil {
 		t.Fatalf("query posts: %v", err)
 	}

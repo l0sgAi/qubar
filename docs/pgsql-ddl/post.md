@@ -99,6 +99,8 @@ CREATE INDEX idx_post_pinned ON domains.post(circle_id) WHERE is_pinned = 1 AND 
 | collect_count | integer | 有效收藏数 |
 | update_time | timestamptz | 最近一次计数更新时间，回填时沿用旧行时间 |
 
+R2 以后，详情和列表的 Redis 未命中均从本表读取，缺行视为四项计数为 0，首个计数事件按需建行。主表原四列在回退窗口内冻结。
+
 四项计数均非空，默认 0。M1 按帖子 ID 升序回填快照内全部帖子，含软删除帖；期间旧应用继续写原表。R1 上线后需校准快照以来的变化，校准通过后方可切换读路径。
 
 ## 帖子提及表
