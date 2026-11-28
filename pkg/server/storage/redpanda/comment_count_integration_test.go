@@ -240,6 +240,7 @@ func TestPostCommentCount_RetryAndRedeliveryDoNotDoubleCount(t *testing.T) {
 		t.Fatalf("comment_count after first (failed) flush = %d, want %d", got, comments)
 	}
 
+	mirrorVersion := assertPostStatsMirror(t, db, postID, 0, comments, 0, 0)
 	c.Flush() // 重试同一批
 	if got := commentCount(t, db, postID); got != comments {
 		t.Fatalf("comment_count after retry = %d, want %d (no double count)", got, comments)
@@ -263,6 +264,9 @@ func TestPostCommentCount_RetryAndRedeliveryDoNotDoubleCount(t *testing.T) {
 	}
 	if err := db.Raw("SELECT xmin::text FROM domains.post WHERE id = ?", postID).Scan(&xminAfter).Error; err != nil {
 		t.Fatal(err)
+	}
+	if got := assertPostStatsMirror(t, db, postID, 0, comments, 0, 0); got != mirrorVersion {
+		t.Fatalf("comment recount rewrote post_stats: xmin %s -> %s", mirrorVersion, got)
 	}
 	if xminAfter != xminBefore {
 		t.Fatalf("redelivery rewrote the post row (xmin %s → %s); unchanged recount must be skipped", xminBefore, xminAfter)

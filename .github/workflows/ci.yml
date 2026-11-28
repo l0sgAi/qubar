@@ -136,6 +136,11 @@ jobs:
           docker run --rm --network host -e PGPASSWORD=ci "$PG_IMAGE" \
             pg_dump -h 127.0.0.1 -U postgres -d qubar --schema-only -n domains --no-owner --no-privileges > schema.sql
 
+      - name: 验证 R1 帖子计数校准跨批次重跑
+        run: |
+          docker run --rm --network host -e PGPASSWORD=ci -v "$PWD/scripts:/scripts:ro" "$PG_IMAGE" \
+            psql -Xq -h 127.0.0.1 -U qubar_web_app -d qubar -f /scripts/test-calibrate-post-stats.sql
+
       - uses: actions/upload-artifact@v7
         with:
           name: db-schema
