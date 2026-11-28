@@ -47,6 +47,7 @@ func newCommentCountPost(t *testing.T, db *gorm.DB) uuid.UUID {
 	t.Helper()
 	id := sharedomain.NewID()
 	testkit.CleanupRows(t, "domains.post", "id", id)
+	testkit.CleanupRows(t, "domains.post_stats", "post_id", id)
 	testkit.CleanupRows(t, "domains.comment", "post_id", id)
 	testkit.CleanupKeys(t, redispkg.GetPostStatsKey(id))
 	if err := db.Exec("INSERT INTO domains.post (id, circle_id, user_id) VALUES (?, ?, ?)",
@@ -96,7 +97,7 @@ func postStatsMessages(t *testing.T, postID uuid.UUID, n int) []kafka.Message {
 func commentCount(t *testing.T, db *gorm.DB, postID uuid.UUID) int {
 	t.Helper()
 	var n int
-	if err := db.Raw("SELECT comment_count FROM domains.post WHERE id = ?", postID).Scan(&n).Error; err != nil {
+	if err := db.Raw("SELECT comment_count FROM domains.post_stats WHERE post_id = ?", postID).Scan(&n).Error; err != nil {
 		t.Fatalf("read comment_count: %v", err)
 	}
 	return n
@@ -235,36 +236,23 @@ func TestPostCommentCount_RetryAndRedeliveryDoNotDoubleCount(t *testing.T) {
 	if committer.count() != 0 {
 		t.Fatalf("offsets committed after failed flush")
 	}
-	if got := commentCount(t, db, postID); got != comments {
-		t.Fatalf("comment_count after first (failed) flush = %d, want %d", got, comments)
-	}
-
+	before := assertPostStats(t, db, postID, 0, comments, 0, 0)
 	c.Flush() // 重试同一批
-	if got := commentCount(t, db, postID); got != comments {
-		t.Fatalf("comment_count after retry = %d, want %d (no double count)", got, comments)
+	if after := assertPostStats(t, db, postID, 0, comments, 0, 0); after != before {
+		t.Fatalf("retry rewrote post_stats: xmin %s -> %s", before, after)
 	}
 	if committer.count() != 1 {
 		t.Fatalf("commits after retry = %d, want 1", committer.count())
 	}
 
-	// 重投（提交前进程被杀 / 再均衡）：同一批消息再处理一次，计数不变，且不写出新的行版本（不产生 WAL / CDC 事件）。
-	var xminBefore, xminAfter string
-	if err := db.Raw("SELECT xmin::text FROM domains.post WHERE id = ?", postID).Scan(&xminBefore).Error; err != nil {
-		t.Fatal(err)
-	}
+	// 即使提交 offset 前发生再均衡，重投同一批消息也应保留统计行版本。
 	redelivered := redpanda.NewPostStatsConsumerForTest(&recordingCommitter{}, nil)
 	for _, m := range msgs {
 		redelivered.Add(m)
 	}
 	redelivered.Flush()
-	if got := commentCount(t, db, postID); got != comments {
-		t.Fatalf("comment_count after redelivery = %d, want %d", got, comments)
-	}
-	if err := db.Raw("SELECT xmin::text FROM domains.post WHERE id = ?", postID).Scan(&xminAfter).Error; err != nil {
-		t.Fatal(err)
-	}
-	if xminAfter != xminBefore {
-		t.Fatalf("redelivery rewrote the post row (xmin %s → %s); unchanged recount must be skipped", xminBefore, xminAfter)
+	if after := assertPostStats(t, db, postID, 0, comments, 0, 0); after != before {
+		t.Fatalf("redelivery rewrote post_stats: xmin %s -> %s", before, after)
 	}
 }
 
@@ -325,4 +313,40 @@ func TestPostCommentCount_ExcludesInvisible(t *testing.T) {
 	if got := commentCount(t, db, postID); got != 5 {
 		t.Fatalf("comment_count after approve = %d, want 5", got)
 	}
+}
+
+// 四种展示计数均有变化时，父行版本应保持冻结，CDC 不会收到该帖 UPDATE。
+func TestPostCountersLeavePostRowUnchanged(t *testing.T) {
+	t.Parallel()
+	db := testkit.PG(t)
+	testkit.Redis(t)
+	testkit.Redpanda(t)
+	id := newCommentCountPost(t, db)
+	testkit.CleanupRows(t, "domains.post_like", "post_id", id)
+	_, before := shareCount(t, db, id)
+	if _, err := addComment(db, id); err != nil {
+		t.Fatal(err)
+	}
+	c := redpanda.NewPostStatsConsumerForTest(&recordingCommitter{}, nil)
+	for _, msg := range postStatsMessages(t, id, 1) {
+		c.Add(msg)
+	}
+	c.Flush()
+	ids := []uuid.UUID{id}
+	if err := redpanda.PersistPostStatsForTest(ids, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := redpanda.UpdatePostCollectsForTest(ids, 3); err != nil {
+		t.Fatal(err)
+	}
+	userID := sharedomain.NewID()
+	for range 2 {
+		if err := redpanda.PersistPostLikesForTest(userID, ids); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, after := shareCount(t, db, id); before == "" || after != before {
+		t.Fatalf("post xmin = %s, want %s", after, before)
+	}
+	assertPostStats(t, db, id, 2, 1, 3, 3)
 }
