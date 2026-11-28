@@ -69,12 +69,13 @@ func batchUpdatePostCollects(deltas postDeltaBuf) error {
 	sortByID(rows, func(r row) uuid.UUID { return r.PostID })
 
 	return pgsql.DB.Transaction(func(tx *gorm.DB) error {
-		if err := lockRowsByID(tx, "domains.post", ids); err != nil {
+		if err := lockPostStats(tx, ids); err != nil {
 			return err
 		}
-		sql := `UPDATE domains.post p SET collect_count = GREATEST(p.collect_count + v.delta, 0), update_time = CURRENT_TIMESTAMP
+		sql := `UPDATE domains.post_stats p SET collect_count = GREATEST(p.collect_count + v.delta, 0), update_time = CURRENT_TIMESTAMP
 			FROM (SELECT * FROM jsonb_to_recordset(?::jsonb) AS v(post_id uuid, delta BIGINT)) v
-			WHERE p.id = v.post_id AND p.deleted = 0`
+			JOIN domains.post live ON live.id = v.post_id AND live.deleted = 0
+			WHERE p.post_id = v.post_id AND p.collect_count <> GREATEST(p.collect_count + v.delta, 0)`
 		jsonBytes, err := json.Marshal(rows)
 		if err != nil {
 			return fmt.Errorf("failed to marshal post collect rows: %w", err)

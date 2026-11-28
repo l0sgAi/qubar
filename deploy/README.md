@@ -40,6 +40,10 @@ CI / 运维 ─► Cloudflare Access(ssh.qubar.site) ───────┘ ss
 回滚：Actions → release → Run workflow → 勾 `rollback`；或服务器上 `/opt/qubar/bin/deploy-app.sh --rollback`。
 回滚只换镜像、**不回退 schema**（迁移 forward-only，且必须兼容上一版本应用）。
 
+### 帖子计数切换后的 sink 注册（#312 D1）
+
+R2 读路径上线后再发布此配置。infra 步骤会渲染新的 `02-es-sink-post.json`，deploy 步骤调用 `register-connectors.sh` 以 PUT 更新现有 connector。确认 `es-sink-post` 和它的 task 均为 `RUNNING`，再检查 `GET /connectors/es-sink-post/config` 的 `transforms.whitelist.whitelist` 包含 `hot`，且不含四个展示计数。一篇新发布的帖子同步到 ES 后应能按热度检索；旧文档可能留有历史计数，R2 的接口统一从 Redis 或 PG 读取。
+
 ## 密钥清单（GitHub → Settings → Environments → `production`，仅允许 main）
 
 | Secret | 来源 |

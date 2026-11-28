@@ -39,6 +39,7 @@ func newTestPost(t *testing.T, db *gorm.DB) uuid.UUID {
 		t.Fatalf("create post: %v", err)
 	}
 	testkit.CleanupRows(t, "domains.post", "id", p.ID)
+	testkit.CleanupRows(t, "domains.post_stats", "post_id", p.ID)
 	testkit.CleanupRows(t, "domains.post_like", "post_id", p.ID)
 	testkit.CleanupKeys(t, redispkg.GetPostStatsKey(p.ID), redispkg.GetPostHotCapKey(p.ID))
 	return p.ID
@@ -96,7 +97,7 @@ func TestPostService_RestoreStatsFromDB(t *testing.T) {
 	postSvc := newPostService(NewDeps())
 
 	postID := newTestPost(t, db)
-	if err := db.Exec("UPDATE domains.post SET like_count = 7, comment_count = 3, collect_count = 2, view_count = 11 WHERE id = ?",
+	if err := db.Exec("INSERT INTO domains.post_stats (post_id, like_count, comment_count, collect_count, view_count) VALUES (?, 7, 3, 2, 11)",
 		postID).Error; err != nil {
 		t.Fatalf("set counters: %v", err)
 	}
@@ -117,7 +118,7 @@ func TestPostService_RestoreStatsFromDB(t *testing.T) {
 	if err := redispkg.Client.HIncrBy(ctx, redispkg.GetPostStatsKey(postID), "like_count", 1).Err(); err != nil {
 		t.Fatalf("HINCRBY: %v", err)
 	}
-	if err := db.Exec("UPDATE domains.post SET like_count = 0 WHERE id = ?", postID).Error; err != nil {
+	if err := db.Exec("UPDATE domains.post_stats SET like_count = 0 WHERE post_id = ?", postID).Error; err != nil {
 		t.Fatalf("reset like_count: %v", err)
 	}
 	if err := postSvc.RestoreStats(ctx, postID); err != nil {
@@ -166,7 +167,7 @@ func postLikeState(t *testing.T, db *gorm.DB, userID, postID uuid.UUID) (rowDele
 	if len(rows) > 0 {
 		rowDeleted = rows[0]
 	}
-	if err := db.Raw("SELECT like_count FROM domains.post WHERE id = ?", postID).Scan(&likeCount).Error; err != nil {
+	if err := db.Raw("SELECT like_count FROM domains.post_stats WHERE post_id = ?", postID).Scan(&likeCount).Error; err != nil {
 		t.Fatalf("read like_count: %v", err)
 	}
 	return rowDeleted, likeCount
