@@ -86,6 +86,21 @@ CREATE INDEX idx_post_status ON domains.post(status, create_time DESC);
 CREATE INDEX idx_post_pinned ON domains.post(circle_id) WHERE is_pinned = 1 AND deleted = 0;
 ```
 
+## 帖子统计表 `domains.post_stats`
+
+每个帖子复用自己的 UUIDv7 作为 `post_id` 主键。表只保存在 PostgreSQL，计数更新不进入 CDC。热度和分享数仍由 `post` 维护。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| post_id | uuid | 对应 `post.id`，无独立 ID 和外键 |
+| view_count | integer | 浏览量 |
+| comment_count | integer | 可见评论数 |
+| like_count | integer | 有效点赞数 |
+| collect_count | integer | 有效收藏数 |
+| update_time | timestamptz | 最近一次计数更新时间，回填时沿用旧行时间 |
+
+四项计数均非空，默认 0。M1 按帖子 ID 升序回填快照内全部帖子，含软删除帖；期间旧应用继续写原表。R1 上线后需校准快照以来的变化，校准通过后方可切换读路径。
+
 ## 帖子提及表
 
 > 发帖时正文 @提及 的最终持久化名单（发帖人选择并经后端校验：存在且未注销、去重、

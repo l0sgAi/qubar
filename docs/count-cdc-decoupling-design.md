@@ -174,7 +174,7 @@ post_stats(post_id uuid PK, view_count, comment_count, like_count, collect_count
 |---|---|---|---|---|
 | **B1** | `comment_count` 改为与浏览量同一条批量 UPDATE（`post_statistics`，15 min），落库时按明细表重算（幂等），落库后校准 Redis | 代码（post / comment 域、`redpanda` 消费者），无迁移、无 `deploy/` | 中 | 本次 PR |
 | **B2-a** | 热度关闭条数触发：`post_hot_flush_messages: 0`；点赞 / 收藏窗口 10 s → 60 s | 生产配置 Secret（维护者操作），`configs/*.yaml` 默认值同步 | 低 | 已决策（2026-11-09），默认值已同步；生产待维护者改 Secret 并 `force_infra` 发版 |
-| **B2-b** | 方案 1：`post_stats` 独立表 + 读路径回落 + ES 白名单去计数 | 迁移 + 代码 + `deploy/`，全部 `risk:high`，拆成 M1 / R1 / R2 / D1 多个 PR | 中高 | 暂缓：B2-a 上线后生产写场景压测，WAL / ES 积压仍是瓶颈再启动 |
+| **B2-b** | 方案 1：`post_stats` 独立表 + 读路径回落 + ES 白名单去计数 | 迁移 + 代码 + `deploy/`，全部 `risk:high`，拆成 M1 / R1 / R2 / D1 多个 PR | 中高 | 已由 #312 启动，分四个 PR 验收 |
 | **B2-c**（可选） | `post` 从 `REPLICA IDENTITY FULL` 改 DEFAULT：每次 UPDATE 不再写整条旧行 | 迁移；需确认 Debezium / sink 不依赖 `before`（当前 sink 只取 `after`） | 中 | 不做：见 D5 |
 | 验收 | 生产写场景压测对比：`pg_stat_user_tables.n_tup_upd`（post / post_stats）、复制槽积压（`pg_current_wal_lsn() - confirmed_flush_lsn`）、ES post sink 消费积压、ES indexing rate / CPU | 生产 | — | 需维护者安排，agent 不执行 |
 
