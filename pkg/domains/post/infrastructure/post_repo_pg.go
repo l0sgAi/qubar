@@ -363,3 +363,25 @@ func (r *postRepoPG) BatchIsShared(ctx context.Context, userID uuid.UUID, postID
 	}
 	return result, nil
 }
+
+// GetStats 通过 post_id 主键一次读取所有未命中 Redis 的帖子计数。
+func (r *postRepoPG) GetStats(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]domain.PostStatistics, error) {
+	out := make(map[uuid.UUID]domain.PostStatistics, len(postIDs))
+	if len(postIDs) == 0 {
+		return out, nil
+	}
+	var rows []struct {
+		PostID                uuid.UUID
+		domain.PostStatistics `gorm:"embedded"`
+	}
+	err := r.db.WithContext(ctx).Table("domains.post_stats").
+		Select("post_id, view_count, comment_count, like_count, collect_count").
+		Where("post_id IN ?", postIDs).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		out[row.PostID] = row.PostStatistics
+	}
+	return out, nil
+}

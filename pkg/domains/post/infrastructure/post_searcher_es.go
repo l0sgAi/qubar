@@ -89,8 +89,6 @@ func toPostDocs(docs []elasticsearch.PostDocument) []application.PostDoc {
 		posts = append(posts, application.PostDoc{
 			ID: doc.ID, CircleID: doc.CircleID, UserID: doc.UserID, Type: doc.Type,
 			Title: doc.Title, Summary: doc.Summary, Content: doc.Content,
-			ViewCount: doc.ViewCount, CommentCount: doc.CommentCount,
-			LikeCount: doc.LikeCount, CollectCount: doc.CollectCount,
 			IsPinned: doc.IsPinned, IsEssence: doc.IsEssence, IsLock: doc.IsLock,
 			Status: doc.Status, CreateTime: doc.CreateTime,
 		})

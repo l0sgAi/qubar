@@ -242,3 +242,9 @@ SELECT count(*) FROM domains.post p LEFT JOIN domains.post_stats s ON s.post_id 
 WHERE (p.view_count, p.comment_count, p.like_count, p.collect_count) IS DISTINCT FROM
     (COALESCE(s.view_count, 0), COALESCE(s.comment_count, 0), COALESCE(s.like_count, 0), COALESCE(s.collect_count, 0));
 ```
+
+## R2 切换与回退
+
+R1 校准通过后排空并停止 R1 消费者，再启动 R2。R1 会把主表快照镜像到窄表，两版消费者同时处理事件会覆盖 R2 更新。详情、列表和交互前的缓存恢复均从 `post_stats` 回源；新帖缺行表示四项计数为 0，首批计数事件为有效帖子建行。分享继续按明细重算到 `post.share_count`，热度继续写入 `post.hot`。
+
+回退到 R1 前暂停相关请求、排空并停止 R2 写入。若 D1 已上线，先重新注册带旧白名单的 sink，以接收下述回写产生的事件。再执行 `psql -X -v ON_ERROR_STOP=1 -f scripts/rollback-post-stats.sql`。脚本每批最多更新 1000 行并等待 100 ms，只更新计数有差异的帖子，会产生一次性 CDC 流量。用上一节的差异查询确认差异为 0，等待 sink 追平。若 D1 期间有缺少四个字段的 ES 文档，先补同步并抽查冷缓存列表，然后启动 R1 并恢复流量。

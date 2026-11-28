@@ -394,10 +394,10 @@ d AS (
 	FROM (SELECT post_id, 1 AS delta FROM ins UNION ALL SELECT post_id, -1 AS delta FROM del) x
 	GROUP BY post_id
 )
-UPDATE domains.post p
+UPDATE domains.post_stats p
 SET like_count = GREATEST(p.like_count + d.delta, 0), update_time = CURRENT_TIMESTAMP
-FROM d
-WHERE p.id = d.post_id AND p.deleted = 0 AND d.delta <> 0`
+FROM d JOIN domains.post live ON live.id = d.post_id AND live.deleted = 0
+WHERE p.post_id = d.post_id AND d.delta <> 0`
 
 // commentLikeApplySQL 评论点赞：同 postLikeApplySQL，复活时补齐缺失的冗余 post_id。
 const commentLikeApplySQL = `
@@ -431,7 +431,7 @@ FROM d
 WHERE c.id = d.comment_id AND c.deleted = 0 AND d.delta <> 0`
 
 // persistLikeStates 单事务落库：每种目标类型各一条语句，与批大小无关。
-// 帖子行先按 id 升序取锁再改 like_count，与其他批量更新 domains.post 的消费者取锁顺序一致（见 batch_lock.go）。
+// 先按 post_id 升序锁统计行，再处理点赞流水和计数。
 func persistLikeStates(states []*likeState) error {
 	posts, comments := buildLikeRows(states)
 	sortByID(posts, func(r postLikeRow) uuid.UUID { return r.PostID })
@@ -441,7 +441,7 @@ func persistLikeStates(states []*likeState) error {
 	}
 	err := pgsql.DB.Transaction(func(tx *gorm.DB) error {
 		if len(posts) > 0 {
-			if err := lockRowsByID(tx, "domains.post", postIDs); err != nil {
+			if err := lockPostStats(tx, postIDs); err != nil {
 				return err
 			}
 			payload, err := json.Marshal(posts)
@@ -450,9 +450,6 @@ func persistLikeStates(states []*likeState) error {
 			}
 			if err := tx.Exec(postLikeApplySQL, string(payload)).Error; err != nil {
 				return fmt.Errorf("failed to apply post likes: %w", err)
-			}
-			if err := mirrorPostStats(tx, postIDs); err != nil {
-				return err
 			}
 		}
 		if len(comments) > 0 {
@@ -485,8 +482,9 @@ func reconcilePostLikeCounts(postIDs []uuid.UUID) {
 		ID        uuid.UUID
 		LikeCount int64
 	}
-	if err := pgsql.DB.Table("domains.post").Select("id, like_count").
-		Where("id IN ? AND deleted = 0", ids).Scan(&rows).Error; err != nil {
+	if err := pgsql.DB.Table("domains.post_stats AS s").Select("s.post_id AS id, s.like_count").
+		Joins("JOIN domains.post p ON p.id = s.post_id AND p.deleted = 0").
+		Where("s.post_id IN ?", ids).Scan(&rows).Error; err != nil {
 		logger.Log.Warn("Failed to load post like_count for cache reconcile: " + err.Error())
 		return
 	}
