@@ -1,8 +1,4 @@
-// Package application 的圈内帖子列表计数口径单元测试（#250）。
-//
-// 覆盖：GetCirclePosts 的 view/comment/like/collect 用 post 域 Redis post:stats（经 PostMediaFetcher 桥接）覆盖
-// ES 快照；未命中的帖子保留快照；取不到实时计数（Redis 出错 → 桥接返回空 map / 未注入 fetcher）时降级为快照、不报错；
-// share_count 仍走 BatchGetShareCounts（#233）。
+// 圈内列表的四项展示计数由 post 域提供，缺行默认零。
 package application
 
 import (
@@ -71,10 +67,8 @@ func newCirclePostsFixture() (svc *circleServiceImpl, circleID, hit, miss uuid.U
 	circleID, hit, miss = uuid.New(), uuid.New(), uuid.New()
 	repo := &postsRepo{circle: domain.Circle{ID: circleID, Name: "c"}}
 	searcher := &fakePostsSearcher{docs: []PostDoc{
-		{ID: hit.String(), CircleID: circleID.String(), UserID: uuid.NewString(),
-			ViewCount: 10, CommentCount: 2, LikeCount: 3, CollectCount: 1},
-		{ID: miss.String(), CircleID: circleID.String(), UserID: uuid.NewString(),
-			ViewCount: 20, CommentCount: 4, LikeCount: 5, CollectCount: 6},
+		{ID: hit.String(), CircleID: circleID.String(), UserID: uuid.NewString()},
+		{ID: miss.String(), CircleID: circleID.String(), UserID: uuid.NewString()},
 	}}
 	svc = NewCircleService(repo, nil, nil, nil, nil, searcher, nil, nil).(*circleServiceImpl)
 	return svc, circleID, hit, miss
@@ -104,8 +98,8 @@ func TestGetCirclePosts_StatsOverlay(t *testing.T) {
 	if len(res.Posts) != 2 || res.Posts[0].ID != hit || res.Posts[1].ID != miss {
 		t.Fatalf("posts = %+v; want [hit, miss]", res.Posts)
 	}
-	assertCounts(t, "hit", res.Posts[0], 11, 3, 4, 2)  // Redis 命中：用实时值
-	assertCounts(t, "miss", res.Posts[1], 20, 4, 5, 6) // 未命中：保留 ES 快照
+	assertCounts(t, "hit", res.Posts[0], 11, 3, 4, 2) // Redis 命中：用实时值
+	assertCounts(t, "miss", res.Posts[1], 0, 0, 0, 0) // 缺行：四项为零
 	if res.Posts[0].ShareCount != 7 || res.Posts[1].ShareCount != 0 {
 		t.Fatalf("share_count = %d / %d; want 7 / 0", res.Posts[0].ShareCount, res.Posts[1].ShareCount)
 	}
@@ -115,10 +109,10 @@ func TestGetCirclePosts_StatsOverlay(t *testing.T) {
 	}
 }
 
-func TestGetCirclePosts_StatsUnavailableKeepsSnapshot(t *testing.T) {
+func TestGetCirclePosts_StatsUnavailableDefaultsToZero(t *testing.T) {
 	t.Parallel()
 	cases := map[string]PostMediaFetcher{
-		"overlay failed (empty map)": &fakePostFetcher{}, // 桥接在 Redis 出错时返回空 map
+		"overlay failed (empty map)": &fakePostFetcher{}, // 两级均无法读取
 		"fetcher not injected":       nil,
 	}
 	for name, fetcher := range cases {
@@ -132,8 +126,8 @@ func TestGetCirclePosts_StatsUnavailableKeepsSnapshot(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetCirclePosts: %v", err)
 			}
-			assertCounts(t, "first", res.Posts[0], 10, 2, 3, 1)
-			assertCounts(t, "second", res.Posts[1], 20, 4, 5, 6)
+			assertCounts(t, "first", res.Posts[0], 0, 0, 0, 0)
+			assertCounts(t, "second", res.Posts[1], 0, 0, 0, 0)
 		})
 	}
 }

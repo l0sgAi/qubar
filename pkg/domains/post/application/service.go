@@ -105,22 +105,18 @@ type AgentPostTrigger interface {
 
 // PostDoc 帖子搜索结果项（ES PostDocument 精简版）。
 type PostDoc struct {
-	ID           string `json:"id"`
-	CircleID     string `json:"circle_id"`
-	UserID       string `json:"user_id"`
-	Type         int16  `json:"type"`
-	Title        string `json:"title"`
-	Summary      string `json:"summary"`
-	Content      string `json:"content"`
-	ViewCount    int    `json:"view_count"`
-	CommentCount int    `json:"comment_count"`
-	LikeCount    int    `json:"like_count"`
-	CollectCount int    `json:"collect_count"`
-	IsPinned     int16  `json:"is_pinned"`
-	IsEssence    int16  `json:"is_essence"`
-	IsLock       int16  `json:"is_lock"`
-	Status       int16  `json:"status"`
-	CreateTime   string `json:"create_time"`
+	ID         string `json:"id"`
+	CircleID   string `json:"circle_id"`
+	UserID     string `json:"user_id"`
+	Type       int16  `json:"type"`
+	Title      string `json:"title"`
+	Summary    string `json:"summary"`
+	Content    string `json:"content"`
+	IsPinned   int16  `json:"is_pinned"`
+	IsEssence  int16  `json:"is_essence"`
+	IsLock     int16  `json:"is_lock"`
+	Status     int16  `json:"status"`
+	CreateTime string `json:"create_time"`
 }
 
 // PostListItem 组装后的帖子列表项。
@@ -300,10 +296,8 @@ type PostService interface {
 	// BatchGetShareCounts 批量取帖子分享数（口径同详情 / 列表，供 circle 圈内帖子列表回填，#233）。
 	// best-effort：取不到的帖子不在结果里。
 	BatchGetShareCounts(ctx context.Context, postIDs []uuid.UUID) map[uuid.UUID]int
-	// BatchGetCachedStats 批量取 Redis post:stats 里的实时计数（view/comment/like/collect，口径同 applyStatsOverlay）。
-	// 供 circle 圈内帖子列表覆盖 ES 快照（#250）。一页一次 pipeline，不回种；
-	// best-effort：未命中的帖子不在结果里（调用方保留快照），Redis 出错只记日志、返回空 map。
-	BatchGetCachedStats(ctx context.Context, postIDs []uuid.UUID) map[uuid.UUID]domain.PostStatistics
+	// BatchGetStats 为列表按 Redis → post_stats 批量读取四项计数。
+	BatchGetStats(ctx context.Context, postIDs []uuid.UUID) map[uuid.UUID]domain.PostStatistics
 
 	// SetUserFacade 注入 user Facade（组装作者信息用）。
 	SetUserFacade(f UserFacade)
@@ -759,8 +753,6 @@ func (s *postServiceImpl) GetPostDetail(ctx context.Context, userID, postID uuid
 		ID: post.ID, CircleID: post.CircleID, UserID: post.UserID,
 		Type: post.Type, Title: post.Title, Summary: post.Summary,
 		Content: post.Content, MediaExtra: post.MediaExtra,
-		ViewCount: post.ViewCount, CommentCount: post.CommentCount,
-		LikeCount: post.LikeCount, CollectCount: post.CollectCount,
 		IsPinned: post.IsPinned, IsEssence: post.IsEssence, IsLock: post.IsLock,
 		Status: post.Status, Deleted: post.Deleted,
 		CreateTime: post.CreateTime, UpdateTime: post.UpdateTime,
@@ -774,19 +766,16 @@ func (s *postServiceImpl) GetPostDetail(ctx context.Context, userID, postID uuid
 	// @提及 用户列表（落库名单 → GetBriefs 过滤未注销；失败置空数组，前端回退文本反查）
 	vo.Mentions = s.assembleMentions(ctx, postID)
 
-	// 用 Redis 实时统计覆盖 DB 值（全 4 字段）；缓存缺失则用 DB 兜底（值已在 vo）并回种 Redis。
-	// 回种用 HSetNX：async 浏览量 goroutine 会 HINCRBY view_count，普通 HSet 会 clobber 它的 +1。
-	if stats, _ := s.statsCache.Get(ctx, postID); stats != nil {
-		vo.ViewCount = stats.ViewCount
-		vo.CommentCount = stats.CommentCount
-		vo.LikeCount = stats.LikeCount
-		vo.CollectCount = stats.CollectCount
-	} else {
-		_ = s.statsCache.SetIfAbsent(ctx, postID, &domain.PostStatistics{
-			ViewCount: post.ViewCount, CommentCount: post.CommentCount,
-			LikeCount: post.LikeCount, CollectCount: post.CollectCount,
-		})
+	// 详情缺失时回种；HSetNX 保留并发浏览或点赞已经写入的字段。
+	stats, _ := s.statsCache.Get(ctx, postID)
+	if stats == nil {
+		stats, err = s.restorePostStats(ctx, postID)
+		if err != nil {
+			return nil, err
+		}
 	}
+	vo.ViewCount, vo.CommentCount = stats.ViewCount, stats.CommentCount
+	vo.LikeCount, vo.CollectCount = stats.LikeCount, stats.CollectCount
 
 	// 分享数：与列表同一口径（Redis post:sharecnt，miss 用本次读到的 post.share_count 回种）
 	vo.ShareCount = int(s.resolveShareCounts(ctx, []uuid.UUID{postID},
@@ -1011,7 +1000,10 @@ func (s *postServiceImpl) asyncIncrementView(postID, userID uuid.UUID) {
 	// 缓存恢复（如果统计 Hash 不存在，先从 DB 恢复）
 	exists, err := s.statsCache.Exists(context.Background(), postID)
 	if err == nil && !exists {
-		s.restorePostStats(postID)
+		if _, err := s.restorePostStats(context.Background(), postID); err != nil {
+			logger.Log.Error("Failed to load post statistics: " + err.Error())
+			return
+		}
 	} else if err != nil {
 		logger.Log.Error("Failed to check post stats existence: " + err.Error())
 	}
@@ -1035,25 +1027,17 @@ func (s *postServiceImpl) asyncIncrementView(postID, userID uuid.UUID) {
 	}
 }
 
-// restorePostStats 从 DB 恢复帖子统计缓存。
-//
-// 读 Post 实体的计数字段回种 Redis。用 SetIfAbsent（HSetNX）：调用方先查 Exists 再回种，
-// 并发请求（如同一帖子同时有多条评论）可能都看到「不存在」，普通 HSet 会冲掉先到者已经 HINCRBY 的增量。
-func (s *postServiceImpl) restorePostStats(postID uuid.UUID) {
-	post, err := s.repo.GetByID(context.Background(), postID)
+// restorePostStats 从窄表恢复实时计数，缺行表示新帖尚未产生计数。
+func (s *postServiceImpl) restorePostStats(ctx context.Context, postID uuid.UUID) (*domain.PostStatistics, error) {
+	rows, err := s.repo.GetStats(ctx, []uuid.UUID{postID})
 	if err != nil {
-		logger.Log.Error("Failed to load post for stats recovery: " + err.Error())
-		return
+		return nil, err
 	}
-	stats := &domain.PostStatistics{
-		ViewCount:    post.ViewCount,
-		CommentCount: post.CommentCount,
-		LikeCount:    post.LikeCount,
-		CollectCount: post.CollectCount,
+	stats := rows[postID]
+	if err := s.statsCache.SetIfAbsent(ctx, postID, &stats); err != nil {
+		logger.Log.Warn("Failed to seed post stats cache: " + err.Error())
 	}
-	if err := s.statsCache.SetIfAbsent(context.Background(), postID, stats); err != nil {
-		logger.Log.Error("Failed to restore post stats cache: " + err.Error())
-	}
+	return &stats, nil
 }
 
 // SearchPosts 搜索帖子列表（组装作者/圈子/图片信息）。
@@ -1184,8 +1168,6 @@ func (s *postServiceImpl) assemblePostList(ctx context.Context, raw *RawPostSear
 		posts = append(posts, PostListItem{
 			ID: pid, CircleID: cid, UserID: uid, Type: doc.Type,
 			Title: doc.Title, Summary: doc.Summary, Content: doc.Content,
-			ViewCount: doc.ViewCount, CommentCount: doc.CommentCount,
-			LikeCount: doc.LikeCount, CollectCount: doc.CollectCount,
 			IsPinned: doc.IsPinned, IsEssence: doc.IsEssence, IsLock: doc.IsLock,
 			Status: doc.Status, CreateTime: createTime,
 			AuthorName: authorName, AuthorAvatar: authorAvatar,
@@ -1198,42 +1180,45 @@ func (s *postServiceImpl) assemblePostList(ctx context.Context, raw *RawPostSear
 	return posts
 }
 
-// applyStatsOverlay 用 Redis 实时统计覆盖列表项计数字段（view/comment/like/collect）。
-// 批量 pipeline 1 RTT；未命中的帖子保留原值（ES/DB 快照），不回种（避免读路径写放大）。
+// applyStatsOverlay 为列表填充展示计数；Redis misses 合并为一次 PG 查询。
 func (s *postServiceImpl) applyStatsOverlay(ctx context.Context, posts []PostListItem) {
-	if len(posts) == 0 {
-		return
-	}
 	postIDs := make([]uuid.UUID, 0, len(posts))
 	for _, p := range posts {
 		postIDs = append(postIDs, p.ID)
 	}
-	statsMap := s.BatchGetCachedStats(ctx, postIDs)
+	counts := s.BatchGetStats(ctx, postIDs)
 	for i := range posts {
-		if st, ok := statsMap[posts[i].ID]; ok {
-			posts[i].ViewCount = st.ViewCount
-			posts[i].CommentCount = st.CommentCount
-			posts[i].LikeCount = st.LikeCount
-			posts[i].CollectCount = st.CollectCount
-		}
+		st := counts[posts[i].ID]
+		posts[i].ViewCount, posts[i].CommentCount = st.ViewCount, st.CommentCount
+		posts[i].LikeCount, posts[i].CollectCount = st.LikeCount, st.CollectCount
 	}
 }
 
-// BatchGetCachedStats 批量取 Redis post:stats 命中的实时计数；未命中的帖子不在结果里，不回种。
-// applyStatsOverlay 与 circle 圈内帖子列表（经 composition 桥接，#250）共用，保证同一口径。
-func (s *postServiceImpl) BatchGetCachedStats(ctx context.Context, postIDs []uuid.UUID) map[uuid.UUID]domain.PostStatistics {
-	out := make(map[uuid.UUID]domain.PostStatistics)
+// BatchGetStats 供帖子与圈内列表共用；只为缓存未命中的 ID 回源，列表不回种。
+func (s *postServiceImpl) BatchGetStats(ctx context.Context, postIDs []uuid.UUID) map[uuid.UUID]domain.PostStatistics {
+	out := make(map[uuid.UUID]domain.PostStatistics, len(postIDs))
 	if len(postIDs) == 0 {
 		return out
 	}
-	statsMap, err := s.statsCache.BatchGet(ctx, postIDs)
+	cached, err := s.statsCache.BatchGet(ctx, postIDs)
 	if err != nil {
-		logger.Log.Error("Failed to batch get post stats from cache: " + err.Error())
-		return out
+		logger.Log.Warn("Failed to batch get cached post stats: " + err.Error())
 	}
-	for id, st := range statsMap {
-		if st != nil {
-			out[id] = *st
+	var misses []uuid.UUID
+	for _, id := range postIDs {
+		if stats := cached[id]; stats != nil {
+			out[id] = *stats
+		} else {
+			misses = append(misses, id)
+		}
+	}
+	if len(misses) > 0 {
+		stats, err := s.repo.GetStats(ctx, misses)
+		if err != nil {
+			logger.Log.Warn("Failed to batch load post stats: " + err.Error())
+		}
+		for id, st := range stats {
+			out[id] = st
 		}
 	}
 	return out
@@ -1420,8 +1405,6 @@ func (s *postServiceImpl) assembleFromPosts(ctx context.Context, posts []domain.
 		result = append(result, PostListItem{
 			ID: p.ID, CircleID: p.CircleID, UserID: p.UserID, Type: p.Type,
 			Title: p.Title, Summary: p.Summary, Content: p.Content,
-			ViewCount: p.ViewCount, CommentCount: p.CommentCount,
-			LikeCount: p.LikeCount, CollectCount: p.CollectCount,
 			IsPinned: p.IsPinned, IsEssence: p.IsEssence, IsLock: p.IsLock,
 			Status: p.Status, CreateTime: p.CreateTime,
 			AuthorName: authorName, AuthorAvatar: authorAvatar,
@@ -1528,7 +1511,9 @@ func (s *postServiceImpl) incrCachedCommentCount(ctx context.Context, postID uui
 		return err
 	}
 	if !exists {
-		s.restorePostStats(postID)
+		if _, err := s.restorePostStats(ctx, postID); err != nil {
+			return err
+		}
 	}
 	return s.statsCache.IncrCommentCount(ctx, postID)
 }
@@ -1536,7 +1521,7 @@ func (s *postServiceImpl) incrCachedCommentCount(ctx context.Context, postID uui
 // RestoreStats 恢复帖子统计缓存（如果不存在）。
 //
 // 与旧 controller.restorePostStatsIfNeed 行为一致：检查 stats Hash 是否存在，
-// 不存在则从 DB 读取 Post 的计数字段写入 Redis。
+// 不存在则从 post_stats 恢复计数。
 // 供 like 领域点赞前确保 stats Hash 存在，避免 Lua 脚本读到空 stats。
 func (s *postServiceImpl) RestoreStats(ctx context.Context, postID uuid.UUID) error {
 	exists, err := s.statsCache.Exists(ctx, postID)
@@ -1546,9 +1531,8 @@ func (s *postServiceImpl) RestoreStats(ctx context.Context, postID uuid.UUID) er
 	if exists {
 		return nil
 	}
-	// restorePostStats 内部用 context.Background()（保持与异步路径一致）
-	s.restorePostStats(postID)
-	return nil
+	_, err = s.restorePostStats(ctx, postID)
+	return err
 }
 
 // ===== 辅助函数 =====
