@@ -468,7 +468,7 @@ func GetPostStatistics(postID uuid.UUID) (*PostStatistics, error) {
 }
 
 // GetPostStatisticsBatch 批量获取帖子统计（pipeline 打包 N 个 HMGet，1 RTT）。
-// 仅返回字段齐全的 postID -> stats；缺失/部分缺失的不计入（调用方走 DB/ES baseline）。
+// 仅返回字段齐全的 postID -> stats；缺失/部分缺失的不计入（调用方批量读 post_stats）。
 func GetPostStatisticsBatch(postIDs []uuid.UUID) (map[uuid.UUID]*PostStatistics, error) {
 	result := make(map[uuid.UUID]*PostStatistics, len(postIDs))
 	if len(postIDs) == 0 {

@@ -174,7 +174,7 @@ post_stats(post_id uuid PK, view_count, comment_count, like_count, collect_count
 |---|---|---|---|---|
 | **B1** | `comment_count` 改为与浏览量同一条批量 UPDATE（`post_statistics`，15 min），落库时按明细表重算（幂等），落库后校准 Redis | 代码（post / comment 域、`redpanda` 消费者），无迁移、无 `deploy/` | 中 | 本次 PR |
 | **B2-a** | 热度关闭条数触发：`post_hot_flush_messages: 0`；点赞 / 收藏窗口 10 s → 60 s | 生产配置 Secret（维护者操作），`configs/*.yaml` 默认值同步 | 低 | 已决策（2026-11-09），默认值已同步；生产待维护者改 Secret 并 `force_infra` 发版 |
-| **B2-b** | 方案 1：`post_stats` 独立表 + 读路径回落 + ES 白名单去计数 | 迁移 + 代码 + `deploy/`，全部 `risk:high`，拆成 M1 / R1 / R2 / D1 多个 PR | 中高 | 暂缓：B2-a 上线后生产写场景压测，WAL / ES 积压仍是瓶颈再启动 |
+| **B2-b** | 方案 1：`post_stats` 独立表 + 读路径回落 + ES 白名单去计数 | 迁移 + 代码 + `deploy/`，全部 `risk:high`，拆成 M1 / R1 / R2 / D1 多个 PR | 中高 | 已由 #312 启动，分四个 PR 验收 |
 | **B2-c**（可选） | `post` 从 `REPLICA IDENTITY FULL` 改 DEFAULT：每次 UPDATE 不再写整条旧行 | 迁移；需确认 Debezium / sink 不依赖 `before`（当前 sink 只取 `after`） | 中 | 不做：见 D5 |
 | 验收 | 生产写场景压测对比：`pg_stat_user_tables.n_tup_upd`（post / post_stats）、复制槽积压（`pg_current_wal_lsn() - confirmed_flush_lsn`）、ES post sink 消费积压、ES indexing rate / CPU | 生产 | — | 需维护者安排，agent 不执行 |
 
@@ -230,3 +230,21 @@ B1 的设计要点（详见 B1 PR）：
 - 方案 2b 的 `skip.messages.without.change` 在当前 Debezium 版本（3.2.6）上的行为没有在本地 CDC 栈验证（开发栈没有 CDC）。
 - WAL 字节的下降比例按行宽估算，没有实测；生产帖子正文长度分布会影响 `REPLICA IDENTITY FULL` 的旧行大小。
 - 所有收益都需要生产写场景压测对比确认，由维护者安排。
+
+## R1 上线校准
+
+1. 确认 M1 迁移成功，所有消费实例均已运行 R1。暂时停止新的收藏请求，等在途请求结束、收藏与帖子统计消费者提交已发布事件的 offset 并排空内存批次。收藏明细先提交、计数增量后消费，若在两者之间重算会重复加减。
+2. 在目标库使用 `psql -X -v ON_ERROR_STOP=1 -f scripts/calibrate-post-stats.sql`。脚本按帖子 ID 升序每 1000 行提交一次，两批间等待 100 ms。它按明细校准两表的评论、点赞和收藏，从主表复制浏览量，同时补齐缺行。失败后可从头重跑。
+3. 在同一查询快照内核对两表。以下查询应返回 0。R1 期间新建且从无互动的帖子可能尚无统计行，此时四项计数均为 0。确认后恢复收藏请求，再安排 R2。
+
+```sql
+SELECT count(*) FROM domains.post p LEFT JOIN domains.post_stats s ON s.post_id = p.id
+WHERE (p.view_count, p.comment_count, p.like_count, p.collect_count) IS DISTINCT FROM
+    (COALESCE(s.view_count, 0), COALESCE(s.comment_count, 0), COALESCE(s.like_count, 0), COALESCE(s.collect_count, 0));
+```
+
+## R2 切换与回退
+
+R1 校准通过后排空并停止 R1 消费者，再启动 R2。R1 会把主表快照镜像到窄表，两版消费者同时处理事件会覆盖 R2 更新。详情、列表和交互前的缓存恢复均从 `post_stats` 回源；新帖缺行表示四项计数为 0，首批计数事件为有效帖子建行。分享继续按明细重算到 `post.share_count`，热度继续写入 `post.hot`。
+
+回退到 R1 前暂停相关请求、排空并停止 R2 写入。若 D1 已上线，先重新注册带旧白名单的 sink，以接收下述回写产生的事件。再执行 `psql -X -v ON_ERROR_STOP=1 -f scripts/rollback-post-stats.sql`。脚本每批最多更新 1000 行并等待 100 ms，只更新计数有差异的帖子，会产生一次性 CDC 流量。用上一节的差异查询确认差异为 0，等待 sink 追平。若 D1 期间有缺少四个字段的 ES 文档，先补同步并抽查冷缓存列表，然后启动 R1 并恢复流量。

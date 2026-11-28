@@ -231,39 +231,36 @@ type postStatsRow struct {
 	ShareDirty   bool      `json:"share_dirty"`
 }
 
-// postStatsApplySQL 批量更新帖子统计：view / like / collect 累加增量，comment_count 对标记过的帖子按明细重算
-// （可见评论 + 回复行数，谓词复用 commentdomain.VisibleCondition，与评论列表口径一致，#208）。
-// 按行计数：根评论不可见时其下可见回复仍计入（与根评论删除的既有口径一致）。
-// 子查询里的 deleted / status 不带别名，按最内层作用域解析到 domains.comment（v 没有这两列）。
-// share_count 对标记过的帖子按 domains.post_share 行数重算（#232，分享不可撤销，行数即去重后的分享人数）。
-// 重算结果与当前值相同且没有其他增量的行不写：不产生新的行版本，也就不产生 WAL / CDC 事件（#130）。
+// postStatsApplySQL 在取得窄表行锁后用新快照重算可见评论，其他计数沿用原有增量和上下限。
 const postStatsApplySQL = `
 WITH v AS (
 	SELECT * FROM jsonb_to_recordset(?::jsonb)
-	AS v(post_id uuid, view_delta BIGINT, comment_dirty BOOLEAN, like_delta BIGINT, collect_delta BIGINT, share_dirty BOOLEAN)
+	AS v(post_id uuid, view_delta BIGINT, comment_dirty BOOLEAN, like_delta BIGINT, collect_delta BIGINT)
 ),
 cc AS (
 	SELECT v.post_id,
 	       (SELECT count(*) FROM domains.comment c WHERE c.post_id = v.post_id AND ` + commentdomain.VisibleCondition + `) AS cnt
 	FROM v WHERE v.comment_dirty
-),
-sc AS (
-	SELECT v.post_id,
-	       (SELECT count(*) FROM domains.post_share s WHERE s.post_id = v.post_id) AS cnt
-	FROM v WHERE v.share_dirty
 )
-UPDATE domains.post p
-SET view_count = LEAST(GREATEST(p.view_count + v.view_delta, 0), 1000000000),
-    comment_count = COALESCE(cc.cnt, p.comment_count),
-    like_count = GREATEST(p.like_count + v.like_delta, 0),
-    collect_count = GREATEST(p.collect_count + v.collect_delta, 0),
-    share_count = COALESCE(sc.cnt, p.share_count),
+UPDATE domains.post_stats s
+SET view_count = LEAST(GREATEST(s.view_count + v.view_delta, 0), 1000000000),
+    comment_count = COALESCE(cc.cnt, s.comment_count),
+    like_count = GREATEST(s.like_count + v.like_delta, 0),
+    collect_count = GREATEST(s.collect_count + v.collect_delta, 0),
     update_time = CURRENT_TIMESTAMP
-FROM v LEFT JOIN cc ON cc.post_id = v.post_id LEFT JOIN sc ON sc.post_id = v.post_id
-WHERE p.id = v.post_id AND p.deleted = 0
-  AND (v.view_delta <> 0 OR v.like_delta <> 0 OR v.collect_delta <> 0
-       OR p.comment_count <> COALESCE(cc.cnt, p.comment_count)
-       OR p.share_count <> COALESCE(sc.cnt, p.share_count))`
+FROM v JOIN domains.post p ON p.id = v.post_id AND p.deleted = 0 LEFT JOIN cc ON cc.post_id = v.post_id
+WHERE s.post_id = v.post_id
+  AND (v.view_delta <> 0 OR v.like_delta <> 0 OR s.comment_count <> cc.cnt
+       OR s.collect_count <> GREATEST(s.collect_count + v.collect_delta, 0))`
+
+// 分享数仍属于主表；先锁分享涉及的主表行，再锁统计行。仅四项展示计数变化时跳过此路径。
+const postShareRecountSQL = `
+WITH counts AS (
+	SELECT v.post_id, (SELECT count(*) FROM domains.post_share s WHERE s.post_id = v.post_id) AS cnt
+	FROM jsonb_to_recordset(?::jsonb) AS v(post_id uuid, share_dirty boolean) WHERE v.share_dirty
+)
+UPDATE domains.post p SET share_count = c.cnt, update_time = CURRENT_TIMESTAMP
+FROM counts c WHERE p.id = c.post_id AND p.deleted = 0 AND p.share_count <> c.cnt`
 
 // persistPostStats 落库帖子统计，成功后校准 Redis 中的评论数 / 分享数缓存。
 func persistPostStats(deltas postStatsBuf) error {
@@ -300,7 +297,9 @@ func batchUpdatePostStats(deltas postStatsBuf) (postStatsRecount, error) {
 			CollectDelta: delta.CollectCount,
 			ShareDirty:   delta.ShareDirty,
 		})
-		ids = append(ids, postID)
+		if delta.ViewCount != 0 || delta.CommentDirty || delta.LikeCount != 0 || delta.CollectCount != 0 {
+			ids = append(ids, postID)
+		}
 		if delta.CommentDirty {
 			recount.comment = append(recount.comment, postID)
 		}
@@ -319,7 +318,18 @@ func batchUpdatePostStats(deltas postStatsBuf) (postStatsRecount, error) {
 	}
 
 	err = pgsql.DB.Transaction(func(tx *gorm.DB) error {
-		if err := lockRowsByID(tx, "domains.post", ids); err != nil {
+		if len(recount.share) > 0 {
+			if err := lockRowsByID(tx, "domains.post", recount.share); err != nil {
+				return err
+			}
+			if err := tx.Exec(postShareRecountSQL, string(jsonBytes)).Error; err != nil {
+				return err
+			}
+		}
+		if len(ids) == 0 {
+			return nil
+		}
+		if err := lockPostStats(tx, ids); err != nil {
 			return err
 		}
 		res := tx.Exec(postStatsApplySQL, string(jsonBytes))
@@ -347,8 +357,9 @@ func reconcilePostCommentCounts(postIDs []uuid.UUID) {
 		ID           uuid.UUID
 		CommentCount int64
 	}
-	if err := pgsql.DB.Table("domains.post").Select("id, comment_count").
-		Where("id IN ? AND deleted = 0", ids).Scan(&rows).Error; err != nil {
+	if err := pgsql.DB.Table("domains.post_stats AS s").Select("s.post_id AS id, s.comment_count").
+		Joins("JOIN domains.post p ON p.id = s.post_id AND p.deleted = 0").
+		Where("s.post_id IN ?", ids).Scan(&rows).Error; err != nil {
 		logger.Log.Warn("Failed to load post comment_count for cache reconcile: " + err.Error())
 		return
 	}
