@@ -55,6 +55,8 @@ type PostRepository interface {
 	CountReviewingByCircle(ctx context.Context, circleID uuid.UUID) (int64, error)
 	// GetCircleIDsByIDs 批量取 帖子ID → 所属 circle_id，不过滤删除 / 状态（通知跳转用，#156）；查不到的 ID 不在结果里。
 	GetCircleIDsByIDs(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
+	// GetStats 批量读取持久化展示计数，尚无统计行的帖子按零值处理。
+	GetStats(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]PostStatistics, error)
 	// GetShareCounts 批量取 帖子ID → post.share_count（分享数缓存 miss 回源，#233）；查不到的 ID 不在结果里。
 	GetShareCounts(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]int64, error)
 	// IsShared 用户是否分享过该帖（查 domains.post_share 的 uk_post_share_user_post，#233）。
@@ -87,7 +89,7 @@ type PostStatsCache interface {
 	// Set 设置统计信息（用于从 DB 恢复）。
 	Set(ctx context.Context, postID uuid.UUID, stats *PostStatistics) error
 	// BatchGet 批量获取统计信息（pipeline，1 RTT）。仅返回字段齐全的 postID；
-	// 未命中/部分缺失的不计入（调用方走 DB/ES baseline）。
+	// 未命中/部分缺失的不计入（调用方回源 post_stats）。
 	BatchGet(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]*PostStatistics, error)
 	// SetIfAbsent 仅当字段不存在时回种（HSetNX）。用于读路径 miss 回种，
 	// 避免覆盖并发浏览量自增。

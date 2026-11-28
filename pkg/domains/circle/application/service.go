@@ -64,11 +64,11 @@ type PostMediaFetcher interface {
 	// BatchGetShareCounts 批量取帖子分享数（口径同帖子详情 / 其他列表，#233）；best-effort，取不到的按 0。
 	BatchGetShareCounts(ctx context.Context, postIDs []uuid.UUID) map[uuid.UUID]int
 	// BatchGetStats 批量取帖子实时计数（Redis post:stats，口径同帖子详情 / post 域其它列表，#250）；
-	// best-effort：未命中或出错的帖子不在结果里，调用方保留 ES 快照。
+	// Redis 未命中时回源 post_stats，缺行按 0。
 	BatchGetStats(ctx context.Context, postIDs []uuid.UUID) map[uuid.UUID]CirclePostStats
 }
 
-// CirclePostStats 帖子实时计数（view/comment/like/collect），用于覆盖圈内帖子列表的 ES 快照。
+// CirclePostStats 帖子实时计数（view/comment/like/collect），供圈内帖子列表展示。
 type CirclePostStats struct {
 	ViewCount    int
 	CommentCount int
@@ -131,22 +131,18 @@ type MyCircleSearchResult struct {
 
 // PostDoc 圈内帖子搜索结果项（ES PostDocument 的精简版）。
 type PostDoc struct {
-	ID           string `json:"id"`
-	CircleID     string `json:"circle_id"`
-	UserID       string `json:"user_id"`
-	Type         int16  `json:"type"`
-	Title        string `json:"title"`
-	Summary      string `json:"summary"`
-	Content      string `json:"content"`
-	ViewCount    int    `json:"view_count"`
-	CommentCount int    `json:"comment_count"`
-	LikeCount    int    `json:"like_count"`
-	CollectCount int    `json:"collect_count"`
-	IsPinned     int16  `json:"is_pinned"`
-	IsEssence    int16  `json:"is_essence"`
-	IsLock       int16  `json:"is_lock"`
-	Status       int16  `json:"status"`
-	CreateTime   string `json:"create_time"`
+	ID         string `json:"id"`
+	CircleID   string `json:"circle_id"`
+	UserID     string `json:"user_id"`
+	Type       int16  `json:"type"`
+	Title      string `json:"title"`
+	Summary    string `json:"summary"`
+	Content    string `json:"content"`
+	IsPinned   int16  `json:"is_pinned"`
+	IsEssence  int16  `json:"is_essence"`
+	IsLock     int16  `json:"is_lock"`
+	Status     int16  `json:"status"`
+	CreateTime string `json:"create_time"`
 }
 
 // CirclePostListItem 组装后的圈内帖子项（含作者/圈子信息/图片）。
@@ -1122,7 +1118,7 @@ func (s *circleServiceImpl) GetCirclePosts(ctx context.Context, viewerID, circle
 	}
 
 	// 批量查询帖子分享数（ES 文档不含 share_count，#233）与实时计数
-	// （Redis post:stats 覆盖 ES 快照，未命中保留快照，口径同 post 域 applyStatsOverlay，#250）
+	// （Redis post:stats 未命中批量回源 PG，口径同 post 域 applyStatsOverlay，#250）
 	var shareCounts map[uuid.UUID]int
 	var liveStats map[uuid.UUID]CirclePostStats
 	if s.postFetcher != nil && len(postIDs) > 0 {
@@ -1150,13 +1146,7 @@ func (s *circleServiceImpl) GetCirclePosts(ctx context.Context, viewerID, circle
 			images = media
 		}
 
-		stats := CirclePostStats{
-			ViewCount: doc.ViewCount, CommentCount: doc.CommentCount,
-			LikeCount: doc.LikeCount, CollectCount: doc.CollectCount,
-		}
-		if live, ok := liveStats[postID]; ok {
-			stats = live
-		}
+		stats := liveStats[postID]
 
 		posts = append(posts, CirclePostListItem{
 			ID: postID, CircleID: cid, UserID: uid, Type: doc.Type,

@@ -19,10 +19,6 @@ type PostDocument struct {
 	Title         string `json:"title"`
 	Summary       string `json:"summary"`
 	Content       string `json:"content"`
-	ViewCount     int    `json:"view_count"`
-	CommentCount  int    `json:"comment_count"`
-	LikeCount     int    `json:"like_count"`
-	CollectCount  int    `json:"collect_count"`
 	IsPinned      int16  `json:"is_pinned"`
 	IsEssence     int16  `json:"is_essence"`
 	IsLock        int16  `json:"is_lock"`
@@ -523,10 +519,6 @@ func parsePostSearchResponse(res *esapi.Response, size int) (*PostListResponse, 
 			Title:         getString("title"),
 			Summary:       getString("summary"),
 			Content:       getString("content"),
-			ViewCount:     getInt("view_count"),
-			CommentCount:  getInt("comment_count"),
-			LikeCount:     getInt("like_count"),
-			CollectCount:  getInt("collect_count"),
 			IsPinned:      getInt16("is_pinned"),
 			IsEssence:     getInt16("is_essence"),
 			IsLock:        getInt16("is_lock"),
