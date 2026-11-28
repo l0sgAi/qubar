@@ -327,7 +327,7 @@ func batchUpdatePostStats(deltas postStatsBuf) (postStatsRecount, error) {
 			return fmt.Errorf("failed to execute post stats batch update: %w", res.Error)
 		}
 		logger.Log.Info(fmt.Sprintf("Successfully updated %d/%d post statistics", res.RowsAffected, len(rows)))
-		return nil
+		return mirrorPostStats(tx, ids)
 	})
 	if err != nil {
 		return postStatsRecount{}, err
