@@ -47,6 +47,7 @@ func newCommentCountPost(t *testing.T, db *gorm.DB) uuid.UUID {
 	t.Helper()
 	id := sharedomain.NewID()
 	testkit.CleanupRows(t, "domains.post", "id", id)
+	testkit.CleanupRows(t, "domains.post_stats", "post_id", id)
 	testkit.CleanupRows(t, "domains.comment", "post_id", id)
 	testkit.CleanupKeys(t, redispkg.GetPostStatsKey(id))
 	if err := db.Exec("INSERT INTO domains.post (id, circle_id, user_id) VALUES (?, ?, ?)",

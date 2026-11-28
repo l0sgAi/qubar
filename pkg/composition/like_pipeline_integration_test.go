@@ -39,6 +39,7 @@ func newTestPost(t *testing.T, db *gorm.DB) uuid.UUID {
 		t.Fatalf("create post: %v", err)
 	}
 	testkit.CleanupRows(t, "domains.post", "id", p.ID)
+	testkit.CleanupRows(t, "domains.post_stats", "post_id", p.ID)
 	testkit.CleanupRows(t, "domains.post_like", "post_id", p.ID)
 	testkit.CleanupKeys(t, redispkg.GetPostStatsKey(p.ID), redispkg.GetPostHotCapKey(p.ID))
 	return p.ID

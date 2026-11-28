@@ -451,6 +451,9 @@ func persistLikeStates(states []*likeState) error {
 			if err := tx.Exec(postLikeApplySQL, string(payload)).Error; err != nil {
 				return fmt.Errorf("failed to apply post likes: %w", err)
 			}
+			if err := mirrorPostStats(tx, postIDs); err != nil {
+				return err
+			}
 		}
 		if len(comments) > 0 {
 			payload, err := json.Marshal(comments)
