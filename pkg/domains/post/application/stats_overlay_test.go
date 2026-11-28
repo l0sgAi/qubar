@@ -1,12 +1,10 @@
-// Package application 的列表计数覆盖单元测试（#250）。
-//
-// 覆盖：BatchGetCachedStats 只返回 Redis post:stats 命中的帖子、Redis 出错降级为空 map 不报错、一页一次 BatchGet；
-// applyStatsOverlay 改为复用它后行为不变（命中覆盖，未命中保留快照）。
+// 列表按页查询缓存，合并未命中 ID 回源窄表。
 package application
 
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"interestBar/pkg/domains/post/domain"
@@ -36,61 +34,40 @@ func (c *fakeOverlayStatsCache) BatchGet(_ context.Context, postIDs []uuid.UUID)
 	return out, nil
 }
 
-func TestBatchGetCachedStats(t *testing.T) {
-	t.Parallel()
-	hit, miss := uuid.New(), uuid.New()
-	cache := &fakeOverlayStatsCache{vals: map[uuid.UUID]*domain.PostStatistics{
-		hit: {ViewCount: 11, CommentCount: 3, LikeCount: 4, CollectCount: 2},
-	}}
-	svc := &postServiceImpl{statsCache: cache}
-
-	got := svc.BatchGetCachedStats(context.Background(), []uuid.UUID{hit, miss})
-	if len(got) != 1 || got[hit] != (domain.PostStatistics{ViewCount: 11, CommentCount: 3, LikeCount: 4, CollectCount: 2}) {
-		t.Fatalf("BatchGetCachedStats = %v; want only hit", got)
-	}
-	if cache.calls != 1 {
-		t.Fatalf("BatchGet calls = %d; want 1", cache.calls)
-	}
-	if got := svc.BatchGetCachedStats(context.Background(), nil); len(got) != 0 || cache.calls != 1 {
-		t.Fatalf("empty ids: got %v, calls %d; want empty map without Redis call", got, cache.calls)
-	}
+type statsRepo struct {
+	domain.PostRepository
+	rows  map[uuid.UUID]domain.PostStatistics
+	calls [][]uuid.UUID
 }
 
-func TestBatchGetCachedStats_CacheErrorDegrades(t *testing.T) {
-	t.Parallel()
-	svc := &postServiceImpl{statsCache: &fakeOverlayStatsCache{err: errors.New("redis down")}}
-	got := svc.BatchGetCachedStats(context.Background(), []uuid.UUID{uuid.New()})
-	if got == nil || len(got) != 0 {
-		t.Fatalf("BatchGetCachedStats on error = %v; want empty non-nil map", got)
-	}
+func (r *statsRepo) GetStats(_ context.Context, ids []uuid.UUID) (map[uuid.UUID]domain.PostStatistics, error) {
+	r.calls = append(r.calls, slices.Clone(ids))
+	return r.rows, nil
 }
 
 func TestApplyStatsOverlay(t *testing.T) {
 	t.Parallel()
-	hit, miss := uuid.New(), uuid.New()
-	newPosts := func() []PostListItem {
-		return []PostListItem{
-			{ID: hit, ViewCount: 10, CommentCount: 2, LikeCount: 3, CollectCount: 1},
-			{ID: miss, ViewCount: 20, CommentCount: 4, LikeCount: 5, CollectCount: 6},
-		}
+	hit, miss, empty := uuid.New(), uuid.New(), uuid.New()
+	live := domain.PostStatistics{ViewCount: 11, LikeCount: 5}
+	persisted := domain.PostStatistics{ViewCount: 7, CommentCount: 2, CollectCount: 3}
+	cache := &fakeOverlayStatsCache{vals: map[uuid.UUID]*domain.PostStatistics{hit: &live}}
+	repo := &statsRepo{rows: map[uuid.UUID]domain.PostStatistics{miss: persisted}}
+	svc := &postServiceImpl{statsCache: cache, repo: repo}
+	posts := []PostListItem{{ID: hit}, {ID: miss}, {ID: empty, LikeCount: 123}}
+	svc.applyStatsOverlay(t.Context(), posts)
+	if cache.calls != 1 || len(repo.calls) != 1 || !slices.Equal(repo.calls[0], []uuid.UUID{miss, empty}) {
+		t.Fatalf("cache calls = %d, PG batches = %v", cache.calls, repo.calls)
 	}
-
-	svc := &postServiceImpl{statsCache: &fakeOverlayStatsCache{vals: map[uuid.UUID]*domain.PostStatistics{
-		hit: {ViewCount: 11, CommentCount: 3, LikeCount: 4, CollectCount: 2},
-	}}}
-	posts := newPosts()
-	svc.applyStatsOverlay(context.Background(), posts)
-	if p := posts[0]; p.ViewCount != 11 || p.CommentCount != 3 || p.LikeCount != 4 || p.CollectCount != 2 {
-		t.Fatalf("hit = %+v; want overlaid", p)
+	if posts[0].LikeCount != 5 || posts[1].ViewCount != 7 || posts[1].CollectCount != 3 || posts[2].LikeCount != 0 {
+		t.Fatalf("unexpected counts: %+v", posts)
 	}
-	if p := posts[1]; p.ViewCount != 20 || p.CommentCount != 4 || p.LikeCount != 5 || p.CollectCount != 6 {
-		t.Fatalf("miss = %+v; want snapshot kept", p)
+	svc.BatchGetStats(t.Context(), []uuid.UUID{hit})
+	svc.BatchGetStats(t.Context(), nil)
+	if len(repo.calls) != 1 || cache.calls != 2 {
+		t.Fatalf("hit/empty added a lookup: cache %d, PG %v", cache.calls, repo.calls)
 	}
-
-	failing := &postServiceImpl{statsCache: &fakeOverlayStatsCache{err: errors.New("redis down")}}
-	posts = newPosts()
-	failing.applyStatsOverlay(context.Background(), posts)
-	if p := posts[0]; p.ViewCount != 10 || p.LikeCount != 3 {
-		t.Fatalf("on error = %+v; want snapshot kept", p)
+	cache.err = errors.New("redis down")
+	if got := svc.BatchGetStats(t.Context(), []uuid.UUID{miss}); got[miss] != persisted || len(repo.calls) != 2 {
+		t.Fatalf("Redis unavailable: %v, PG calls %v", got, repo.calls)
 	}
 }

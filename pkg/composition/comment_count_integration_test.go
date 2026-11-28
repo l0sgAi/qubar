@@ -73,7 +73,7 @@ func TestCreateComment_CountsInCacheAndPublishesWithoutSyncUpdate(t *testing.T) 
 
 	// 写路径不再同步 UPDATE post：落库交给帖子统计消费者。
 	var dbCount int
-	if err := db.Raw("SELECT comment_count FROM domains.post WHERE id = ?", postID).Scan(&dbCount).Error; err != nil {
+	if err := db.Raw("SELECT comment_count FROM domains.post_stats WHERE post_id = ?", postID).Scan(&dbCount).Error; err != nil {
 		t.Fatalf("read comment_count: %v", err)
 	}
 	if dbCount != 0 {

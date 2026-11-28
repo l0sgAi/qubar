@@ -72,8 +72,8 @@ func TestPostRepo_CreateGetAndSoftDelete(t *testing.T) {
 	if len(got.MediaExtra) != 2 || got.MediaExtra[1] != "https://img.example/2.png" {
 		t.Fatalf("media_extra jsonb round trip: got %v", got.MediaExtra)
 	}
-	if got.Deleted != 0 || got.LikeCount != 0 || got.CreateTime.IsZero() {
-		t.Fatalf("unexpected defaults: deleted=%d like=%d create=%v", got.Deleted, got.LikeCount, got.CreateTime)
+	if got.Deleted != 0 || got.CreateTime.IsZero() {
+		t.Fatalf("unexpected defaults: deleted=%d create=%v", got.Deleted, got.CreateTime)
 	}
 
 	media, err := repo.GetMediaByPostIDs(ctx, []uuid.UUID{p.ID, sharedomain.NewID()})
@@ -218,5 +218,21 @@ func TestPostRepo_MentionsIdempotentAndOrdered(t *testing.T) {
 	}
 	if len(got) != 1 || len(got[p.ID]) != 2 || got[p.ID][0] != u1 || got[p.ID][1] != u2 {
 		t.Fatalf("mentions = %v, want [%s %s] in write order", got, u1, u2)
+	}
+}
+
+func TestPostRepo_GetStats(t *testing.T) {
+	t.Parallel()
+	db := testkit.PG(t)
+	repo := infrastructure.NewPostRepository(db)
+	post, missing := newPost(t, repo, nil), newPost(t, repo, nil)
+	testkit.CleanupRows(t, "domains.post_stats", "post_id", post.ID)
+	if err := db.Exec("INSERT INTO domains.post_stats (post_id, view_count, comment_count, like_count, collect_count) VALUES (?, 9, 5, 4, 2)", post.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.GetStats(t.Context(), []uuid.UUID{missing.ID, post.ID})
+	want := domain.PostStatistics{ViewCount: 9, CommentCount: 5, LikeCount: 4, CollectCount: 2}
+	if err != nil || len(got) != 1 || got[post.ID] != want {
+		t.Fatalf("GetStats = %v, %v; want only persisted row %+v", got, err, want)
 	}
 }
