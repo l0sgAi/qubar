@@ -59,7 +59,7 @@ jobs:
       reuse: ${{ steps.draft.outputs.reuse }}
       published: ${{ steps.version.outputs.published }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -135,7 +135,7 @@ jobs:
     if: needs.changes.outputs.app == 'true' && needs.changes.outputs.reuse != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -152,7 +152,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v4
         with:
@@ -184,7 +184,7 @@ jobs:
       digest: ${{ steps.stage.outputs.digest }}
       pages_hash: ${{ steps.stage.outputs.pages_hash }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         if: needs.changes.outputs.web == 'true' && needs.changes.outputs.reuse != 'true'
         with:
@@ -222,7 +222,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/prod-access
         with:
@@ -278,7 +278,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/prod-access
         with:
@@ -312,7 +312,7 @@ jobs:
       contents: read
       packages: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/prod-access
         with:
@@ -392,7 +392,7 @@ jobs:
     if: ${{ !failure() && !cancelled() && needs.changes.outputs.product == 'true' && needs.deploy.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           name: candidate-pages
@@ -423,7 +423,7 @@ jobs:
       - uses: actions/deploy-pages@v4
         with:
           artifact_name: previous-pages
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           name: previous-pages
@@ -438,7 +438,7 @@ jobs:
       contents: write
       packages: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: 核对本次实际部署（恢复后需重跑整个工作流）
