@@ -80,6 +80,7 @@ func TestBatchPostUpdates_ConcurrentNoDeadlock(t *testing.T) {
 	ids := newIDs(deadlockRows)
 	circleID := sharedomain.NewID()
 	testkit.CleanupRows(t, "domains.post", "id", toAny(ids)...)
+	testkit.CleanupRows(t, "domains.post_stats", "post_id", toAny(ids)...)
 	testkit.CleanupRows(t, "domains.post_like", "post_id", toAny(ids)...)
 	for _, id := range ids {
 		if err := db.Exec("INSERT INTO domains.post (id, circle_id, user_id) VALUES (?, ?, ?)",
@@ -111,7 +112,7 @@ func TestBatchPostUpdates_ConcurrentNoDeadlock(t *testing.T) {
 		Hot          int64
 	}
 	var got []counts
-	if err := db.Raw("SELECT id, view_count, like_count, collect_count, hot FROM domains.post WHERE id IN ?", ids).
+	if err := db.Raw("SELECT p.id, s.view_count, s.like_count, s.collect_count, p.hot FROM domains.post p JOIN domains.post_stats s ON s.post_id = p.id WHERE p.id IN ?", ids).
 		Scan(&got).Error; err != nil {
 		t.Fatalf("query posts: %v", err)
 	}

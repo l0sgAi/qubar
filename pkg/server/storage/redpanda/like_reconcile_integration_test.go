@@ -24,6 +24,7 @@ func TestPersistPostLikes_ReconcilesStaleStatsCache(t *testing.T) {
 	stale, ahead, absent := sharedomain.NewID(), sharedomain.NewID(), sharedomain.NewID()
 	ids := []uuid.UUID{stale, ahead, absent}
 	testkit.CleanupRows(t, "domains.post", "id", toAny(ids)...)
+	testkit.CleanupRows(t, "domains.post_stats", "post_id", toAny(ids)...)
 	testkit.CleanupRows(t, "domains.post_like", "post_id", toAny(ids)...)
 	keys := make([]string, len(ids))
 	for i, id := range ids {

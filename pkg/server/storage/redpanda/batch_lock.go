@@ -12,7 +12,7 @@ import (
 
 // 批量更新的统一取锁顺序（l0sgAi/qubar#124）。
 //
-// 帖子统计 / 热度 / 收藏 / 点赞消费者都用 jsonb_to_recordset 批量 UPDATE domains.post，
+// 热度与分享重算批量写 domains.post，四项展示计数通过 lockPostStats 按 post_id 升序锁窄表。
 // 圈子统计消费者与圈子热度同步器批量 UPDATE domains.circle。UPDATE ... FROM 的取锁顺序由执行计划
 // （嵌套循环按 JSON 行序、哈希连接按扫描序）决定，两个事务以不同顺序锁同一批行就会死锁（40P01），
 // 生产压测中帖子统计与热度 flush 同时触发时 4 次失败 3 次。
