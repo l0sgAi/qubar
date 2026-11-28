@@ -236,40 +236,23 @@ func TestPostCommentCount_RetryAndRedeliveryDoNotDoubleCount(t *testing.T) {
 	if committer.count() != 0 {
 		t.Fatalf("offsets committed after failed flush")
 	}
-	if got := commentCount(t, db, postID); got != comments {
-		t.Fatalf("comment_count after first (failed) flush = %d, want %d", got, comments)
-	}
-
-	mirrorVersion := assertPostStatsMirror(t, db, postID, 0, comments, 0, 0)
+	before := assertPostStats(t, db, postID, 0, comments, 0, 0)
 	c.Flush() // 重试同一批
-	if got := commentCount(t, db, postID); got != comments {
-		t.Fatalf("comment_count after retry = %d, want %d (no double count)", got, comments)
+	if after := assertPostStats(t, db, postID, 0, comments, 0, 0); after != before {
+		t.Fatalf("retry rewrote post_stats: xmin %s -> %s", before, after)
 	}
 	if committer.count() != 1 {
 		t.Fatalf("commits after retry = %d, want 1", committer.count())
 	}
 
-	// 重投（提交前进程被杀 / 再均衡）：同一批消息再处理一次，计数不变，且不写出新的行版本（不产生 WAL / CDC 事件）。
-	var xminBefore, xminAfter string
-	if err := db.Raw("SELECT xmin::text FROM domains.post_stats WHERE post_id = ?", postID).Scan(&xminBefore).Error; err != nil {
-		t.Fatal(err)
-	}
+	// 即使提交 offset 前发生再均衡，重投同一批消息也应保留统计行版本。
 	redelivered := redpanda.NewPostStatsConsumerForTest(&recordingCommitter{}, nil)
 	for _, m := range msgs {
 		redelivered.Add(m)
 	}
 	redelivered.Flush()
-	if got := commentCount(t, db, postID); got != comments {
-		t.Fatalf("comment_count after redelivery = %d, want %d", got, comments)
-	}
-	if err := db.Raw("SELECT xmin::text FROM domains.post_stats WHERE post_id = ?", postID).Scan(&xminAfter).Error; err != nil {
-		t.Fatal(err)
-	}
-	if got := assertPostStatsMirror(t, db, postID, 0, comments, 0, 0); got != mirrorVersion {
-		t.Fatalf("comment recount rewrote post_stats: xmin %s -> %s", mirrorVersion, got)
-	}
-	if xminAfter != xminBefore {
-		t.Fatalf("redelivery rewrote the post row (xmin %s → %s); unchanged recount must be skipped", xminBefore, xminAfter)
+	if after := assertPostStats(t, db, postID, 0, comments, 0, 0); after != before {
+		t.Fatalf("redelivery rewrote post_stats: xmin %s -> %s", before, after)
 	}
 }
 
@@ -365,9 +348,5 @@ func TestPostCountersLeavePostRowUnchanged(t *testing.T) {
 	if _, after := shareCount(t, db, id); before == "" || after != before {
 		t.Fatalf("post xmin = %s, want %s", after, before)
 	}
-	var matches int
-	if err := db.Raw(`SELECT count(*) FROM domains.post_stats WHERE post_id = ?
-		AND (view_count,comment_count,like_count,collect_count) = (2,1,3,3)`, id).Scan(&matches).Error; err != nil || matches != 1 {
-		t.Fatalf("unexpected persisted counts: matches = %d, err = %v", matches, err)
-	}
+	assertPostStats(t, db, id, 2, 1, 3, 3)
 }

@@ -250,7 +250,8 @@ SET view_count = LEAST(GREATEST(s.view_count + v.view_delta, 0), 1000000000),
     update_time = CURRENT_TIMESTAMP
 FROM v JOIN domains.post p ON p.id = v.post_id AND p.deleted = 0 LEFT JOIN cc ON cc.post_id = v.post_id
 WHERE s.post_id = v.post_id
-  AND (v.view_delta <> 0 OR v.like_delta <> 0 OR v.collect_delta <> 0 OR s.comment_count <> cc.cnt)`
+  AND (v.view_delta <> 0 OR v.like_delta <> 0 OR s.comment_count <> cc.cnt
+       OR s.collect_count <> GREATEST(s.collect_count + v.collect_delta, 0))`
 
 // 分享数仍属于主表；先锁分享涉及的主表行，再锁统计行。仅四项展示计数变化时跳过此路径。
 const postShareRecountSQL = `
