@@ -80,6 +80,7 @@ func TestBatchPostUpdates_ConcurrentNoDeadlock(t *testing.T) {
 	ids := newIDs(deadlockRows)
 	circleID := sharedomain.NewID()
 	testkit.CleanupRows(t, "domains.post", "id", toAny(ids)...)
+	testkit.CleanupRows(t, "domains.post_stats", "post_id", toAny(ids)...)
 	testkit.CleanupRows(t, "domains.post_like", "post_id", toAny(ids)...)
 	for _, id := range ids {
 		if err := db.Exec("INSERT INTO domains.post (id, circle_id, user_id) VALUES (?, ?, ?)",
@@ -102,6 +103,13 @@ func TestBatchPostUpdates_ConcurrentNoDeadlock(t *testing.T) {
 		"post like":    func(int) error { return redpanda.PersistPostLikesForTest(sharedomain.NewID(), ids) },
 	})
 	reportErrors(t, errs)
+
+	var divergent int
+	if err := db.Raw(`SELECT count(*) FROM domains.post p LEFT JOIN domains.post_stats s ON s.post_id = p.id
+		WHERE p.id IN ? AND (s.post_id IS NULL OR (p.view_count,p.comment_count,p.like_count,p.collect_count)
+			IS DISTINCT FROM (s.view_count,s.comment_count,s.like_count,s.collect_count))`, ids).Scan(&divergent).Error; err != nil || divergent != 0 {
+		t.Fatalf("dual write: divergent posts = %d, err = %v", divergent, err)
+	}
 
 	type counts struct {
 		ID           uuid.UUID

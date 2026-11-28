@@ -230,3 +230,15 @@ B1 的设计要点（详见 B1 PR）：
 - 方案 2b 的 `skip.messages.without.change` 在当前 Debezium 版本（3.2.6）上的行为没有在本地 CDC 栈验证（开发栈没有 CDC）。
 - WAL 字节的下降比例按行宽估算，没有实测；生产帖子正文长度分布会影响 `REPLICA IDENTITY FULL` 的旧行大小。
 - 所有收益都需要生产写场景压测对比确认，由维护者安排。
+
+## R1 上线校准
+
+1. 确认 M1 迁移成功，所有消费实例均已运行 R1。暂时停止新的收藏请求，等在途请求结束、收藏与帖子统计消费者提交已发布事件的 offset 并排空内存批次。收藏明细先提交、计数增量后消费，若在两者之间重算会重复加减。
+2. 在目标库使用 `psql -X -v ON_ERROR_STOP=1 -f scripts/calibrate-post-stats.sql`。脚本按帖子 ID 升序每 1000 行提交一次，两批间等待 100 ms。它按明细校准两表的评论、点赞和收藏，从主表复制浏览量，同时补齐缺行。失败后可从头重跑。
+3. 在同一查询快照内核对两表。以下查询应返回 0。R1 期间新建且从无互动的帖子可能尚无统计行，此时四项计数均为 0。确认后恢复收藏请求，再安排 R2。
+
+```sql
+SELECT count(*) FROM domains.post p LEFT JOIN domains.post_stats s ON s.post_id = p.id
+WHERE (p.view_count, p.comment_count, p.like_count, p.collect_count) IS DISTINCT FROM
+    (COALESCE(s.view_count, 0), COALESCE(s.comment_count, 0), COALESCE(s.like_count, 0), COALESCE(s.collect_count, 0));
+```

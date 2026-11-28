@@ -69,7 +69,7 @@ migrate-test:
 	n=qubar-migrate-test-$$$$; \
 	trap 'docker rm -f $$n >/dev/null 2>&1 || true; docker network rm $$n >/dev/null 2>&1 || true' EXIT; \
 	docker network create $$n >/dev/null; \
-	docker run -d --name $$n --network $$n -e POSTGRES_PASSWORD=ci -e POSTGRES_DB=qubar $(PG_IMAGE) >/dev/null; \
+	docker run -d --name $$n --network $$n -v "$(CURDIR)/scripts:/scripts:ro" -e POSTGRES_PASSWORD=ci -e POSTGRES_DB=qubar $(PG_IMAGE) >/dev/null; \
 	i=0; until docker exec $$n pg_isready -q -h 127.0.0.1 -U postgres -d qubar; do \
 	  i=$$((i + 1)); [ $$i -lt 60 ] || { echo "postgres 未就绪"; docker logs $$n; exit 1; }; sleep 1; \
 	done; \
@@ -81,6 +81,7 @@ migrate-test:
 	echo "$$out" | grep -q 'no change' || { echo "二次 up 不是 no-op"; exit 1; }; \
 	migrate version; \
 	docker exec $$n psql -tA -U postgres -d qubar -c "select count(*) || ' tables in domains' from pg_tables where schemaname = 'domains'"; \
+	docker exec $$n psql -Xq -U qubar_web_app -d qubar -f /scripts/test-calibrate-post-stats.sql; \
 	echo "migrate-test ok"
 
 # ---------- 验证（与 .github/workflows/ci.yml 一致）----------

@@ -83,7 +83,7 @@ func batchUpdatePostCollects(deltas postDeltaBuf) error {
 			return fmt.Errorf("failed to batch update post collect counts: %w", err)
 		}
 		logger.Log.Info(fmt.Sprintf("Successfully updated collect counts for %d posts", len(rows)))
-		return nil
+		return mirrorPostStats(tx, ids)
 	})
 }
 

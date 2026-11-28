@@ -47,6 +47,7 @@ func newCommentCountPost(t *testing.T, db *gorm.DB) uuid.UUID {
 	t.Helper()
 	id := sharedomain.NewID()
 	testkit.CleanupRows(t, "domains.post", "id", id)
+	testkit.CleanupRows(t, "domains.post_stats", "post_id", id)
 	testkit.CleanupRows(t, "domains.comment", "post_id", id)
 	testkit.CleanupKeys(t, redispkg.GetPostStatsKey(id))
 	if err := db.Exec("INSERT INTO domains.post (id, circle_id, user_id) VALUES (?, ?, ?)",
@@ -239,6 +240,7 @@ func TestPostCommentCount_RetryAndRedeliveryDoNotDoubleCount(t *testing.T) {
 		t.Fatalf("comment_count after first (failed) flush = %d, want %d", got, comments)
 	}
 
+	mirrorVersion := assertPostStatsMirror(t, db, postID, 0, comments, 0, 0)
 	c.Flush() // 重试同一批
 	if got := commentCount(t, db, postID); got != comments {
 		t.Fatalf("comment_count after retry = %d, want %d (no double count)", got, comments)
@@ -262,6 +264,9 @@ func TestPostCommentCount_RetryAndRedeliveryDoNotDoubleCount(t *testing.T) {
 	}
 	if err := db.Raw("SELECT xmin::text FROM domains.post WHERE id = ?", postID).Scan(&xminAfter).Error; err != nil {
 		t.Fatal(err)
+	}
+	if got := assertPostStatsMirror(t, db, postID, 0, comments, 0, 0); got != mirrorVersion {
+		t.Fatalf("comment recount rewrote post_stats: xmin %s -> %s", mirrorVersion, got)
 	}
 	if xminAfter != xminBefore {
 		t.Fatalf("redelivery rewrote the post row (xmin %s → %s); unchanged recount must be skipped", xminBefore, xminAfter)
